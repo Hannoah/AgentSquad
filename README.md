@@ -32,7 +32,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.2.0
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.3.0
 ```
 
 To install elsewhere:
