@@ -1,73 +1,166 @@
 # AgentSquad
 
-여러 프로젝트의 터미널 세션(에이전트 작업 공간)을 하나의 TUI에서 관리하는 런처.
-등록해 둔 프로젝트를 골라 터미널을 띄우고, `n/p`로 오가며 돌린다.
+AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows.
+Register your projects once, then open a single TUI manager to start, watch, and
+interact with a terminal session per project — an ideal setup for running one
+coding agent (or dev server) per project side by side.
 
-## 설치 (Windows)
+Each project is either an **Agent** (an interactive terminal, e.g. `claude`) or a
+**Service** (a long-running process, e.g. `npm run dev`). The sidebar groups them
+accordingly, so running servers stay visible next to your agents.
 
-저장소 없이 바로 설치:
+## Install (Windows, no Rust required)
+
+Install straight from GitHub Releases. No repository checkout needed:
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-설치 위치는 `%LOCALAPPDATA%\AgentSquad\bin`이며 사용자 PATH에 자동 등록된다.
-터미널을 다시 열면 어디서든 `squad`를 쓸 수 있다.
-특정 버전이 필요하면 `-Version v0.2.0`을 붙인다.
+What this does:
 
-## 바로 테스트
+- Downloads `squad-windows-x86_64.zip` from the latest GitHub Release.
+- Extracts `squad.exe` to `%LOCALAPPDATA%\AgentSquad\bin`.
+- Adds that folder to your **user** `PATH`.
+
+Open a **new** terminal afterwards, then verify:
 
 ```powershell
-squad add C:\path\to\proj -- claude   # 에이전트 프로젝트 등록
-squad add C:\path\to\api --kind service -- npm run dev  # 서버 프로젝트 등록
-squad list                             # 등록 확인
-squad start proj                       # 매니저 열고 바로 시작
-```
-
-## 매니저 키
-
-| 키 | 동작 |
-|----|------|
-| `Enter` | 세션 시작 / 포커스 |
-| `/` | 선택 세션에 한 줄 전송 |
-| `f` | 프로젝트 필터 |
-| `r` | 세션 재시작 |
-| `n`/`p`, `↑`/`↓` | 선택 이동 |
-| `x` | 세션 중지 |
-| `Ctrl+G` | 매니저로 복귀 (터미널에서) |
-| `?` | 도움말 |
-| `q` | 종료 (자식 프로세스도 함께 종료, 데몬 없음) |
-
-사이드바는 **Agents** / **Services** 두 그룹으로 나뉜다.
-Service 행에는 실행 명령이 함께 표시된다.
-
-## CLI 전체
-
-```
-squad                         매니저 열기
-squad add <path> [--kind agent|service] [-- cmd args]  프로젝트 등록 (기본 셸)
-squad list                    등록 목록 (이름, 종류, 경로, 명령)
-squad remove <name>           등록 해제 (파일은 건드리지 않음)
-squad start <name>            매니저 열고 해당 프로젝트 시작
 squad --version
 ```
 
-## 설정 파일
+To pin a version (default is latest):
 
-- `%LOCALAPPDATA%\AgentSquad\config.toml` (또는 `AGENTSQUAD_CONFIG` 환경변수 경로)
-- 지워도 되는 파일이다. 삭제하면 빈 상태로 시작한다.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.2.0
+```
 
-## 소스 빌드 (개발용)
+To install elsewhere:
 
-Rust stable + Windows GNU 툴체인이 필요하다.
-MinGW 준비부터 빌드까지 한 번에 하는 스크립트가 있다.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir C:\tools\squad
+```
+
+## Quickstart
+
+```powershell
+# Register an agent project (runs `claude` in that directory)
+squad add C:\work\my-app -- claude
+
+# Register a service project (runs a dev server)
+squad add C:\work\my-api --kind service -- npm run dev
+
+# Check what is registered
+squad list
+
+# Open the manager and start a project immediately
+squad start my-app
+```
+
+Project names default to the directory name. Names are matched
+case-insensitively by `remove` and `start`.
+
+## The manager
+
+`squad` with no arguments (or `squad start <name>`) opens the TUI manager:
+
+- **Left:** project list, grouped under **Agents** and **Services** headers,
+  each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: …`).
+  Service rows also show their command.
+- **Right:** the selected session's terminal output (full xterm emulation:
+  colors, bold/italic/underline, cursor positioning).
+- **Bottom:** a one-line status bar with hints, which doubles as the input
+  line for send/filter mode and a popup host for help.
+
+### Keys
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Start the selected session / focus its terminal |
+| `/` | Type a line and send it to the selected session (starts it if stopped) |
+| `f` | Filter the project list by name or command (`Enter` keeps, `Esc` clears) |
+| `r` | Restart the selected session |
+| `n` / `p`, `↑` / `↓` | Move selection |
+| `x` | Stop the selected session (process is killed, files untouched) |
+| `Ctrl+G` | Back to the manager (from inside a terminal) |
+| `?` | Toggle the help popup |
+| `q` | Quit (all managed child processes are stopped; nothing runs detached) |
+
+Inside a terminal, `Ctrl+G` returns to the manager; pressing `g` right after
+sends a literal `Ctrl+G` to the session instead.
+
+## CLI reference
+
+```
+squad                                                              Open the manager
+squad add <path> [--kind agent|service] [-- command args...]       Register a project
+squad list                                                         List projects (name, kind, path, command)
+squad remove <name>                                                Unregister (files are untouched)
+squad start <name>                                                 Open the manager on a project and start it
+squad --version
+squad --help
+```
+
+Notes:
+
+- Without `-- command`, the project opens a plain shell (`cmd.exe` on Windows).
+- `--kind` defaults to `agent`. Existing config files without a kind keep working.
+- `squad add <path> -- claude --dangerously-skip-permissions` style args are
+  passed through verbatim after `--`.
+
+## Configuration
+
+Projects live in a single TOML file:
+
+- `%LOCALAPPDATA%\AgentSquad\config.toml`, or
+- wherever `AGENTSQUAD_CONFIG` points.
+
+Example:
+
+```toml
+[[projects]]
+name = "my-app"
+path = "C:/work/my-app"
+command = ["claude"]
+kind = "agent"
+
+[[projects]]
+name = "my-api"
+path = "C:/work/my-api"
+command = ["npm", "run", "dev"]
+kind = "service"
+```
+
+The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
+
+## Building from source (developers)
+
+You need the Rust stable toolchain plus a MinGW linker on Windows.
+The helper script bootstraps a portable toolchain automatically (one-time
+~200 MB download into `%TEMP%`) and forwards all arguments to cargo:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 build
 powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 test
 ```
 
-## 라이선스
+Tests cover config round-trips, kind parsing, sidebar ordering and filtering,
+status colors, help content, keyboard encoding, terminal parsing, and a live
+PTY smoke test. Releases are built by GitHub Actions on every `v*` tag
+(see [.github/workflows/release.yml](.github/workflows/release.yml)).
 
-MIT. [LICENSE](LICENSE) 참조.
+## Troubleshooting
+
+- **`squad` not found after install:** open a new terminal so the updated
+  user `PATH` takes effect.
+- **Session shows `Error: …`:** the start command failed — check that the
+  binary (e.g. `claude`, `node`) is on your `PATH` and the project path exists.
+- **`Exited (1)` right after start:** the process ran and exited; select it
+  and read the terminal pane for its own error message.
+- **Wrong project starts with `squad start`:** names match case-insensitively;
+  make sure the name is unique.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
