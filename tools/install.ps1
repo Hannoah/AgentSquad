@@ -47,7 +47,10 @@ Write-Host "Installed to $InstallDir"
 
 if (($env:Path -split ";") -notcontains $InstallDir) {
   [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$InstallDir", "User")
-  Write-Host "Added to user PATH. Restart your terminal to use 'squad' everywhere."
+  # iex runs inside the current terminal, so refresh this session too.
+  # New terminals pick up the User PATH on their own.
+  $env:Path += ";$InstallDir"
+  Write-Host "Added to user PATH."
 }
 
 & (Join-Path $InstallDir "squad.exe") --version
