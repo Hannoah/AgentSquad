@@ -19,7 +19,7 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
-    io::{self, Read, Write},
+    io::{self, IsTerminal, Read, Write},
     num::NonZero,
     path::PathBuf,
     str::FromStr,
@@ -689,6 +689,9 @@ impl Drop for ScreenGuard {
     }
 }
 fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
+    if !io::stdin().is_terminal() {
+        bail!("squad needs an interactive terminal");
+    }
     enable_raw_mode()?;
     let _guard = ScreenGuard;
     execute!(io::stdout(), EnterAlternateScreen)?;
