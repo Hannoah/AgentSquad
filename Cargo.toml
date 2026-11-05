@@ -1,0 +1,25 @@
+[package]
+name = "agentsquad"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight project-based terminal session manager"
+license = "MIT"
+repository = "https://github.com/Hannoah/AgentSquad"
+
+[[bin]]
+name = "squad"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.28"
+ratatui = "0.29"
+portable-pty = "0.8"
+vt100 = "0.15"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
