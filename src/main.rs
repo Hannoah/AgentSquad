@@ -418,10 +418,36 @@ fn scroll_live_selected(sessions: &mut [Option<Session>], order: &[usize], selec
         }
     }
 }
+/// Best-effort kill of the whole process tree.
+///
+/// Agent sessions are usually grandchildren (e.g. `cmd.exe -> node.exe` for
+/// `cmd /d /c claude`). Terminating only the direct child orphans the real
+/// agent, which keeps running (and keeps its ports). `taskkill /T /F` takes
+/// down the tree; on failure the caller falls back to `Child::kill`.
+#[cfg(windows)]
+fn kill_tree(child: &dyn Child) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let Some(pid) = child.process_id() else {
+        return false;
+    };
+    std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 impl Drop for Session {
     fn drop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
+            #[cfg(windows)]
+            let tree_killed = kill_tree(self.child.as_ref());
+            #[cfg(not(windows))]
+            let tree_killed = false;
+            if !tree_killed {
+                let _ = self.child.kill();
+            }
             let _ = self.child.wait();
         }
     }
@@ -1327,6 +1353,76 @@ mod tests {
         assert!(top.contains("line"));
         p.screen_mut().set_scrollback(0);
         assert_eq!(p.screen().scrollback(), 0);
+    }
+    #[cfg(windows)]
+    fn ps_stdout(script: &str) -> String {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.stdout)
+            .unwrap_or_default();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+    #[cfg(windows)]
+    fn child_pids(parent: u32) -> Vec<u32> {
+        ps_stdout(&format!(
+            "Get-CimInstance Win32_Process -Filter 'ParentProcessId={parent}' | Select-Object -ExpandProperty ProcessId"
+        ))
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .collect()
+    }
+    #[cfg(windows)]
+    fn pid_alive(pid: u32) -> bool {
+        let out = ps_stdout(&format!("tasklist /FI \"PID eq {pid}\" /FO CSV /NH"));
+        out.contains(&format!("\"{pid}\""))
+    }
+    #[test]
+    #[cfg(windows)]
+    fn stop_kills_process_tree() {
+        let p = Project {
+            name: "treekill".into(),
+            path: env::current_dir().unwrap(),
+            command: vec![
+                "cmd.exe".into(),
+                "/d".into(),
+                "/c".into(),
+                "timeout".into(),
+                "/t".into(),
+                "30".into(),
+                "/nobreak".into(),
+            ],
+            kind: Kind::Agent,
+        };
+        let s = Session::spawn(&p, 24, 80).unwrap();
+        let pid = s.child.process_id().expect("pty child pid");
+        let mut grandkids = Vec::new();
+        for _ in 0..50 {
+            grandkids = child_pids(pid);
+            if !grandkids.is_empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!grandkids.is_empty(), "grandchild never appeared");
+        drop(s);
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(100));
+            if !pid_alive(pid) && grandkids.iter().all(|g| !pid_alive(*g)) {
+                return;
+            }
+        }
+        panic!(
+            "process tree survived stop: parent alive={} kids={:?}",
+            pid_alive(pid),
+            grandkids
+                .iter()
+                .map(|g| (*g, pid_alive(*g)))
+                .collect::<Vec<_>>()
+        );
     }
     #[test]
     fn jump_keys() {
