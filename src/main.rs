@@ -7,7 +7,7 @@ use crossterm::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
@@ -167,6 +167,17 @@ fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
 fn fit(s: &str, w: usize) -> String {
     s.chars().take(w).collect()
 }
+const SPINNER: [char; 4] = ['◐', '◑', '◒', '◓'];
+fn spinner_frame(tick: u64) -> char {
+    SPINNER[(tick as usize) % SPINNER.len()]
+}
+fn status_glyph(status: &str, tick: u64) -> char {
+    if status == "Running" {
+        spinner_frame(tick)
+    } else {
+        '●'
+    }
+}
 fn status_style(status: &str) -> Style {
     if status == "Running" {
         Style::default().fg(Color::Green)
@@ -184,6 +195,7 @@ fn help_lines() -> Vec<&'static str> {
         "/          send a line to session",
         "a          add project",
         "f          filter projects",
+        "Shift+PgUp/Dn scroll history",
         "r          restart session",
         "x          stop session",
         "n/p, arrows  select project",
@@ -247,6 +259,24 @@ fn jump_to(order_len: usize, ch: char) -> Option<usize> {
     }
     None
 }
+fn empty_state_lines(has_projects: bool) -> Vec<String> {
+    if has_projects {
+        vec![
+            "No session running.".into(),
+            "".into(),
+            "Press Enter to start the selected project.".into(),
+        ]
+    } else {
+        vec![
+            "No projects yet.".into(),
+            "".into(),
+            "Press a and type a folder path to add your first project.".into(),
+            "Or from your shell: squad add <path> [-- command]".into(),
+            "".into(),
+            "Then press Enter to start it.".into(),
+        ]
+    }
+}
 fn centered_rect(w_pct: u16, h_pct: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let v = Layout::default()
         .direction(Direction::Vertical)
@@ -272,6 +302,7 @@ struct Session {
     rx: Receiver<Vec<u8>>,
     parser: vt100::Parser,
     status: String,
+    scroll: usize,
 }
 impl Session {
     fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
@@ -313,6 +344,7 @@ impl Session {
                 500,
             ),
             status: "Running".into(),
+            scroll: 0,
         })
     }
     fn update(&mut self) -> bool {
@@ -353,6 +385,37 @@ impl Session {
         self.writer.write_all(bytes)?;
         self.writer.flush()?;
         Ok(())
+    }
+    fn scroll_by(&mut self, delta_rows: isize) {
+        let max = self.parser.screen().scrollback_len() as isize;
+        self.scroll = (self.scroll as isize + delta_rows).clamp(0, max) as usize;
+        self.parser.screen_mut().set_scrollback(self.scroll);
+    }
+    fn scroll_live(&mut self) {
+        self.scroll = 0;
+        self.parser.screen_mut().set_scrollback(0);
+    }
+}
+/// Move the visible viewport of the selected session's scrollback.
+/// Positive `pages` scrolls up (into history); negative scrolls down.
+fn scroll_selected(
+    sessions: &mut [Option<Session>],
+    order: &[usize],
+    selected: usize,
+    page_rows: usize,
+    pages: isize,
+) {
+    if let Some(&pi) = order.get(selected) {
+        if let Some(Some(s)) = sessions.get_mut(pi) {
+            s.scroll_by((page_rows.max(1) as isize) * pages);
+        }
+    }
+}
+fn scroll_live_selected(sessions: &mut [Option<Session>], order: &[usize], selected: usize) {
+    if let Some(&pi) = order.get(selected) {
+        if let Some(Some(s)) = sessions.get_mut(pi) {
+            s.scroll_live();
+        }
     }
 }
 impl Drop for Session {
@@ -430,11 +493,16 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut message = mode_hints(Mode::Manager).to_string();
     let mut dirty = true;
     let mut first = initial.is_some();
+    let mut tick: u64 = 0;
     loop {
         let area = terminal.size()?;
         let sidebar = if area.width >= 60 { 24 } else { 0 };
         let rows = area.height.saturating_sub(3).max(1);
         let cols = area.width.saturating_sub(sidebar).saturating_sub(2).max(1);
+        tick = tick.wrapping_add(1);
+        if tick.is_multiple_of(3) {
+            dirty = true;
+        }
         if first {
             first = false;
             if let Some(&pi) = order.get(selected) {
@@ -452,88 +520,229 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         }
         if dirty {
             terminal.draw(|f| {
-                let vertical = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
-                let panels = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Length(sidebar), Constraint::Min(1)]).split(vertical[0]);
+                let vertical = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(1), Constraint::Length(1)])
+                    .split(f.area());
+                let panels = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Length(sidebar), Constraint::Min(1)])
+                    .split(vertical[0]);
                 if sidebar > 0 {
                     let sel_pi = order.get(selected).copied();
                     let inner_w = (sidebar as usize).saturating_sub(2);
                     let mut items: Vec<ListItem> = Vec::new();
                     let mut n = 0;
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
-                        items.push(ListItem::new(title).style(Style::default().add_modifier(ratatui::style::Modifier::BOLD)));
+                        items.push(
+                            ListItem::new(title).style(
+                                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                        );
                         let mut any = false;
                         for &pi in order.iter().filter(|&&i| c.projects[i].kind == k) {
                             any = true;
                             n += 1;
                             let p = &c.projects[pi];
-                            let status = sessions[pi].as_ref().map(|s| s.status.as_str()).unwrap_or("Stopped");
+                            let status = sessions[pi]
+                                .as_ref()
+                                .map(|s| s.status.as_str())
+                                .unwrap_or("Stopped");
                             let mut second = format!("  {status}");
-                            if k == Kind::Service { second.push(' '); second.push_str(&p.command.join(" ")); }
+                            if k == Kind::Service {
+                                second.push(' ');
+                                second.push_str(&p.command.join(" "));
+                            }
                             let mark = if Some(pi) == sel_pi { ">" } else { " " };
                             let row_style = if Some(pi) == sel_pi {
-                                Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(ratatui::style::Modifier::BOLD)
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .bg(Color::DarkGray)
+                                    .add_modifier(ratatui::style::Modifier::BOLD)
                             } else {
                                 Style::default()
                             };
-                            let status_span_style = if Some(pi) == sel_pi { row_style } else { status_style(status) };
+                            let status_span_style = if Some(pi) == sel_pi {
+                                row_style
+                            } else {
+                                status_style(status)
+                            };
+                            let prefix = format!("{mark}{n} ");
+                            let name_w = inner_w.saturating_sub(prefix.chars().count() + 2);
                             items.push(ListItem::new(Line::from(vec![
-                                Span::styled(fit(&format!("{mark}{n} {}", p.name), inner_w), row_style),
+                                Span::styled(prefix, row_style),
+                                Span::styled(
+                                    format!("{} ", status_glyph(status, tick)),
+                                    status_span_style,
+                                ),
+                                Span::styled(fit(&p.name, name_w), row_style),
                                 Span::styled(fit(&second, inner_w), status_span_style),
                             ])));
                         }
-                        if !any { items.push(ListItem::new("  (none)").style(Style::default().add_modifier(ratatui::style::Modifier::DIM))); }
+                        if !any {
+                            items.push(ListItem::new("  (none)").style(
+                                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                            ));
+                        }
                     }
-                    f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("AgentSquad")), panels[0]);
+                    f.render_widget(
+                        List::new(items).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Rounded)
+                                .title("AgentSquad"),
+                        ),
+                        panels[0],
+                    );
                 }
                 let sel_pi = order.get(selected).copied();
-                let title = sel_pi.and_then(|pi| c.projects.get(pi)).map(|p| format!("{} [{} · {}]", p.name, p.kind.as_str(), if focus { "INPUT" } else { "MANAGER" })).unwrap_or("No projects: squad add <path>".into());
-                let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title); let inner = block.inner(panels[1]); f.render_widget(block, panels[1]);
+                let title = sel_pi
+                    .and_then(|pi| c.projects.get(pi))
+                    .map(|p| {
+                        let scroll_note = sel_pi
+                            .and_then(|pi| sessions.get(pi))
+                            .and_then(|o| o.as_ref())
+                            .map(|s| s.parser.screen().scrollback())
+                            .filter(|&n| n > 0)
+                            .map(|n| format!(" · ⇅{n}"))
+                            .unwrap_or_default();
+                        format!(
+                            "{} [{} · {}{}]",
+                            p.name,
+                            p.kind.as_str(),
+                            if focus { "INPUT" } else { "MANAGER" },
+                            scroll_note
+                        )
+                    })
+                    .unwrap_or("No projects: squad add <path>".into());
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title(title);
+                let inner = block.inner(panels[1]);
+                f.render_widget(block, panels[1]);
                 if let Some(s) = sel_pi.and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref())) {
                     let screen = s.parser.screen();
                     let mut lines = Vec::new();
-                    for row in 0..inner.height { let mut spans = Vec::new(); for col in 0..inner.width {
-                        if let Some(cell) = screen.cell(row,col) {
-                            if cell.is_wide_continuation() { continue; }
-                            let mut style = Style::default().fg(color(cell.fgcolor())).bg(color(cell.bgcolor()));
-                            if cell.bold() { style = style.add_modifier(ratatui::style::Modifier::BOLD); }
-                            if cell.italic() { style = style.add_modifier(ratatui::style::Modifier::ITALIC); }
-                            if cell.underline() { style = style.add_modifier(ratatui::style::Modifier::UNDERLINED); }
-                            if cell.inverse() { style = style.add_modifier(ratatui::style::Modifier::REVERSED); }
-                            spans.push(Span::styled(if cell.has_contents() { cell.contents() } else { " " }, style));
+                    for row in 0..inner.height {
+                        let mut spans = Vec::new();
+                        for col in 0..inner.width {
+                            if let Some(cell) = screen.cell(row, col) {
+                                if cell.is_wide_continuation() {
+                                    continue;
+                                }
+                                let mut style = Style::default()
+                                    .fg(color(cell.fgcolor()))
+                                    .bg(color(cell.bgcolor()));
+                                if cell.bold() {
+                                    style = style.add_modifier(ratatui::style::Modifier::BOLD);
+                                }
+                                if cell.dim() {
+                                    style = style.add_modifier(ratatui::style::Modifier::DIM);
+                                }
+                                if cell.italic() {
+                                    style = style.add_modifier(ratatui::style::Modifier::ITALIC);
+                                }
+                                if cell.underline() {
+                                    style =
+                                        style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+                                }
+                                if cell.inverse() {
+                                    style = style.add_modifier(ratatui::style::Modifier::REVERSED);
+                                }
+                                spans.push(Span::styled(
+                                    if cell.has_contents() {
+                                        cell.contents()
+                                    } else {
+                                        " "
+                                    },
+                                    style,
+                                ));
+                            }
                         }
-                    } lines.push(Line::from(spans)); }
+                        lines.push(Line::from(spans));
+                    }
                     f.render_widget(Paragraph::new(lines), inner);
-                    if focus && !screen.hide_cursor() { let (r,c) = screen.cursor_position(); if r < inner.height && c < inner.width { f.set_cursor_position((inner.x+c,inner.y+r)); } }
-                } else { f.render_widget(Paragraph::new("Enter to start. Ctrl+G returns to manager.\nRegister projects with: squad add <path> [-- command args...]"), inner); }
+                    if focus && !screen.hide_cursor() {
+                        let (r, c) = screen.cursor_position();
+                        if r < inner.height && c < inner.width {
+                            f.set_cursor_position((inner.x + c, inner.y + r));
+                        }
+                    }
+                } else {
+                    let body = empty_state_lines(!c.projects.is_empty());
+                    let pad = inner.height.saturating_sub(body.len() as u16) / 2;
+                    let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
+                    lines.extend(body.iter().map(|l| Line::from(l.as_str())));
+                    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+                }
                 let mode = mode_of(focus, sending, filtering, adding, show_help);
                 let (chip_text, chip_style) = mode_chip(mode);
                 let content = if prefix {
                     "Ctrl+G prefix: g = send Ctrl+G; any other key = manager".to_string()
                 } else if filtering {
-                    format!("Filter: {filter_buf}_ ({} matches, Enter keeps, Esc clears)", order.len())
+                    format!(
+                        "Filter: {filter_buf}_ ({} matches, Enter keeps, Esc clears)",
+                        order.len()
+                    )
                 } else if sending {
-                    let name = sel_pi.and_then(|pi| c.projects.get(pi)).map(|p| p.name.as_str()).unwrap_or("?");
+                    let name = sel_pi
+                        .and_then(|pi| c.projects.get(pi))
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("?");
                     format!("Send to {name}: {send_buf}_ (Enter sends, Esc cancels)")
                 } else if adding {
                     mode_hints(Mode::Add).to_string()
                 } else {
                     message.clone()
                 };
-                f.render_widget(Paragraph::new(Line::from(vec![
-                    Span::styled(chip_text, chip_style.add_modifier(ratatui::style::Modifier::BOLD)),
-                    Span::raw(format!(" {content}")),
-                ])), vertical[1]);
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(
+                            chip_text,
+                            chip_style.add_modifier(ratatui::style::Modifier::BOLD),
+                        ),
+                        Span::raw(format!(" {content}")),
+                    ])),
+                    vertical[1],
+                );
                 if show_help {
                     let popup = centered_rect(60, 50, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
-                    let lines: Vec<Line> = help_lines().iter().map(|l| Line::from(l.to_string())).collect();
-                    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).title("Help (?/Esc closes)")), popup);
+                    let lines: Vec<Line> = help_lines()
+                        .iter()
+                        .map(|l| Line::from(l.to_string()))
+                        .collect();
+                    f.render_widget(
+                        Paragraph::new(lines).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title("Help (?/Esc closes)"),
+                        ),
+                        popup,
+                    );
                 }
                 if adding {
                     let popup = centered_rect(70, 60, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
-                    let kind_hint = if add_kind == Kind::Agent { "agent (Space toggles)" } else { "service (Space toggles)" };
-                    let fields = [("Path", add_path.as_str()), ("Kind", kind_hint), ("Command", if add_cmd.is_empty() { "(default shell)" } else { add_cmd.as_str() })];
+                    let kind_hint = if add_kind == Kind::Agent {
+                        "agent (Space toggles)"
+                    } else {
+                        "service (Space toggles)"
+                    };
+                    let fields = [
+                        ("Path", add_path.as_str()),
+                        ("Kind", kind_hint),
+                        (
+                            "Command",
+                            if add_cmd.is_empty() {
+                                "(default shell)"
+                            } else {
+                                add_cmd.as_str()
+                            },
+                        ),
+                    ];
                     let mut lines = Vec::new();
                     for (i, (label, val)) in fields.iter().enumerate() {
                         let active = i == add_field;
@@ -546,18 +755,38 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         };
                         lines.push(Line::from(vec![
                             Span::styled(format!("{mark} {label}: "), label_style),
-                            Span::styled(format!("{val}{cursor}"), if active { Style::default().add_modifier(ratatui::style::Modifier::BOLD) } else { Style::default() }),
+                            Span::styled(
+                                format!("{val}{cursor}"),
+                                if active {
+                                    Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+                                } else {
+                                    Style::default()
+                                },
+                            ),
                         ]));
                     }
                     if !add_err.is_empty() {
-                        lines.push(Line::from(Span::styled(format!("Error: {add_err}"), Style::default().fg(Color::Red))));
+                        lines.push(Line::from(Span::styled(
+                            format!("Error: {add_err}"),
+                            Style::default().fg(Color::Red),
+                        )));
                     }
-                    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).title("Add project (Enter save, Esc cancel)")), popup);
+                    f.render_widget(
+                        Paragraph::new(lines).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title("Add project (Enter save, Esc cancel)"),
+                        ),
+                        popup,
+                    );
                 }
             })?;
             dirty = false;
         }
-        if !event::poll(Duration::from_millis(100))? {
+        // Short poll so child echo appears within ~10 ms of a keypress.
+        // A long poll here is what made typing feel laggy.
+        if !event::poll(Duration::from_millis(10))? {
             continue;
         }
         match event::read()? {
@@ -582,8 +811,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         prefix = true;
                         continue;
                     }
+                    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+                    match k.code {
+                        KeyCode::PageUp if shift => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
+                            continue;
+                        }
+                        KeyCode::PageDown if shift => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
+                            continue;
+                        }
+                        KeyCode::End if shift => {
+                            scroll_live_selected(&mut sessions, &order, selected);
+                            continue;
+                        }
+                        _ => {}
+                    }
                     if let Some(&pi) = order.get(selected) {
                         if let Some(Some(s)) = sessions.get_mut(pi) {
+                            s.scroll_live();
                             let bytes = key_bytes(k, s.parser.screen().application_cursor());
                             if let Err(e) = s.input(&bytes) {
                                 message = e.to_string();
@@ -786,6 +1032,21 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     KeyCode::Char('f') if !order.is_empty() => {
                         filtering = true;
                         filter_buf.clear();
+                    }
+                    KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                        scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
+                    }
+                    KeyCode::PageDown if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                        scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
+                    }
+                    KeyCode::End if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                        scroll_live_selected(&mut sessions, &order, selected);
+                    }
+                    KeyCode::PageUp if !order.is_empty() => {
+                        scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
+                    }
+                    KeyCode::PageDown if !order.is_empty() => {
+                        scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
                     }
                     KeyCode::Char('r') => {
                         if let Some(&pi) = order.get(selected) {
@@ -999,7 +1260,8 @@ mod tests {
     fn help_covers_keys() {
         let h = help_lines().join("\n");
         for k in [
-            "Enter", "/", "n/p", "filter", "restart", "add", "1-9", "x", "q", "?", "Ctrl+G",
+            "Enter", "/", "n/p", "filter", "restart", "add", "scroll", "1-9", "x", "q", "?",
+            "Ctrl+G",
         ] {
             assert!(h.contains(k), "help missing {k}");
         }
@@ -1030,6 +1292,41 @@ mod tests {
             chips,
             vec!["MANAGER", "INPUT", "SEND", "FILTER", "ADD", "HELP"]
         );
+    }
+    #[test]
+    fn empty_state_guides_first_run() {
+        let fresh = empty_state_lines(false).join("\n");
+        assert!(fresh.contains("No projects"));
+        assert!(fresh.contains("squad add"));
+        let idle = empty_state_lines(true).join("\n");
+        assert!(idle.contains("Enter"));
+        assert!(!idle.contains("squad add"));
+    }
+    #[test]
+    fn spinner_cycles() {
+        assert_eq!(
+            (0..8).map(spinner_frame).collect::<Vec<char>>(),
+            vec!['◐', '◑', '◒', '◓', '◐', '◑', '◒', '◓']
+        );
+        assert_eq!(status_glyph("Running", 0), '◐');
+        assert_eq!(status_glyph("Running", 99), spinner_frame(99));
+        assert_eq!(status_glyph("Stopped", 99), '●');
+        assert_eq!(status_glyph("Exited (0)", 99), '●');
+        assert_eq!(status_glyph("Error: boom", 99), '●');
+    }
+    #[test]
+    fn scrollback_view() {
+        let mut p = vt100::Parser::new(NonZero::new(4).unwrap(), NonZero::new(20).unwrap(), 10);
+        for i in 0..7 {
+            p.process(format!("line{i}\r\n").as_bytes());
+        }
+        assert!(p.screen().scrollback_len() > 0);
+        p.screen_mut().set_scrollback(2);
+        assert_eq!(p.screen().scrollback(), 2);
+        let top: String = p.screen().contents();
+        assert!(top.contains("line"));
+        p.screen_mut().set_scrollback(0);
+        assert_eq!(p.screen().scrollback(), 0);
     }
     #[test]
     fn jump_keys() {
