@@ -11,11 +11,10 @@ accordingly, so running servers stay visible next to your agents.
 
 ## Install (Windows, no Rust required)
 
-Install straight from GitHub Releases. No repository checkout needed:
+One line, straight from GitHub Releases. No repository checkout needed:
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.ps1 | iex
 ```
 
 What this does:
