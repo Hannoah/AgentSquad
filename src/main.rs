@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -539,6 +542,26 @@ fn scroll_selected(
         }
     }
 }
+/// Mouse wheel notch to scrolled lines: up moves into history.
+fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
+    match kind {
+        MouseEventKind::ScrollUp => Some(3),
+        MouseEventKind::ScrollDown => Some(-3),
+        _ => None,
+    }
+}
+fn scroll_lines_selected(
+    sessions: &mut [Option<Session>],
+    order: &[usize],
+    selected: usize,
+    lines: isize,
+) {
+    if let Some(&pi) = order.get(selected) {
+        if let Some(Some(s)) = sessions.get_mut(pi) {
+            s.scroll_by(lines);
+        }
+    }
+}
 fn scroll_live_selected(sessions: &mut [Option<Session>], order: &[usize], selected: usize) {
     if let Some(&pi) = order.get(selected) {
         if let Some(Some(s)) = sessions.get_mut(pi) {
@@ -662,13 +685,14 @@ struct ScreenGuard;
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     }
 }
 fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     enable_raw_mode()?;
     let _guard = ScreenGuard;
     execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut sessions: Vec<Option<Session>> = (0..c.projects.len()).map(|_| None).collect();
     let mut order = display_order(&c.projects);
@@ -1068,6 +1092,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                 }
                 dirty = true;
+            }
+            Event::Mouse(m) => {
+                if let Some(lines) = wheel_lines(m.kind) {
+                    scroll_lines_selected(&mut sessions, &order, selected, lines);
+                    dirty = true;
+                }
             }
             Event::Key(k) if k.kind != KeyEventKind::Release => {
                 dirty = true;
@@ -1924,6 +1954,17 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn wheel_maps_to_scroll_lines() {
+        use crossterm::event::MouseEventKind as M;
+        assert_eq!(wheel_lines(M::ScrollUp), Some(3));
+        assert_eq!(wheel_lines(M::ScrollDown), Some(-3));
+        assert_eq!(
+            wheel_lines(M::Down(crossterm::event::MouseButton::Left)),
+            None
+        );
+        assert_eq!(wheel_lines(M::Moved), None);
     }
     #[test]
     fn quit_counts_discardable_sessions() {

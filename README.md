@@ -86,6 +86,7 @@ case-insensitively by `remove` and `start`.
 | `a` | Add a project without leaving the manager |
 | `x` | Stop the selected session (asks to confirm; process is killed, files untouched) |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
+| Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
 | `Ctrl+G` | Back to the manager (from inside a terminal) |
 | `?` | Toggle the help popup |
 | `q` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
