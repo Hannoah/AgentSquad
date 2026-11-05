@@ -98,6 +98,21 @@ fn shell() -> Vec<String> {
         vec!["sh".into()]
     }
 }
+/// Fold in projects registered by another process (e.g. `squad add` in a
+/// second terminal) so a later save does not clobber them. Only appends
+/// names we don't have, keeping `sessions` aligned by index.
+fn merge_projects(c: &mut Config, sessions: &mut Vec<Option<Session>>, disk: Config) {
+    for p in disk.projects {
+        if !c
+            .projects
+            .iter()
+            .any(|q| q.name.eq_ignore_ascii_case(&p.name))
+        {
+            c.projects.push(p);
+            sessions.push(None);
+        }
+    }
+}
 fn size(rows: u16, cols: u16) -> PtySize {
     PtySize {
         rows: rows.max(1),
@@ -1159,34 +1174,44 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     match k.code {
                         KeyCode::Esc => adding = false,
                         KeyCode::Enter => {
-                            match build_project(
-                                &c.projects,
-                                &add_path.as_str(),
-                                add_kind,
-                                &add_cmd.as_str(),
-                            ) {
-                                Err(e) => add_err = e,
-                                Ok(p) => {
-                                    let name = p.name.clone();
-                                    let kind_label = p.kind.as_str();
-                                    c.projects.push(p);
-                                    sessions.push(None);
-                                    match save(&c) {
-                                        Err(e) => {
-                                            c.projects.pop();
-                                            sessions.pop();
-                                            order = display_order(&c.projects);
-                                            selected = 0;
-                                            add_err = format!("Save failed: {e:#}");
-                                        }
-                                        Ok(()) => {
-                                            order = display_order(&c.projects);
-                                            selected = order
-                                                .iter()
-                                                .position(|&x| x == c.projects.len() - 1)
-                                                .unwrap_or(0);
-                                            adding = false;
-                                            message = format!("Registered {name} ({kind_label})");
+                            add_err.clear();
+                            match load() {
+                                Err(e) => add_err = format!("Config reload failed: {e:#}"),
+                                Ok(disk) => {
+                                    merge_projects(&mut c, &mut sessions, disk);
+                                }
+                            }
+                            if add_err.is_empty() {
+                                match build_project(
+                                    &c.projects,
+                                    &add_path.as_str(),
+                                    add_kind,
+                                    &add_cmd.as_str(),
+                                ) {
+                                    Err(e) => add_err = e,
+                                    Ok(p) => {
+                                        let name = p.name.clone();
+                                        let kind_label = p.kind.as_str();
+                                        c.projects.push(p);
+                                        sessions.push(None);
+                                        match save(&c) {
+                                            Err(e) => {
+                                                c.projects.pop();
+                                                sessions.pop();
+                                                order = display_order(&c.projects);
+                                                selected = 0;
+                                                add_err = format!("Save failed: {e:#}");
+                                            }
+                                            Ok(()) => {
+                                                order = display_order(&c.projects);
+                                                selected = order
+                                                    .iter()
+                                                    .position(|&x| x == c.projects.len() - 1)
+                                                    .unwrap_or(0);
+                                                adding = false;
+                                                message =
+                                                    format!("Registered {name} ({kind_label})");
+                                            }
                                         }
                                     }
                                 }
@@ -1910,5 +1935,38 @@ mod tests {
         assert!(sessions[1].is_none());
         // Unknown index reports instead of panicking.
         assert!(start_session(&mut sessions, &projects, 7, 24, 80).is_some());
+    }
+    #[test]
+    fn merge_appends_missing_projects() {
+        let mk = |name: &str| Project {
+            name: name.into(),
+            path: PathBuf::from("/tmp"),
+            command: vec!["sh".into()],
+            kind: Kind::Agent,
+        };
+        let mut c = Config {
+            projects: vec![mk("a")],
+        };
+        let mut sessions: Vec<Option<Session>> = vec![None];
+        merge_projects(
+            &mut c,
+            &mut sessions,
+            Config {
+                projects: vec![mk("a"), mk("B")],
+            },
+        );
+        assert_eq!(c.projects.len(), 2);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(c.projects[1].name, "B");
+        // Idempotent: a second merge adds nothing.
+        merge_projects(
+            &mut c,
+            &mut sessions,
+            Config {
+                projects: vec![mk("A"), mk("b")],
+            },
+        );
+        assert_eq!(c.projects.len(), 2);
+        assert_eq!(sessions.len(), 2);
     }
 }
