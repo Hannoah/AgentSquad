@@ -295,7 +295,7 @@ fn help_lines() -> Vec<&'static str> {
         "n/p, arrows  select project",
         "1-9        jump to project",
         "Ctrl+G     terminal back to manager",
-        "q          quit",
+        "q          quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
 }
@@ -366,9 +366,9 @@ fn jump_to(order_len: usize, ch: char) -> Option<usize> {
     }
     None
 }
-/// Key outcome while a stop-confirmation is pending:
+/// Key outcome while a confirmation modal is pending:
 /// `Some(true)` confirms, `Some(false)` cancels, `None` ignores the key.
-fn confirm_stop_key(code: KeyCode) -> Option<bool> {
+fn confirm_key(code: KeyCode) -> Option<bool> {
     match code {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
@@ -377,6 +377,13 @@ fn confirm_stop_key(code: KeyCode) -> Option<bool> {
 }
 fn confirm_stop_prompt(name: &str) -> String {
     format!("Stop session '{name}'?")
+}
+fn confirm_quit_prompt(n: usize) -> String {
+    format!("Quit and discard {n} session(s)?")
+}
+/// Sessions that quitting would discard (running or finished output).
+fn live_session_count<T>(sessions: &[Option<T>]) -> usize {
+    sessions.iter().flatten().count()
 }
 fn empty_state_lines(has_projects: bool) -> Vec<String> {
     if has_projects {
@@ -682,6 +689,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut add_cmd = LineInput::new();
     let mut add_err = String::new();
     let mut confirm_stop: Option<usize> = None;
+    let mut confirm_quit = false;
     let mut message = mode_hints(Mode::Manager).to_string();
     let mut dirty = true;
     let mut first = initial.is_some();
@@ -940,6 +948,24 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
                                 .title("Stop session"),
+                        ),
+                        popup,
+                    );
+                }
+                if confirm_quit {
+                    let popup = centered_rect(60, 30, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(vec![
+                            Line::from(confirm_quit_prompt(live_session_count(&sessions))),
+                            Line::from(""),
+                            Line::from("y quits, n or Esc cancels"),
+                        ])
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title("Quit"),
                         ),
                         popup,
                     );
@@ -1305,8 +1331,16 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         continue;
                     }
                 }
+                if confirm_quit {
+                    match confirm_key(k.code) {
+                        Some(true) => break,
+                        Some(false) => confirm_quit = false,
+                        None => {}
+                    }
+                    continue;
+                }
                 if confirm_stop.is_some() {
-                    match confirm_stop_key(k.code) {
+                    match confirm_key(k.code) {
                         Some(true) => {
                             if let Some(pi) = confirm_stop.take() {
                                 if let Some(slot) = sessions.get_mut(pi) {
@@ -1323,7 +1357,13 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     continue;
                 }
                 match k.code {
-                    KeyCode::Char('q') => break,
+                    KeyCode::Char('q') => {
+                        if live_session_count(&sessions) > 0 {
+                            confirm_quit = true;
+                        } else {
+                            break;
+                        }
+                    }
                     KeyCode::Down | KeyCode::Char('n') if !order.is_empty() => {
                         selected = (selected + 1) % order.len()
                     }
@@ -1874,7 +1914,7 @@ mod tests {
     }
     #[test]
     fn stop_asks_to_confirm() {
-        let yes = |c: KeyCode| confirm_stop_key(c);
+        let yes = |c: KeyCode| confirm_key(c);
         assert_eq!(yes(KeyCode::Char('y')), Some(true));
         assert_eq!(yes(KeyCode::Char('Y')), Some(true));
         assert_eq!(yes(KeyCode::Enter), Some(true));
@@ -1884,6 +1924,15 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn quit_counts_discardable_sessions() {
+        let sessions: Vec<Option<u8>> = vec![None, Some(1), None, Some(2)];
+        assert_eq!(live_session_count(&sessions), 2);
+        let empty: Vec<Option<u8>> = vec![None];
+        assert_eq!(live_session_count(&empty), 0);
+        let prompt = confirm_quit_prompt(2);
+        assert!(prompt.contains('2'), "prompt names the count");
     }
     #[test]
     fn uptime_labels_scale() {

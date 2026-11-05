@@ -88,7 +88,7 @@ case-insensitively by `remove` and `start`.
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
 | `Ctrl+G` | Back to the manager (from inside a terminal) |
 | `?` | Toggle the help popup |
-| `q` | Quit (all managed child processes are stopped; nothing runs detached) |
+| `q` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.
