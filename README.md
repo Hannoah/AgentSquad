@@ -80,6 +80,7 @@ case-insensitively by `remove` and `start`.
 | `/` | Type a line and send it to the selected session (starts it if stopped) |
 | `f` | Filter the project list by name or command (`Enter` keeps, `Esc` clears) |
 | `r` | Restart the selected session |
+| `s` | Start all stopped sessions |
 | `n` / `p`, `↑` / `↓` | Move selection |
 | `1`–`9` | Jump to a visible row |
 | `a` | Add a project without leaving the manager |

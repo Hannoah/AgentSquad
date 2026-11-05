@@ -275,6 +275,7 @@ fn help_lines() -> Vec<&'static str> {
         "f          filter projects",
         "Shift+PgUp/Dn scroll history",
         "r          restart session",
+        "s          start all stopped sessions",
         "x          stop session (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
@@ -332,7 +333,7 @@ fn mode_chip(m: Mode) -> (&'static str, Style) {
 }
 fn mode_hints(m: Mode) -> &'static str {
     match m {
-        Mode::Manager => "Enter focus | / send | a add | f filter | r restart | n/p select | x stop | q quit | ? help",
+        Mode::Manager => "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | q quit | ? help",
         Mode::Focus => "type to input | Ctrl+G manager",
         Mode::Send => "Enter sends | Esc cancels",
         Mode::Filter => "type to narrow | Enter keeps | Esc clears",
@@ -523,6 +524,50 @@ fn scroll_live_selected(sessions: &mut [Option<Session>], order: &[usize], selec
         }
     }
 }
+/// Stop any existing session for `pi` and spawn a fresh one.
+/// Returns an error message when the spawn fails.
+fn restart_session(
+    sessions: &mut [Option<Session>],
+    projects: &[Project],
+    pi: usize,
+    rows: u16,
+    cols: u16,
+) -> Option<String> {
+    if let Some(slot) = sessions.get_mut(pi) {
+        *slot = None;
+    }
+    let Some(p) = projects.get(pi) else {
+        return Some(format!("No such project #{pi}"));
+    };
+    match Session::spawn(p, rows, cols) {
+        Ok(s) => {
+            if let Some(slot) = sessions.get_mut(pi) {
+                *slot = Some(s);
+            }
+            None
+        }
+        Err(e) => Some(format!("{e:#}")),
+    }
+}
+/// Start the project session unless it is already running.
+/// Returns an error message when the spawn fails.
+fn start_session(
+    sessions: &mut [Option<Session>],
+    projects: &[Project],
+    pi: usize,
+    rows: u16,
+    cols: u16,
+) -> Option<String> {
+    let running = sessions
+        .get(pi)
+        .and_then(|o| o.as_ref())
+        .map(|s| s.status == "Running")
+        .unwrap_or(false);
+    if running {
+        return None;
+    }
+    restart_session(sessions, projects, pi, rows, cols)
+}
 /// Best-effort kill of the whole process tree.
 ///
 /// Agent sessions are usually grandchildren (e.g. `cmd.exe -> node.exe` for
@@ -638,12 +683,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         if first {
             first = false;
             if let Some(&pi) = order.get(selected) {
-                match Session::spawn(&c.projects[pi], rows, cols) {
-                    Ok(s) => {
-                        sessions[pi] = Some(s);
-                        focus = true;
-                    }
-                    Err(e) => message = e.to_string(),
+                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                    None => focus = true,
+                    Some(e) => message = e,
                 }
             }
         }
@@ -1040,10 +1082,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     .map(|s| s.status == "Running")
                                     .unwrap_or(false);
                                 if !alive {
-                                    sessions[pi] = None;
-                                    match Session::spawn(&c.projects[pi], rows, cols) {
-                                        Ok(s) => sessions[pi] = Some(s),
-                                        Err(e) => message = format!("{e:#}"),
+                                    if let Some(e) =
+                                        start_session(&mut sessions, &c.projects, pi, rows, cols)
+                                    {
+                                        message = e;
                                     }
                                 }
                                 if let Some(Some(s)) = sessions.get_mut(pi) {
@@ -1303,15 +1345,36 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     KeyCode::Char('r') => {
                         if let Some(&pi) = order.get(selected) {
-                            sessions[pi] = None;
-                            match Session::spawn(&c.projects[pi], rows, cols) {
-                                Ok(s) => {
-                                    sessions[pi] = Some(s);
+                            match restart_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                None => {
                                     message = format!("Restarted {}", c.projects[pi].name);
                                 }
-                                Err(e) => message = format!("{e:#}"),
+                                Some(e) => message = e,
                             }
                         }
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') if !order.is_empty() => {
+                        let mut started_n = 0;
+                        let mut failed: Option<String> = None;
+                        for &pi in order.iter() {
+                            let running = sessions
+                                .get(pi)
+                                .and_then(|o| o.as_ref())
+                                .map(|s| s.status == "Running")
+                                .unwrap_or(false);
+                            if running {
+                                continue;
+                            }
+                            match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                None => started_n += 1,
+                                Some(e) => failed = Some(e),
+                            }
+                        }
+                        message = match failed {
+                            Some(e) => format!("Started {started_n}; error: {e}"),
+                            None if started_n == 0 => "All sessions already running.".into(),
+                            None => format!("Started {started_n} session(s)."),
+                        };
                     }
                     KeyCode::Char('x') => {
                         if let Some(&pi) = order.get(selected) {
@@ -1330,19 +1393,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             add_cmd.clear();
                             add_err.clear();
                         } else if let Some(&pi) = order.get(selected) {
-                            if sessions[pi]
-                                .as_ref()
-                                .map(|s| s.status != "Running")
-                                .unwrap_or(true)
+                            if let Some(e) =
+                                start_session(&mut sessions, &c.projects, pi, rows, cols)
                             {
-                                sessions[pi] = None;
-                                match Session::spawn(&c.projects[pi], rows, cols) {
-                                    Ok(s) => sessions[pi] = Some(s),
-                                    Err(e) => {
-                                        message = format!("{e:#}");
-                                        continue;
-                                    }
-                                }
+                                message = e;
+                                continue;
                             }
                             focus = true;
                         }
@@ -1815,5 +1870,45 @@ mod tests {
         assert_eq!(uptime_label(3599), "59m");
         assert_eq!(uptime_label(3600), "1h");
         assert_eq!(uptime_label(9000), "2h");
+    }
+    #[test]
+    fn start_session_starts_and_reports() {
+        let dir = env::current_dir().unwrap();
+        let shell: Vec<String> = if cfg!(windows) {
+            vec![
+                "cmd.exe".into(),
+                "/d".into(),
+                "/c".into(),
+                "echo AGENTSQUAD_OK".into(),
+            ]
+        } else {
+            vec!["sh".into(), "-c".into(), "echo AGENTSQUAD_OK".into()]
+        };
+        let projects = vec![
+            Project {
+                name: "ok".into(),
+                path: dir.clone(),
+                command: shell,
+                kind: Kind::Agent,
+            },
+            Project {
+                name: "bad".into(),
+                path: dir,
+                command: vec!["agentsquad-no-such-binary-xyz".into()],
+                kind: Kind::Service,
+            },
+        ];
+        let mut sessions: Vec<Option<Session>> = vec![None, None];
+        // Stopped session starts.
+        assert!(start_session(&mut sessions, &projects, 0, 24, 80).is_none());
+        assert!(sessions[0].is_some());
+        // Already running: no-op, no respawn, no error.
+        assert!(start_session(&mut sessions, &projects, 0, 24, 80).is_none());
+        assert!(sessions[0].is_some());
+        // Bad binary surfaces an error and leaves no session behind.
+        assert!(start_session(&mut sessions, &projects, 1, 24, 80).is_some());
+        assert!(sessions[1].is_none());
+        // Unknown index reports instead of panicking.
+        assert!(start_session(&mut sessions, &projects, 7, 24, 80).is_some());
     }
 }
