@@ -80,7 +80,8 @@ fn load() -> Result<Config> {
     if !p.exists() {
         return Ok(Config::default());
     }
-    Ok(toml::from_str(&fs::read_to_string(p)?)?)
+    let text = fs::read_to_string(&p).with_context(|| format!("Cannot read {}", p.display()))?;
+    toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))
 }
 fn save(c: &Config) -> Result<()> {
     let p = config_path()?;
@@ -167,6 +168,73 @@ fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
 fn fit(s: &str, w: usize) -> String {
     s.chars().take(w).collect()
 }
+/// Single-line editor with a movable cursor for the manager's input fields.
+/// Stored as chars so cursor motion never splits UTF-8.
+#[derive(Default)]
+struct LineInput {
+    text: Vec<char>,
+    cursor: usize,
+}
+impl LineInput {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn as_str(&self) -> String {
+        self.text.iter().collect()
+    }
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+    fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+    fn take(&mut self) -> String {
+        let out = self.as_str();
+        self.clear();
+        out
+    }
+    fn insert(&mut self, ch: char) {
+        self.text.insert(self.cursor.min(self.text.len()), ch);
+        self.cursor = (self.cursor + 1).min(self.text.len());
+    }
+    fn backspace(&mut self) {
+        if self.cursor > 0 && !self.text.is_empty() {
+            self.cursor -= 1;
+            self.text.remove(self.cursor.min(self.text.len()));
+        }
+    }
+    fn delete(&mut self) {
+        if self.cursor < self.text.len() {
+            self.text.remove(self.cursor);
+        }
+    }
+    fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+    fn move_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.text.len());
+    }
+    fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+    fn move_end(&mut self) {
+        self.cursor = self.text.len();
+    }
+    /// (before, under-cursor, after) for rendering a block cursor.
+    fn render_parts(&self) -> (String, char, String) {
+        let at = self.text.get(self.cursor).copied().unwrap_or(' ');
+        let before: String = self.text[..self.cursor.min(self.text.len())]
+            .iter()
+            .collect();
+        let after: String = if self.cursor < self.text.len() {
+            self.text[self.cursor + 1..].iter().collect()
+        } else {
+            String::new()
+        };
+        (before, at, after)
+    }
+}
 const SPINNER: [char; 4] = ['◐', '◑', '◒', '◓'];
 fn spinner_frame(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
@@ -213,6 +281,19 @@ enum Mode {
     Filter,
     Add,
     Help,
+}
+/// Status-bar input row: prompt + editable text with a block cursor + hint.
+fn input_line(prompt: String, input: &LineInput, hint: String) -> Vec<Span<'static>> {
+    let (before, at, after) = input.render_parts();
+    vec![
+        Span::raw(prompt),
+        Span::raw(before),
+        Span::styled(
+            at.to_string(),
+            Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
+        ),
+        Span::raw(after + &hint),
+    ]
 }
 fn mode_of(focus: bool, sending: bool, filtering: bool, adding: bool, show_help: bool) -> Mode {
     if show_help {
@@ -270,7 +351,7 @@ fn empty_state_lines(has_projects: bool) -> Vec<String> {
         vec![
             "No projects yet.".into(),
             "".into(),
-            "Press a and type a folder path to add your first project.".into(),
+            "Press Enter or a, then type a folder path to add your first project.".into(),
             "Or from your shell: squad add <path> [-- command]".into(),
             "".into(),
             "Then press Enter to start it.".into(),
@@ -506,15 +587,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut focus = false;
     let mut prefix = false;
     let mut sending = false;
-    let mut send_buf = String::new();
+    let mut send_buf = LineInput::new();
     let mut show_help = false;
     let mut filtering = false;
-    let mut filter_buf = String::new();
+    let mut filter_buf = LineInput::new();
     let mut adding = false;
     let mut add_field: usize = 0;
-    let mut add_path = String::new();
+    let mut add_path = LineInput::new();
     let mut add_kind = Kind::Agent;
-    let mut add_cmd = String::new();
+    let mut add_cmd = LineInput::new();
     let mut add_err = String::new();
     let mut message = mode_hints(Mode::Manager).to_string();
     let mut dirty = true;
@@ -704,34 +785,39 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
                 let mode = mode_of(focus, sending, filtering, adding, show_help);
                 let (chip_text, chip_style) = mode_chip(mode);
-                let content = if prefix {
-                    "Ctrl+G prefix: g = send Ctrl+G; any other key = manager".to_string()
+                let mut bar = vec![
+                    Span::styled(
+                        chip_text,
+                        chip_style.add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                ];
+                if prefix {
+                    bar.push(Span::raw(
+                        "Ctrl+G prefix: g = send Ctrl+G; any other key = manager",
+                    ));
                 } else if filtering {
-                    format!(
-                        "Filter: {filter_buf}_ ({} matches, Enter keeps, Esc clears)",
-                        order.len()
-                    )
+                    bar.extend(input_line(
+                        "Filter: ".to_string(),
+                        &filter_buf,
+                        format!(" ({} matches, Enter keeps, Esc clears)", order.len()),
+                    ));
                 } else if sending {
                     let name = sel_pi
                         .and_then(|pi| c.projects.get(pi))
                         .map(|p| p.name.as_str())
                         .unwrap_or("?");
-                    format!("Send to {name}: {send_buf}_ (Enter sends, Esc cancels)")
+                    bar.extend(input_line(
+                        format!("Send to {name}: "),
+                        &send_buf,
+                        " (Enter sends, Esc cancels)".to_string(),
+                    ));
                 } else if adding {
-                    mode_hints(Mode::Add).to_string()
+                    bar.push(Span::raw(mode_hints(Mode::Add)));
                 } else {
-                    message.clone()
-                };
-                f.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        Span::styled(
-                            chip_text,
-                            chip_style.add_modifier(ratatui::style::Modifier::BOLD),
-                        ),
-                        Span::raw(format!(" {content}")),
-                    ])),
-                    vertical[1],
-                );
+                    bar.push(Span::raw(message.clone()));
+                }
+                f.render_widget(Paragraph::new(Line::from(bar)), vertical[1]);
                 if show_help {
                     let popup = centered_rect(60, 50, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
@@ -757,39 +843,58 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     } else {
                         "service (Space toggles)"
                     };
+                    let cmd_text = if add_cmd.is_empty() {
+                        "(default shell)".to_string()
+                    } else {
+                        add_cmd.as_str()
+                    };
                     let fields = [
                         ("Path", add_path.as_str()),
-                        ("Kind", kind_hint),
-                        (
-                            "Command",
-                            if add_cmd.is_empty() {
-                                "(default shell)"
-                            } else {
-                                add_cmd.as_str()
-                            },
-                        ),
+                        ("Kind", kind_hint.to_string()),
+                        ("Command", cmd_text),
                     ];
                     let mut lines = Vec::new();
                     for (i, (label, val)) in fields.iter().enumerate() {
                         let active = i == add_field;
                         let mark = if active { ">" } else { " " };
-                        let cursor = if active { "_" } else { "" };
                         let label_style = if active {
                             Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };
-                        lines.push(Line::from(vec![
-                            Span::styled(format!("{mark} {label}: "), label_style),
-                            Span::styled(
-                                format!("{val}{cursor}"),
+                        let mut row = vec![Span::styled(format!("{mark} {label}: "), label_style)];
+                        let editing = active && i != 1;
+                        if editing {
+                            let input = if i == 0 { &add_path } else { &add_cmd };
+                            let (left, cur, right) = input.render_parts();
+                            let value_style =
+                                Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+                            row.push(Span::styled(left, value_style));
+                            row.push(Span::styled(
+                                cur.to_string(),
+                                value_style.bg(Color::White).fg(Color::Black),
+                            ));
+                            row.push(Span::styled(right, value_style));
+                            // When the command field is empty the display shows a
+                            // hint instead of the raw buffer; keep the hint visible
+                            // after the cursor block.
+                            if i == 2 && add_cmd.is_empty() {
+                                row.push(Span::styled(
+                                    "(default shell)".to_string(),
+                                    Style::default().fg(Color::DarkGray),
+                                ));
+                            }
+                        } else {
+                            row.push(Span::styled(
+                                val.clone(),
                                 if active {
                                     Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                                 } else {
                                     Style::default()
                                 },
-                            ),
-                        ]));
+                            ));
+                        }
+                        lines.push(Line::from(row));
                     }
                     if !add_err.is_empty() {
                         lines.push(Line::from(Span::styled(
@@ -872,7 +977,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             send_buf.clear();
                         }
                         KeyCode::Enter => {
-                            let line = std::mem::take(&mut send_buf);
+                            let line = send_buf.take();
                             sending = false;
                             if line.is_empty() {
                                 message = "Empty. Nothing sent.".into();
@@ -902,13 +1007,20 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             }
                         }
                         KeyCode::Backspace => {
-                            send_buf.pop();
+                            send_buf.backspace();
                         }
+                        KeyCode::Delete => {
+                            send_buf.delete();
+                        }
+                        KeyCode::Left => send_buf.move_left(),
+                        KeyCode::Right => send_buf.move_right(),
+                        KeyCode::Home => send_buf.move_home(),
+                        KeyCode::End => send_buf.move_end(),
                         KeyCode::Char(ch)
                             if !k.modifiers.contains(KeyModifiers::CONTROL)
                                 && !k.modifiers.contains(KeyModifiers::ALT) =>
                         {
-                            send_buf.push(ch)
+                            send_buf.insert(ch)
                         }
                         _ => {}
                     }
@@ -924,16 +1036,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         KeyCode::Enter => filtering = false,
                         KeyCode::Backspace => {
-                            filter_buf.pop();
-                            order = apply_filter(&c.projects, &filter_buf);
+                            filter_buf.backspace();
+                            order = apply_filter(&c.projects, &filter_buf.as_str());
                             selected = 0;
                         }
+                        KeyCode::Delete => {
+                            filter_buf.delete();
+                            order = apply_filter(&c.projects, &filter_buf.as_str());
+                            selected = 0;
+                        }
+                        KeyCode::Left => filter_buf.move_left(),
+                        KeyCode::Right => filter_buf.move_right(),
+                        KeyCode::Home => filter_buf.move_home(),
+                        KeyCode::End => filter_buf.move_end(),
                         KeyCode::Char(ch)
                             if !k.modifiers.contains(KeyModifiers::CONTROL)
                                 && !k.modifiers.contains(KeyModifiers::ALT) =>
                         {
-                            filter_buf.push(ch);
-                            order = apply_filter(&c.projects, &filter_buf);
+                            filter_buf.insert(ch);
+                            order = apply_filter(&c.projects, &filter_buf.as_str());
                             selected = 0;
                         }
                         _ => {}
@@ -944,7 +1065,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     match k.code {
                         KeyCode::Esc => adding = false,
                         KeyCode::Enter => {
-                            match build_project(&c.projects, &add_path, add_kind, &add_cmd) {
+                            match build_project(
+                                &c.projects,
+                                &add_path.as_str(),
+                                add_kind,
+                                &add_cmd.as_str(),
+                            ) {
                                 Err(e) => add_err = e,
                                 Ok(p) => {
                                     let name = p.name.clone();
@@ -978,15 +1104,47 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         KeyCode::Backspace => {
                             match add_field {
                                 0 => {
-                                    add_path.pop();
+                                    add_path.backspace();
                                 }
                                 2 => {
-                                    add_cmd.pop();
+                                    add_cmd.backspace();
                                 }
                                 _ => {}
                             }
                             add_err.clear();
                         }
+                        KeyCode::Delete => {
+                            match add_field {
+                                0 => {
+                                    add_path.delete();
+                                }
+                                2 => {
+                                    add_cmd.delete();
+                                }
+                                _ => {}
+                            }
+                            add_err.clear();
+                        }
+                        KeyCode::Left => match add_field {
+                            0 => add_path.move_left(),
+                            2 => add_cmd.move_left(),
+                            _ => {}
+                        },
+                        KeyCode::Right => match add_field {
+                            0 => add_path.move_right(),
+                            2 => add_cmd.move_right(),
+                            _ => {}
+                        },
+                        KeyCode::Home => match add_field {
+                            0 => add_path.move_home(),
+                            2 => add_cmd.move_home(),
+                            _ => {}
+                        },
+                        KeyCode::End => match add_field {
+                            0 => add_path.move_end(),
+                            2 => add_cmd.move_end(),
+                            _ => {}
+                        },
                         KeyCode::Char(' ') if add_field == 1 => {
                             add_kind = if add_kind == Kind::Agent {
                                 Kind::Service
@@ -999,8 +1157,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 && !k.modifiers.contains(KeyModifiers::ALT) =>
                         {
                             match add_field {
-                                0 => add_path.push(ch),
-                                2 => add_cmd.push(ch),
+                                0 => add_path.insert(ch),
+                                2 => add_cmd.insert(ch),
                                 _ => {}
                             }
                             add_err.clear();
@@ -1093,7 +1251,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some(&pi) = order.get(selected) {
+                        if order.is_empty() {
+                            adding = true;
+                            show_help = false;
+                            add_field = 0;
+                            add_path.clear();
+                            add_kind = Kind::Agent;
+                            add_cmd.clear();
+                            add_err.clear();
+                        } else if let Some(&pi) = order.get(selected) {
                             if sessions[pi]
                                 .as_ref()
                                 .map(|s| s.status != "Running")
@@ -1126,7 +1292,7 @@ fn main() -> Result<()> {
         args.first().map(String::as_str),
         Some("--help" | "-h" | "help")
     ) {
-        println!("AgentSquad v0.1\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, x stops, 1-9 jumps, q quits, ? help.\nTerminal: Ctrl+G returns to manager; then g sends Ctrl+G.\nQuitting stops managed child processes; no detached daemon.");
+        println!("AgentSquad v{}\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, x stops, 1-9 jumps, Shift+PgUp scrolls, q quits, ? help.\nTerminal: Ctrl+G returns to manager; then g sends Ctrl+G.\nQuitting stops managed child processes; no detached daemon.", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--version") {
@@ -1517,5 +1683,43 @@ mod tests {
             s.status,
             s.parser.screen().contents()
         );
+    }
+    #[test]
+    fn line_input_editing() {
+        let mut l = LineInput::default();
+        for ch in "hello".chars() {
+            l.insert(ch);
+        }
+        assert_eq!(l.as_str(), "hello");
+        l.move_left();
+        l.move_left();
+        l.insert('X');
+        assert_eq!(l.as_str(), "helXlo");
+        l.backspace();
+        assert_eq!(l.as_str(), "hello");
+        l.delete();
+        assert_eq!(l.as_str(), "helo");
+        l.move_home();
+        l.insert('S');
+        assert_eq!(l.as_str(), "Shelo");
+        l.move_end();
+        l.insert('!');
+        assert_eq!(l.as_str(), "Shelo!");
+        l.clear();
+        assert!(l.is_empty());
+        assert_eq!(l.as_str(), "");
+    }
+    #[test]
+    fn line_input_cursor_parts() {
+        let mut l = LineInput::default();
+        for ch in "ab".chars() {
+            l.insert(ch);
+        }
+        // Cursor at end: cursor block shows a space.
+        assert_eq!(l.render_parts(), ("ab".to_string(), ' ', String::new()));
+        l.move_left();
+        assert_eq!(l.render_parts(), ("a".to_string(), 'b', String::new()));
+        l.move_home();
+        assert_eq!(l.render_parts(), (String::new(), 'a', "b".to_string()));
     }
 }
