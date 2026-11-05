@@ -265,7 +265,7 @@ fn help_lines() -> Vec<&'static str> {
         "f          filter projects",
         "Shift+PgUp/Dn scroll history",
         "r          restart session",
-        "x          stop session",
+        "x          stop session (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
         "Ctrl+G     terminal back to manager",
@@ -339,6 +339,18 @@ fn jump_to(order_len: usize, ch: char) -> Option<usize> {
         }
     }
     None
+}
+/// Key outcome while a stop-confirmation is pending:
+/// `Some(true)` confirms, `Some(false)` cancels, `None` ignores the key.
+fn confirm_stop_key(code: KeyCode) -> Option<bool> {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
+        _ => None,
+    }
+}
+fn confirm_stop_prompt(name: &str) -> String {
+    format!("Stop session '{name}'?")
 }
 fn empty_state_lines(has_projects: bool) -> Vec<String> {
     if has_projects {
@@ -597,6 +609,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut add_kind = Kind::Agent;
     let mut add_cmd = LineInput::new();
     let mut add_err = String::new();
+    let mut confirm_stop: Option<usize> = None;
     let mut message = mode_hints(Mode::Manager).to_string();
     let mut dirty = true;
     let mut first = initial.is_some();
@@ -831,6 +844,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
                                 .title("Help (?/Esc closes)"),
+                        ),
+                        popup,
+                    );
+                }
+                if let Some(pi) = confirm_stop {
+                    let name = c.projects.get(pi).map(|p| p.name.as_str()).unwrap_or("?");
+                    let popup = centered_rect(60, 30, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(vec![
+                            Line::from(confirm_stop_prompt(name)),
+                            Line::from(""),
+                            Line::from("y confirms, n or Esc cancels"),
+                        ])
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title("Stop session"),
                         ),
                         popup,
                     );
@@ -1186,6 +1218,23 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         continue;
                     }
                 }
+                if confirm_stop.is_some() {
+                    match confirm_stop_key(k.code) {
+                        Some(true) => {
+                            if let Some(pi) = confirm_stop.take() {
+                                if let Some(slot) = sessions.get_mut(pi) {
+                                    *slot = None;
+                                }
+                                message = "Session stopped. Enter restarts it.".into();
+                            }
+                        }
+                        Some(false) => {
+                            confirm_stop = None;
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
                 match k.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Down | KeyCode::Char('n') if !order.is_empty() => {
@@ -1246,8 +1295,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     KeyCode::Char('x') => {
                         if let Some(&pi) = order.get(selected) {
-                            sessions[pi] = None;
-                            message = "Session stopped. Enter restarts it.".into();
+                            if sessions.get(pi).and_then(|o| o.as_ref()).is_some() {
+                                confirm_stop = Some(pi);
+                            }
                         }
                     }
                     KeyCode::Enter => {
@@ -1721,5 +1771,18 @@ mod tests {
         assert_eq!(l.render_parts(), ("a".to_string(), 'b', String::new()));
         l.move_home();
         assert_eq!(l.render_parts(), (String::new(), 'a', "b".to_string()));
+    }
+    #[test]
+    fn stop_asks_to_confirm() {
+        let yes = |c: KeyCode| confirm_stop_key(c);
+        assert_eq!(yes(KeyCode::Char('y')), Some(true));
+        assert_eq!(yes(KeyCode::Char('Y')), Some(true));
+        assert_eq!(yes(KeyCode::Enter), Some(true));
+        assert_eq!(yes(KeyCode::Esc), Some(false));
+        assert_eq!(yes(KeyCode::Char('n')), Some(false));
+        assert_eq!(yes(KeyCode::Char('N')), Some(false));
+        assert_eq!(yes(KeyCode::Char('q')), None);
+        let prompt = confirm_stop_prompt("web");
+        assert!(prompt.contains("web"), "prompt names the session");
     }
 }
