@@ -1605,7 +1605,7 @@ fn main() -> Result<()> {
                 .projects
                 .iter()
                 .position(|p| p.name.eq_ignore_ascii_case(name))
-                .context("Project not registered")?;
+                .with_context(|| format!("Project not registered: {name}"))?;
             run(c, Some(i))
         }
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
