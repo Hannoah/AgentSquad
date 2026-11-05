@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
@@ -12,10 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-crossterm = "0.28"
-ratatui = "0.29"
+crossterm = "0.29"
+ratatui = "0.30"
+# Pinned: 0.9 hangs console clients at startup in console-less environments
+# (it adds PSEUDOCONSOLE_INHERIT_CURSOR to CreatePseudoConsole flags).
+# Revisit when upstream fixes it.
 portable-pty = "0.8"
-vt100 = "0.15"
+vt100 = "0.18"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 

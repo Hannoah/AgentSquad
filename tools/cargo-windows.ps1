@@ -47,6 +47,15 @@ if (-not (Test-Path $Linker)) {
   Expand-Archive -Path $TcZip -DestinationPath $ToolDir -Force
 }
 
+$dllImport = Join-Path $LibDir "libunwind.dll.a"
+if (Test-Path $dllImport) {
+  # Force static libunwind: something in the default link line also passes
+  # -lunwind, which the linker would resolve to this DLL import library and
+  # leave squad.exe dependent on libunwind.dll. Renaming it here (TEMP copy
+  # only) makes -lunwind fall back to the static libunwind.a.
+  Rename-Item -Path $dllImport -NewName "libunwind.dll.a.unused"
+}
+
 foreach ($lib in @("libgcc.a", "libgcc_eh.a")) {
   if (-not (Test-Path (Join-Path $LibDir $lib))) {
     $emptyObj = Join-Path $ToolRoot "empty.o"
@@ -63,7 +72,7 @@ foreach ($lib in @("libgcc.a", "libgcc_eh.a")) {
 }
 
 $env:PATH = "$TcBin;" + $env:PATH
-$env:RUSTFLAGS = "-C linker=x86_64-w64-mingw32-gcc -C link-arg=-lunwind"
+$env:RUSTFLAGS = "-C linker=x86_64-w64-mingw32-gcc -C link-arg=-l:libunwind.a"
 
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $RepoRoot
