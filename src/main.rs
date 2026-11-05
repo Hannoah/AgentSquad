@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
     Terminal,
 };
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,40 @@ fn display_order(projects: &[Project]) -> Vec<usize> {
     order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Service));
     order
 }
+/// Validate raw add-form input into a Project without touching disk state.
+fn build_project(
+    existing: &[Project],
+    path_raw: &str,
+    kind: Kind,
+    command_raw: &str,
+) -> Result<Project, String> {
+    let trimmed = path_raw.trim();
+    if trimmed.is_empty() {
+        return Err("Path is empty.".into());
+    }
+    let path = fs::canonicalize(trimmed).map_err(|e| format!("Bad path: {e}"))?;
+    if !path.is_dir() {
+        return Err("Project path must be a directory.".into());
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if name.is_empty() {
+        return Err("Cannot use filesystem root as project.".into());
+    }
+    if existing.iter().any(|p| p.name.eq_ignore_ascii_case(&name)) {
+        return Err(format!("Project name already registered: {name}"));
+    }
+    let parts: Vec<String> = command_raw.split_whitespace().map(str::to_string).collect();
+    let command = if parts.is_empty() { shell() } else { parts };
+    Ok(Project {
+        name,
+        path,
+        command,
+        kind,
+    })
+}
 /// Filtered view: display order narrowed to projects whose name or
 /// command contains the query (case-insensitive). Empty query = all.
 fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
@@ -148,14 +182,70 @@ fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      start / focus session",
         "/          send a line to session",
-        "n/p, arrows  select project",
+        "a          add project",
         "f          filter projects",
         "r          restart session",
         "x          stop session",
+        "n/p, arrows  select project",
+        "1-9        jump to project",
         "Ctrl+G     terminal back to manager",
         "q          quit",
         "?/Esc      close this help",
     ]
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    Manager,
+    Focus,
+    Send,
+    Filter,
+    Add,
+    Help,
+}
+fn mode_of(focus: bool, sending: bool, filtering: bool, adding: bool, show_help: bool) -> Mode {
+    if show_help {
+        Mode::Help
+    } else if adding {
+        Mode::Add
+    } else if filtering {
+        Mode::Filter
+    } else if sending {
+        Mode::Send
+    } else if focus {
+        Mode::Focus
+    } else {
+        Mode::Manager
+    }
+}
+fn mode_chip(m: Mode) -> (&'static str, Style) {
+    match m {
+        Mode::Manager => (" MANAGER ", Style::default().fg(Color::Cyan)),
+        Mode::Focus => (" INPUT ", Style::default().fg(Color::Green)),
+        Mode::Send => (" SEND ", Style::default().fg(Color::Yellow)),
+        Mode::Filter => (" FILTER ", Style::default().fg(Color::Magenta)),
+        Mode::Add => (" ADD ", Style::default().fg(Color::Blue)),
+        Mode::Help => (" HELP ", Style::default().fg(Color::White)),
+    }
+}
+fn mode_hints(m: Mode) -> &'static str {
+    match m {
+        Mode::Manager => "Enter focus | / send | a add | f filter | r restart | n/p select | x stop | q quit | ? help",
+        Mode::Focus => "type to input | Ctrl+G manager",
+        Mode::Send => "Enter sends | Esc cancels",
+        Mode::Filter => "type to narrow | Enter keeps | Esc clears",
+        Mode::Add => "Tab next | Space kind | Enter save | Esc cancel",
+        Mode::Help => "?/Esc closes",
+    }
+}
+/// Digit key to selection index within the visible order.
+fn jump_to(order_len: usize, ch: char) -> Option<usize> {
+    if ch.is_ascii_digit() && ch != '0' {
+        let n = (ch as u8 - b'0') as usize;
+        if n <= order_len.min(9) {
+            return Some(n - 1);
+        }
+    }
+    None
 }
 fn centered_rect(w_pct: u16, h_pct: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let v = Layout::default()
@@ -314,7 +404,7 @@ impl Drop for ScreenGuard {
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
-fn run(c: Config, initial: Option<usize>) -> Result<()> {
+fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     enable_raw_mode()?;
     let _guard = ScreenGuard;
     execute!(io::stdout(), EnterAlternateScreen)?;
@@ -331,7 +421,13 @@ fn run(c: Config, initial: Option<usize>) -> Result<()> {
     let mut show_help = false;
     let mut filtering = false;
     let mut filter_buf = String::new();
-    let mut message = "Enter: focus | /: send | r: restart | f: filter | n/p: select | x: stop | q: quit | ?: help".to_string();
+    let mut adding = false;
+    let mut add_field: usize = 0;
+    let mut add_path = String::new();
+    let mut add_kind = Kind::Agent;
+    let mut add_cmd = String::new();
+    let mut add_err = String::new();
+    let mut message = mode_hints(Mode::Manager).to_string();
     let mut dirty = true;
     let mut first = initial.is_some();
     loop {
@@ -362,30 +458,36 @@ fn run(c: Config, initial: Option<usize>) -> Result<()> {
                     let sel_pi = order.get(selected).copied();
                     let inner_w = (sidebar as usize).saturating_sub(2);
                     let mut items: Vec<ListItem> = Vec::new();
+                    let mut n = 0;
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
                         items.push(ListItem::new(title).style(Style::default().add_modifier(ratatui::style::Modifier::BOLD)));
                         let mut any = false;
                         for &pi in order.iter().filter(|&&i| c.projects[i].kind == k) {
                             any = true;
+                            n += 1;
                             let p = &c.projects[pi];
                             let status = sessions[pi].as_ref().map(|s| s.status.as_str()).unwrap_or("Stopped");
                             let mut second = format!("  {status}");
                             if k == Kind::Service { second.push(' '); second.push_str(&p.command.join(" ")); }
                             let mark = if Some(pi) == sel_pi { ">" } else { " " };
-                            let row_style = if Some(pi) == sel_pi { Style::default().fg(Color::Cyan) } else { Style::default() };
+                            let row_style = if Some(pi) == sel_pi {
+                                Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(ratatui::style::Modifier::BOLD)
+                            } else {
+                                Style::default()
+                            };
                             let status_span_style = if Some(pi) == sel_pi { row_style } else { status_style(status) };
                             items.push(ListItem::new(Line::from(vec![
-                                Span::styled(fit(&format!("{mark} {}", p.name), inner_w), row_style),
+                                Span::styled(fit(&format!("{mark}{n} {}", p.name), inner_w), row_style),
                                 Span::styled(fit(&second, inner_w), status_span_style),
                             ])));
                         }
                         if !any { items.push(ListItem::new("  (none)").style(Style::default().add_modifier(ratatui::style::Modifier::DIM))); }
                     }
-                    f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title("AgentSquad")), panels[0]);
+                    f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("AgentSquad")), panels[0]);
                 }
                 let sel_pi = order.get(selected).copied();
                 let title = sel_pi.and_then(|pi| c.projects.get(pi)).map(|p| format!("{} [{} · {}]", p.name, p.kind.as_str(), if focus { "INPUT" } else { "MANAGER" })).unwrap_or("No projects: squad add <path>".into());
-                let block = Block::default().borders(Borders::ALL).title(title); let inner = block.inner(panels[1]); f.render_widget(block, panels[1]);
+                let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title); let inner = block.inner(panels[1]); f.render_widget(block, panels[1]);
                 if let Some(s) = sel_pi.and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref())) {
                     let screen = s.parser.screen();
                     let mut lines = Vec::new();
@@ -403,19 +505,54 @@ fn run(c: Config, initial: Option<usize>) -> Result<()> {
                     f.render_widget(Paragraph::new(lines), inner);
                     if focus && !screen.hide_cursor() { let (r,c) = screen.cursor_position(); if r < inner.height && c < inner.width { f.set_cursor_position((inner.x+c,inner.y+r)); } }
                 } else { f.render_widget(Paragraph::new("Enter to start. Ctrl+G returns to manager.\nRegister projects with: squad add <path> [-- command args...]"), inner); }
-                if filtering {
-                    f.render_widget(Paragraph::new(format!("Filter: {filter_buf}_ ({} matches, Enter keeps, Esc clears)", order.len())), vertical[1]);
+                let mode = mode_of(focus, sending, filtering, adding, show_help);
+                let (chip_text, chip_style) = mode_chip(mode);
+                let content = if prefix {
+                    "Ctrl+G prefix: g = send Ctrl+G; any other key = manager".to_string()
+                } else if filtering {
+                    format!("Filter: {filter_buf}_ ({} matches, Enter keeps, Esc clears)", order.len())
                 } else if sending {
                     let name = sel_pi.and_then(|pi| c.projects.get(pi)).map(|p| p.name.as_str()).unwrap_or("?");
-                    f.render_widget(Paragraph::new(format!("Send to {name}: {send_buf}_ (Enter sends, Esc cancels)")), vertical[1]);
+                    format!("Send to {name}: {send_buf}_ (Enter sends, Esc cancels)")
+                } else if adding {
+                    mode_hints(Mode::Add).to_string()
                 } else {
-                    f.render_widget(Paragraph::new(if prefix { "Ctrl+G prefix: g = send Ctrl+G; any other key = manager" } else { &message }), vertical[1]);
-                }
+                    message.clone()
+                };
+                f.render_widget(Paragraph::new(Line::from(vec![
+                    Span::styled(chip_text, chip_style.add_modifier(ratatui::style::Modifier::BOLD)),
+                    Span::raw(format!(" {content}")),
+                ])), vertical[1]);
                 if show_help {
                     let popup = centered_rect(60, 50, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
                     let lines: Vec<Line> = help_lines().iter().map(|l| Line::from(l.to_string())).collect();
-                    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Help (?/Esc closes)")), popup);
+                    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).title("Help (?/Esc closes)")), popup);
+                }
+                if adding {
+                    let popup = centered_rect(70, 60, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    let kind_hint = if add_kind == Kind::Agent { "agent (Space toggles)" } else { "service (Space toggles)" };
+                    let fields = [("Path", add_path.as_str()), ("Kind", kind_hint), ("Command", if add_cmd.is_empty() { "(default shell)" } else { add_cmd.as_str() })];
+                    let mut lines = Vec::new();
+                    for (i, (label, val)) in fields.iter().enumerate() {
+                        let active = i == add_field;
+                        let mark = if active { ">" } else { " " };
+                        let cursor = if active { "_" } else { "" };
+                        let label_style = if active {
+                            Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{mark} {label}: "), label_style),
+                            Span::styled(format!("{val}{cursor}"), if active { Style::default().add_modifier(ratatui::style::Modifier::BOLD) } else { Style::default() }),
+                        ]));
+                    }
+                    if !add_err.is_empty() {
+                        lines.push(Line::from(Span::styled(format!("Error: {add_err}"), Style::default().fg(Color::Red))));
+                    }
+                    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).title("Add project (Enter save, Esc cancel)")), popup);
                 }
             })?;
             dirty = false;
@@ -531,6 +668,75 @@ fn run(c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     continue;
                 }
+                if adding {
+                    match k.code {
+                        KeyCode::Esc => adding = false,
+                        KeyCode::Enter => {
+                            match build_project(&c.projects, &add_path, add_kind, &add_cmd) {
+                                Err(e) => add_err = e,
+                                Ok(p) => {
+                                    let name = p.name.clone();
+                                    let kind_label = p.kind.as_str();
+                                    c.projects.push(p);
+                                    sessions.push(None);
+                                    match save(&c) {
+                                        Err(e) => {
+                                            c.projects.pop();
+                                            sessions.pop();
+                                            order = display_order(&c.projects);
+                                            selected = 0;
+                                            add_err = format!("Save failed: {e:#}");
+                                        }
+                                        Ok(()) => {
+                                            order = display_order(&c.projects);
+                                            selected = order
+                                                .iter()
+                                                .position(|&x| x == c.projects.len() - 1)
+                                                .unwrap_or(0);
+                                            adding = false;
+                                            message = format!("Registered {name} ({kind_label})");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Tab => add_field = (add_field + 1) % 3,
+                        KeyCode::Up => add_field = (add_field + 2) % 3,
+                        KeyCode::Down => add_field = (add_field + 1) % 3,
+                        KeyCode::Backspace => {
+                            match add_field {
+                                0 => {
+                                    add_path.pop();
+                                }
+                                2 => {
+                                    add_cmd.pop();
+                                }
+                                _ => {}
+                            }
+                            add_err.clear();
+                        }
+                        KeyCode::Char(' ') if add_field == 1 => {
+                            add_kind = if add_kind == Kind::Agent {
+                                Kind::Service
+                            } else {
+                                Kind::Agent
+                            };
+                        }
+                        KeyCode::Char(ch)
+                            if !k.modifiers.contains(KeyModifiers::CONTROL)
+                                && !k.modifiers.contains(KeyModifiers::ALT) =>
+                        {
+                            match add_field {
+                                0 => add_path.push(ch),
+                                2 => add_cmd.push(ch),
+                                _ => {}
+                            }
+                            add_err.clear();
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 if show_help {
                     match k.code {
                         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => show_help = false,
@@ -563,6 +769,20 @@ fn run(c: Config, initial: Option<usize>) -> Result<()> {
                         send_buf.clear();
                     }
                     KeyCode::Char('?') => show_help = true,
+                    KeyCode::Char('a') => {
+                        adding = true;
+                        show_help = false;
+                        add_field = 0;
+                        add_path.clear();
+                        add_kind = Kind::Agent;
+                        add_cmd.clear();
+                        add_err.clear();
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        if let Some(i) = jump_to(order.len(), c) {
+                            selected = i;
+                        }
+                    }
                     KeyCode::Char('f') if !order.is_empty() => {
                         filtering = true;
                         filter_buf.clear();
@@ -619,7 +839,7 @@ fn main() -> Result<()> {
         args.first().map(String::as_str),
         Some("--help" | "-h" | "help")
     ) {
-        println!("AgentSquad v0.1\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, / sends a line, f filters, r restarts, x stops, q quits, ? help.\nTerminal: Ctrl+G returns to manager; then g sends Ctrl+G.\nQuitting stops managed child processes; no detached daemon.");
+        println!("AgentSquad v0.1\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, x stops, 1-9 jumps, q quits, ? help.\nTerminal: Ctrl+G returns to manager; then g sends Ctrl+G.\nQuitting stops managed child processes; no detached daemon.");
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--version") {
@@ -779,10 +999,61 @@ mod tests {
     fn help_covers_keys() {
         let h = help_lines().join("\n");
         for k in [
-            "Enter", "/", "n/p", "filter", "restart", "x", "q", "?", "Ctrl+G",
+            "Enter", "/", "n/p", "filter", "restart", "add", "1-9", "x", "q", "?", "Ctrl+G",
         ] {
             assert!(h.contains(k), "help missing {k}");
         }
+    }
+    #[test]
+    fn mode_chip_and_hints() {
+        assert_eq!(mode_of(false, false, false, false, false), Mode::Manager);
+        assert_eq!(mode_of(true, false, false, false, false), Mode::Focus);
+        assert_eq!(mode_of(false, true, false, false, false), Mode::Send);
+        assert_eq!(mode_of(false, false, true, false, false), Mode::Filter);
+        assert_eq!(mode_of(false, false, false, true, false), Mode::Add);
+        assert_eq!(mode_of(false, false, false, false, true), Mode::Help);
+        assert_eq!(mode_of(true, true, true, true, true), Mode::Help);
+        assert!(mode_hints(Mode::Manager).contains("Enter"));
+        assert!(mode_hints(Mode::Send).contains("Esc"));
+        let chips: Vec<&str> = [
+            Mode::Manager,
+            Mode::Focus,
+            Mode::Send,
+            Mode::Filter,
+            Mode::Add,
+            Mode::Help,
+        ]
+        .iter()
+        .map(|m| mode_chip(*m).0.trim())
+        .collect();
+        assert_eq!(
+            chips,
+            vec!["MANAGER", "INPUT", "SEND", "FILTER", "ADD", "HELP"]
+        );
+    }
+    #[test]
+    fn jump_keys() {
+        assert_eq!(jump_to(5, '1'), Some(0));
+        assert_eq!(jump_to(5, '5'), Some(4));
+        assert_eq!(jump_to(5, '6'), None);
+        assert_eq!(jump_to(0, '1'), None);
+        assert_eq!(jump_to(12, '9'), Some(8));
+        assert_eq!(jump_to(12, '0'), None);
+        assert_eq!(jump_to(3, 'x'), None);
+    }
+    #[test]
+    fn build_project_validates() {
+        let dir = env::temp_dir();
+        let dir_str = dir.to_str().unwrap();
+        let p = build_project(&[], dir_str, Kind::Service, "node server.js").unwrap();
+        assert_eq!(p.kind, Kind::Service);
+        assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
+        let existing = vec![p];
+        assert!(build_project(&existing, dir_str, Kind::Agent, "").is_err());
+        assert!(build_project(&[], "", Kind::Agent, "").is_err());
+        assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, "").is_err());
+        let shell_p = build_project(&[], dir_str, Kind::Agent, "   ").unwrap();
+        assert_eq!(shell_p.command, shell());
     }
     #[test]
     fn filter_matches_name_and_command() {
