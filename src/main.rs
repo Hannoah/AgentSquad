@@ -22,7 +22,7 @@ use std::{
     str::FromStr,
     sync::mpsc::{self, Receiver},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
@@ -246,6 +246,16 @@ fn status_glyph(status: &str, tick: u64) -> char {
         '●'
     }
 }
+/// Short uptime label for a running session: "7s", "12m", "3h".
+fn uptime_label(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
 fn status_style(status: &str) -> Style {
     if status == "Running" {
         Style::default().fg(Color::Green)
@@ -396,6 +406,7 @@ struct Session {
     parser: vt100::Parser,
     status: String,
     scroll: usize,
+    started: Option<Instant>,
 }
 impl Session {
     fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
@@ -438,6 +449,7 @@ impl Session {
             ),
             status: "Running".into(),
             scroll: 0,
+            started: Some(Instant::now()),
         })
     }
     fn update(&mut self) -> bool {
@@ -669,6 +681,14 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .map(|s| s.status.as_str())
                                 .unwrap_or("Stopped");
                             let mut second = format!("  {status}");
+                            if status == "Running" {
+                                if let Some(s) = sessions[pi].as_ref() {
+                                    if let Some(started) = s.started {
+                                        second.push(' ');
+                                        second.push_str(&uptime_label(started.elapsed().as_secs()));
+                                    }
+                                }
+                            }
                             if k == Kind::Service {
                                 second.push(' ');
                                 second.push_str(&p.command.join(" "));
@@ -1784,5 +1804,16 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn uptime_labels_scale() {
+        assert_eq!(uptime_label(0), "0s");
+        assert_eq!(uptime_label(7), "7s");
+        assert_eq!(uptime_label(59), "59s");
+        assert_eq!(uptime_label(60), "1m");
+        assert_eq!(uptime_label(125), "2m");
+        assert_eq!(uptime_label(3599), "59m");
+        assert_eq!(uptime_label(3600), "1h");
+        assert_eq!(uptime_label(9000), "2h");
     }
 }
