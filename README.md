@@ -81,10 +81,16 @@ case-insensitively by `remove` and `start`.
 | `f` | Filter the project list by name or command (`Enter` keeps, `Esc` clears) |
 | `r` | Restart the selected session |
 | `n` / `p`, `↑` / `↓` | Move selection |
-| `x` | Stop the selected session (process is killed, files untouched) |
+| `1`–`9` | Jump to a visible row |
+| `a` | Add a project without leaving the manager |
+| `x` | Stop the selected session (asks to confirm; process is killed, files untouched) |
+| `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
 | `Ctrl+G` | Back to the manager (from inside a terminal) |
 | `?` | Toggle the help popup |
 | `q` | Quit (all managed child processes are stopped; nothing runs detached) |
+
+Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
+for cursor-aware editing.
 
 Inside a terminal, `Ctrl+G` returns to the manager; pressing `g` right after
 sends a literal `Ctrl+G` to the session instead.
