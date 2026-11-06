@@ -28,3 +28,26 @@
 
 ## [2026-11-06] 배포 | v0.5.5
 Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 동일 경로 내 복수 Service 등록 허용(자동 disambiguation `name-2`). 마우스 제어 전면 확장(사이드바 클릭 시 선택/재클릭 시 즉시 시작 및 포커스, 우클릭 시 중지/시작 토글, 터미널 클릭 시 시작 및 포커스, 확인 모달 마우스 클릭 확인/취소, 상태바 칩 클릭으로 도움말 토글). 커서 좌우 깜빡임/점프 버그 수정(BufWriter, Hide/Show, 200ms redraw, Run-length Span 병합). 사이드바에서 `Running` 텍스트를 제거하고 스피너 기호로 압축하여 업타임/CPU/RAM/명령어 등 핵심 디테일 정보 노출 공간 확보. 프로세스 트리 종료 비동기화(`thread::spawn`), 저장된 `\\?\` 경로 자동 정규화, 세련된 액센트 바(`▎`), Empty State 카드 렌더링, 모달 Rounded 스타일 통일. 테스트 82개 통과. → [releases.md](releases.md)
+
+## [2026-11-07] 기능 | Agent 지능형 상태 감지 및 UI/UX 마스터플랜 고도화
+사용자 피드백 기반 UI/UX 전면 개편:
+1. **Agent 지능형 상태 감지 및 직관적 기호 시각화**:
+   - 단순 프로세스 `Running`을 넘어 실제 코딩 에이전트의 작업 국면을 감지하는 지능형 상태 머신(`AgentPhase`: `Working`, `NeedsInput`, `Done`, `Idle`) 도입.
+   - 단어 설명(`Done` 등)을 배제하고 CLI 표준 기호만으로 표시: `?`(노랑 Bold, 승인 대기), `⠋`(Cyan 점스피너, 작업 진행 중), `✔`(초록 Bold, 작업 완료), `○`(회색, 대기).
+   - 화면 하단 승인 프롬프트([y/n], approve, proceed 등) 감지로 사용자 승인 대기 즉시 노출.
+2. **Service 타이틀 개선**:
+   - Service의 터미널 메인 타이틀을 폴더명이 아닌 실제 실행 중인 서비스 명령어로 표시(`pane_title_name`).
+   - v0.5.4 이하에서 등록된 서비스 폴더명 자동 마이그레이션(`load_from`).
+3. **커서 좌우 점프/깜빡임 100% 차단**:
+   - 터미널 diff redraw 직전 `\x1b[?2026h`(Synchronized Update Begin) 및 `cursor::Hide` 큐잉, 드로우 직후 `\x1b[?2026l` 전송으로 ConPTY 중간 상태 노출 완전 차단.
+4. **터미널 스크롤바 인디케이터**:
+   - 스크롤백 탐색 시 패널 우측에 세련된 스크롤바(`Scrollbar`) 트랙(`░`)과 썸(`█`) 렌더링.
+5. **종료 배너 인터랙션 개선**:
+   - 세션 종료 배너 안내를 `Enter/r restart · Esc/s dismiss`로 명확화하고 `Esc` 및 `s`로 배너 숨김 지원(`dismissed_exit`).
+6. **Caps Lock 사고 방지 (`confirm_start_all`)**:
+   - 대문자 `S` 입력 시 모든 정지 세션을 즉각 실행하지 않고 확인 모달을 띄워 오입력 방지.
+7. **모달 백드롭 딤(Backdrop Dim) 및 Empty State 센터링**:
+   - 모달 팝업 활성화 시 배경 화면 전체에 `DIM` 스타일을 적용하여 팝업 시인성 및 집중도 극대화.
+   - 프로젝트 미등록 시 안내 카드를 터미널 중앙에 보기 좋게 정렬.
+8. **단위 테스트 및 품질 검증**:
+   - 89개 단위 테스트(87 통과, 2 네트워크 무시) 성공, `cargo clippy --all-targets -- -D warnings` 및 `cargo fmt --check` 무결점 검증 통과. release 바이너리 빌드 및 `%LOCALAPPDATA%\AgentSquad\bin\squad.exe` 배포 완료.

@@ -13,7 +13,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Terminal,
 };
 use serde::{Deserialize, Serialize};
@@ -86,8 +89,34 @@ fn load_from(p: &Path) -> Result<Config> {
     let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
     let mut config: Config =
         toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))?;
+    let mut seen_names: Vec<String> = Vec::new();
     for proj in &mut config.projects {
         proj.path = plain_path(proj.path.clone());
+        // Legacy migration: in <=0.5.4, services defaulted to directory name.
+        // If a service's name matches its directory name, migrate it to the
+        // served program name so it reads as a service rather than a folder.
+        if proj.kind == Kind::Service {
+            let dir_name = proj
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if !dir_name.is_empty() && proj.name.eq_ignore_ascii_case(&dir_name) {
+                if let Some(prog) = program_name(&proj.command) {
+                    let mut candidate = prog.clone();
+                    let mut i = 2;
+                    while seen_names
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&candidate))
+                    {
+                        candidate = format!("{prog}-{i}");
+                        i += 1;
+                    }
+                    proj.name = candidate;
+                }
+            }
+        }
+        seen_names.push(proj.name.clone());
     }
     Ok(config)
 }
@@ -384,7 +413,7 @@ impl LineInput {
         (before, at, after)
     }
 }
-const SPINNER: [char; 4] = ['◐', '◑', '◒', '◓'];
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 fn spinner_frame(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
 }
@@ -504,6 +533,163 @@ fn status_style(status: &str) -> Style {
     } else {
         Style::default().fg(Color::DarkGray)
     }
+}
+/// Main title label for the terminal pane.
+///
+/// For services, show the command being served (e.g. `npm run dev` or `cmd.exe`)
+/// so running servers read by their role rather than a generic folder name.
+/// Agents continue to show their registered project name.
+fn pane_title_name(p: &Project) -> String {
+    if p.kind == Kind::Service && !p.command.is_empty() {
+        p.command.join(" ")
+    } else {
+        p.name.clone()
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AgentPhase {
+    Working,
+    NeedsInput,
+    Done,
+    Idle,
+}
+
+impl AgentPhase {
+    fn icon(self, tick: u64) -> (String, Style) {
+        match self {
+            AgentPhase::Working => (
+                format!("{}", spinner_frame(tick)),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            AgentPhase::NeedsInput => (
+                "?".to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            AgentPhase::Done => (
+                "✔".to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            AgentPhase::Idle => ("○".to_string(), Style::default().fg(Color::DarkGray)),
+        }
+    }
+}
+
+fn is_needs_input(screen_text: &str) -> bool {
+    let recent_lines: Vec<&str> = screen_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if recent_lines.is_empty() {
+        return false;
+    }
+    for &line in recent_lines.iter().rev().take(4) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("[y/n]")
+            || lower.contains("(y/n)")
+            || lower.contains("[y/n/a]")
+            || lower.contains("[y/n/d]")
+            || lower.contains("(y/n/a)")
+            || lower.contains("[yes/no]")
+            || lower.contains("(yes/no)")
+            || lower.contains("(y)es / (n)o")
+        {
+            return true;
+        }
+        if lower.contains("do you want to")
+            || lower.contains("are you sure")
+            || lower.contains("allow tool")
+            || lower.contains("allow execution")
+            || lower.contains("proceed?")
+            || lower.contains("approve?")
+            || lower.contains("confirm?")
+            || lower.contains("permission to")
+            || lower.contains("press enter to continue")
+            || lower.contains("press enter to proceed")
+            || lower.contains("press any key")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_working_text(screen_text: &str) -> bool {
+    let recent_lines: Vec<&str> = screen_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    for &line in recent_lines.iter().rev().take(3) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("thinking")
+            || lower.contains("running tool")
+            || lower.contains("executing")
+            || lower.contains("searching")
+            || lower.contains("generating")
+            || lower.contains("compiling")
+            || lower.contains("building")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn pane_status_display(
+    status: &str,
+    uptime_secs: Option<u64>,
+    tick: u64,
+    kind: Kind,
+    phase: Option<AgentPhase>,
+) -> (String, Style) {
+    if status == "Running" && kind == Kind::Agent {
+        if let Some(phase) = phase {
+            let uptime_str = uptime_secs
+                .map(|s| format!(" {}", uptime_label(s)))
+                .unwrap_or_default();
+            return match phase {
+                AgentPhase::Working => (
+                    format!("{}{uptime_str}", spinner_frame(tick)),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                AgentPhase::NeedsInput => (
+                    format!("?{uptime_str}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                AgentPhase::Done => (
+                    format!("✔{uptime_str}"),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                AgentPhase::Idle => (
+                    format!("○{uptime_str}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            };
+        }
+    }
+    let text = if status == "Running" {
+        let uptime_str = uptime_secs
+            .map(|s| format!(" {}", uptime_label(s)))
+            .unwrap_or_default();
+        format!("{}{uptime_str}", status_glyph(status, tick))
+    } else {
+        pane_status_text(status, uptime_secs, tick)
+    };
+    let style = status_style(status).add_modifier(ratatui::style::Modifier::BOLD);
+    (text, style)
 }
 /// Status segment for the terminal pane title: "◐ Running 7s".
 /// Reuses the sidebar glyph and color language so both panels read as one.
@@ -851,6 +1037,33 @@ fn confirm_remove_lines(name: &str) -> Vec<Line<'static>> {
         Line::from(hint_spans(&[("y", "removes"), ("n / Esc", "cancels")])),
     ]
 }
+fn confirm_start_all_prompt(n: usize) -> String {
+    format!("Start all {}?", plural_sessions(n))
+}
+fn confirm_start_all_lines(n: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            confirm_start_all_prompt(n),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(hint_spans(&[
+            ("y / Enter", "starts"),
+            ("n / Esc", "cancels"),
+        ])),
+    ]
+}
+fn dim_area(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
+            }
+        }
+    }
+}
 /// Sessions that quitting would discard (running or finished output).
 fn live_session_count<T>(sessions: &[Option<T>]) -> usize {
     sessions.iter().flatten().count()
@@ -1111,6 +1324,10 @@ struct Session {
     usage: Option<Usage>,
     cpu_prev: u64,
     sampled: Option<Instant>,
+    last_output: Option<Instant>,
+    last_input: Option<Instant>,
+    had_activity: bool,
+    dismissed_exit: bool,
 }
 impl Session {
     fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
@@ -1160,6 +1377,10 @@ impl Session {
             usage: None,
             cpu_prev: 0,
             sampled: None,
+            last_output: None,
+            last_input: None,
+            had_activity: false,
+            dismissed_exit: false,
         })
     }
     fn update(&mut self) -> bool {
@@ -1168,6 +1389,8 @@ impl Session {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     self.parser.process(&bytes);
+                    self.last_output = Some(Instant::now());
+                    self.had_activity = true;
                     changed = true;
                 }
                 Err(_) => break,
@@ -1199,7 +1422,36 @@ impl Session {
     fn input(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes)?;
         self.writer.flush()?;
+        self.last_input = Some(Instant::now());
+        self.had_activity = true;
         Ok(())
+    }
+    fn phase(&self) -> AgentPhase {
+        if self.status != "Running" {
+            return AgentPhase::Idle;
+        }
+        let screen_text = self.parser.screen().contents();
+        let user_just_typed = self
+            .last_input
+            .is_some_and(|t| t.elapsed().as_millis() < 800);
+        if !user_just_typed && is_needs_input(&screen_text) {
+            return AgentPhase::NeedsInput;
+        }
+        let cpu_active = self.usage.is_some_and(|u| u.cpu > 5.0);
+        let recent_output = self
+            .last_output
+            .is_some_and(|t| t.elapsed().as_millis() < 2500);
+        let recent_input = self
+            .last_input
+            .is_some_and(|t| t.elapsed().as_millis() < 2500);
+        let explicit_working = is_working_text(&screen_text);
+        if explicit_working || recent_output || recent_input || cpu_active {
+            return AgentPhase::Working;
+        }
+        if self.had_activity && self.last_input.is_some() {
+            return AgentPhase::Done;
+        }
+        AgentPhase::Idle
     }
     fn scroll_by(&mut self, delta_rows: isize) {
         let max = self.parser.screen().scrollback_len() as isize;
@@ -1888,6 +2140,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut confirm_stop: Option<usize> = None;
     let mut confirm_remove: Option<usize> = None;
     let mut confirm_quit = false;
+    let mut confirm_start_all = false;
     let mut message = (mode_hints(Mode::Manager).to_string(), Notice::Info);
     let mut dirty = true;
     let mut first = initial.is_some();
@@ -2005,6 +2258,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             || adding
             || show_help
             || confirm_quit
+            || confirm_start_all
             || confirm_stop.is_some()
             || confirm_remove.is_some());
         if keyboard_free && !updating && !confirm_update && update_offer.is_some() {
@@ -2031,6 +2285,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             }
         }
         if dirty {
+            crossterm::queue!(io::stdout(), crossterm::cursor::Hide)?;
+            print!("\x1b[?2026h");
+            io::stdout().flush()?;
             terminal.draw(|f| {
                 let vertical = Layout::default()
                     .direction(Direction::Vertical)
@@ -2094,8 +2351,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             } else {
                                 Style::default().add_modifier(ratatui::style::Modifier::DIM)
                             };
+                            let agent_phase = if p.kind == Kind::Agent && status == "Running" {
+                                sessions[pi].as_ref().map(|s| s.phase())
+                            } else {
+                                None
+                            };
                             let status_span_style = if Some(pi) == sel_pi {
                                 row_style
+                            } else if let Some(ph) = agent_phase {
+                                ph.icon(tick).1
                             } else {
                                 status_style(status)
                             };
@@ -2105,7 +2369,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Style::default().fg(Color::DarkGray)
                             };
                             let prefix = format!("{mark}{n} ");
-                            let status_full = if status == "Running" {
+                            let status_full = if let Some(ph) = agent_phase {
+                                ph.icon(tick).0
+                            } else if status == "Running" {
                                 format!("{}", status_glyph(status, tick))
                             } else {
                                 format!("{} {status}", status_glyph(status, tick))
@@ -2189,9 +2455,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         } else {
                             " · MANAGER"
                         };
+                        let sel_phase = sel_pi
+                            .and_then(|pi| sessions.get(pi))
+                            .and_then(|o| o.as_ref())
+                            .map(|s| s.phase());
+                        let (disp_status, disp_style) =
+                            pane_status_display(sel_status, sel_uptime, tick, p.kind, sel_phase);
                         Line::from(vec![
                             Span::styled(
-                                p.name.clone(),
+                                pane_title_name(p),
                                 Style::default().add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                             Span::raw(" ["),
@@ -2202,11 +2474,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     .add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                             Span::raw(" · "),
-                            Span::styled(
-                                pane_status_text(sel_status, sel_uptime, tick),
-                                status_style(sel_status)
-                                    .add_modifier(ratatui::style::Modifier::BOLD),
-                            ),
+                            Span::styled(disp_status, disp_style),
                             Span::styled(
                                 focus_label,
                                 if focus {
@@ -2286,9 +2554,20 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         lines.push(Line::from(spans));
                     }
                     f.render_widget(Paragraph::new(lines), inner);
+                    let scrollback_len = screen.scrollback_len();
+                    if scrollback_len > 0 {
+                        let mut scrollbar_state = ScrollbarState::new(scrollback_len)
+                            .position(scrollback_len.saturating_sub(s.scroll));
+                        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                            .begin_symbol(None)
+                            .end_symbol(None)
+                            .track_symbol(Some("░"))
+                            .thumb_symbol("█");
+                        f.render_stateful_widget(scrollbar, panels[1], &mut scrollbar_state);
+                    }
                     // A finished session leaves its last output on screen; say so
                     // and say how to bring it back, right where the eyes are.
-                    if s.status != "Running" && inner.height > 0 {
+                    if s.status != "Running" && !s.dismissed_exit && inner.height > 0 {
                         let bg = if needs_attention(&s.status) {
                             Color::Red
                         } else {
@@ -2304,7 +2583,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                         .add_modifier(ratatui::style::Modifier::BOLD),
                                 ),
                                 Span::styled(
-                                    " Enter / r restarts ",
+                                    " Enter/r restart · Esc/s dismiss ",
                                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
                                 ),
                             ]))
@@ -2444,6 +2723,17 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     Paragraph::new(Line::from(right)).alignment(Alignment::Right),
                     status_row[1],
                 );
+                let has_modal = show_help
+                    || confirm_stop.is_some()
+                    || confirm_remove.is_some()
+                    || confirm_update
+                    || confirm_quit
+                    || confirm_start_all
+                    || adding;
+                if has_modal {
+                    let full_area = f.area();
+                    dim_area(f.buffer_mut(), full_area);
+                }
                 if show_help {
                     // Fixed-size so every row fits on short terminals (a 50%
                     // popup clipped the last help rows at 24 lines).
@@ -2554,6 +2844,33 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         popup,
                     );
                 }
+                if confirm_start_all {
+                    let stopped_count = order
+                        .iter()
+                        .filter(|&&pi| {
+                            sessions
+                                .get(pi)
+                                .and_then(|o| o.as_ref())
+                                .is_none_or(|s| s.status != "Running")
+                        })
+                        .count();
+                    let popup = centered_rect(60, 30, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(confirm_start_all_lines(stopped_count)).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Rounded)
+                                .title(Line::from(Span::styled(
+                                    "Start all sessions",
+                                    Style::default()
+                                        .fg(Color::Cyan)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
+                        ),
+                        popup,
+                    );
+                }
                 if adding {
                     let popup = centered_rect(70, 40, f.area());
                     let modal_w = (popup.width as usize).saturating_sub(2);
@@ -2646,6 +2963,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     );
                 }
             })?;
+            print!("\x1b[?2026l");
+            io::stdout().flush()?;
             dirty = false;
         }
         // Short poll so child echo appears within ~10 ms of a keypress.
@@ -2729,6 +3048,41 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         } else {
                             confirm_quit = false;
                         }
+                        dirty = true;
+                    } else if confirm_start_all {
+                        let popup = centered_rect(60, 30, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if popup.contains(clicked) {
+                            let mut started_n = 0;
+                            let mut failed: Option<String> = None;
+                            for &pi in order.iter() {
+                                let running = sessions
+                                    .get(pi)
+                                    .and_then(|o| o.as_ref())
+                                    .map(|s| s.status == "Running")
+                                    .unwrap_or(false);
+                                if running {
+                                    continue;
+                                }
+                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                    None => started_n += 1,
+                                    Some(e) => failed = Some(e),
+                                }
+                            }
+                            message = match failed {
+                                Some(e) => {
+                                    (format!("Started {started_n}; error: {e}"), Notice::Error)
+                                }
+                                None if started_n == 0 => {
+                                    ("All sessions already running.".to_string(), Notice::Info)
+                                }
+                                None => (
+                                    format!("Started {}.", plural_sessions(started_n)),
+                                    Notice::Info,
+                                ),
+                            };
+                        }
+                        confirm_start_all = false;
                         dirty = true;
                     } else if confirm_update {
                         let popup = centered_rect(60, 40, area.into());
@@ -3126,6 +3480,47 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     continue;
                 }
+                if confirm_start_all {
+                    match confirm_key(k.code) {
+                        Some(true) => {
+                            let mut started_n = 0;
+                            let mut failed: Option<String> = None;
+                            for &pi in order.iter() {
+                                let running = sessions
+                                    .get(pi)
+                                    .and_then(|o| o.as_ref())
+                                    .map(|s| s.status == "Running")
+                                    .unwrap_or(false);
+                                if running {
+                                    continue;
+                                }
+                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                    None => started_n += 1,
+                                    Some(e) => failed = Some(e),
+                                }
+                            }
+                            message = match failed {
+                                Some(e) => {
+                                    (format!("Started {started_n}; error: {e}"), Notice::Error)
+                                }
+                                None if started_n == 0 => {
+                                    ("All sessions already running.".to_string(), Notice::Info)
+                                }
+                                None => (
+                                    format!("Started {}.", plural_sessions(started_n)),
+                                    Notice::Info,
+                                ),
+                            };
+                            confirm_start_all = false;
+                        }
+                        Some(false) => {
+                            confirm_start_all = false;
+                            message = ("Cancelled.".to_string(), Notice::Info);
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
                 if confirm_stop.is_some() {
                     match confirm_key(k.code) {
                         Some(true) => {
@@ -3233,11 +3628,20 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     KeyCode::Char('/') if !c.projects.is_empty() => {
                         filtering = true;
                     }
-                    // Esc in the manager drops a kept filter.
+                    // Esc in the manager drops a kept filter, or dismisses exit banner.
                     KeyCode::Esc if !filter_buf.is_empty() => {
                         filter_buf.clear();
                         order = display_order(&c.projects);
                         selected = 0;
+                    }
+                    KeyCode::Esc => {
+                        if let Some(&pi) = order.get(selected) {
+                            if let Some(Some(s)) = sessions.get_mut(pi) {
+                                if s.status != "Running" {
+                                    s.dismissed_exit = true;
+                                }
+                            }
+                        }
                     }
                     KeyCode::Home if !order.is_empty() => selected = 0,
                     KeyCode::End if !order.is_empty() => selected = order.len() - 1,
@@ -3270,36 +3674,33 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                     }
                     KeyCode::Char('S') if !order.is_empty() => {
-                        let mut started_n = 0;
-                        let mut failed: Option<String> = None;
-                        for &pi in order.iter() {
-                            let running = sessions
-                                .get(pi)
-                                .and_then(|o| o.as_ref())
-                                .map(|s| s.status == "Running")
-                                .unwrap_or(false);
-                            if running {
-                                continue;
-                            }
-                            match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                None => started_n += 1,
-                                Some(e) => failed = Some(e),
-                            }
+                        let stopped_count = order
+                            .iter()
+                            .filter(|&&pi| {
+                                sessions
+                                    .get(pi)
+                                    .and_then(|o| o.as_ref())
+                                    .is_none_or(|s| s.status != "Running")
+                            })
+                            .count();
+                        if stopped_count == 0 {
+                            message = ("All sessions already running.".to_string(), Notice::Info);
+                        } else {
+                            confirm_start_all = true;
                         }
-                        message = match failed {
-                            Some(e) => (format!("Started {started_n}; error: {e}"), Notice::Error),
-                            None if started_n == 0 => {
-                                ("All sessions already running.".to_string(), Notice::Info)
-                            }
-                            None => (
-                                format!("Started {}.", plural_sessions(started_n)),
-                                Notice::Info,
-                            ),
-                        };
                     }
                     // `x` stays bound to stop for muscle memory; `s` is the documented key.
                     KeyCode::Char('s') | KeyCode::Char('x') => {
                         confirm_stop = stop_target(&order, selected, &sessions);
+                        if confirm_stop.is_none() {
+                            if let Some(&pi) = order.get(selected) {
+                                if let Some(Some(s)) = sessions.get_mut(pi) {
+                                    if s.status != "Running" {
+                                        s.dismissed_exit = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                     KeyCode::Delete | KeyCode::Char('d') => {
                         confirm_remove = order.get(selected).copied();
@@ -3569,13 +3970,107 @@ mod tests {
     fn spinner_cycles() {
         assert_eq!(
             (0..8).map(spinner_frame).collect::<Vec<char>>(),
-            vec!['◐', '◑', '◒', '◓', '◐', '◑', '◒', '◓']
+            vec!['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧']
         );
-        assert_eq!(status_glyph("Running", 0), '◐');
+        assert_eq!(status_glyph("Running", 0), '⠋');
         assert_eq!(status_glyph("Running", 99), spinner_frame(99));
         assert_eq!(status_glyph("Stopped", 99), '●');
         assert_eq!(status_glyph("Exited (0)", 99), '●');
         assert_eq!(status_glyph("Error: boom", 99), '●');
+    }
+    #[test]
+    fn agent_phase_badge_and_pane_display() {
+        assert_eq!(AgentPhase::Working.icon(0).0, "⠋");
+        assert_eq!(AgentPhase::NeedsInput.icon(0).0, "?");
+        assert_eq!(AgentPhase::Done.icon(0).0, "✔");
+        assert_eq!(AgentPhase::Idle.icon(0).0, "○");
+
+        let (text, _) = pane_status_display(
+            "Running",
+            Some(12),
+            0,
+            Kind::Agent,
+            Some(AgentPhase::Working),
+        );
+        assert_eq!(text, "⠋ 12s");
+
+        let (text, _) = pane_status_display(
+            "Running",
+            Some(5),
+            0,
+            Kind::Agent,
+            Some(AgentPhase::NeedsInput),
+        );
+        assert_eq!(text, "? 5s");
+
+        let (text, _) =
+            pane_status_display("Running", Some(42), 0, Kind::Agent, Some(AgentPhase::Done));
+        assert_eq!(text, "✔ 42s");
+
+        let (text, _) =
+            pane_status_display("Running", Some(0), 0, Kind::Agent, Some(AgentPhase::Idle));
+        assert_eq!(text, "○ 0s");
+
+        let (text, _) = pane_status_display("Running", Some(10), 0, Kind::Service, None);
+        assert_eq!(text, "⠋ 10s");
+
+        let (text, _) = pane_status_display("Stopped", None, 0, Kind::Agent, None);
+        assert_eq!(text, "● Stopped");
+    }
+    #[test]
+    fn pane_title_name_prefers_service_command() {
+        let agent = Project {
+            name: "my-agent".into(),
+            path: PathBuf::from("."),
+            command: vec!["cargo".into(), "run".into()],
+            kind: Kind::Agent,
+        };
+        assert_eq!(pane_title_name(&agent), "my-agent");
+
+        let service = Project {
+            name: "backend".into(),
+            path: PathBuf::from("."),
+            command: vec!["npm".into(), "run".into(), "dev".into()],
+            kind: Kind::Service,
+        };
+        assert_eq!(pane_title_name(&service), "npm run dev");
+    }
+    #[test]
+    fn agent_needs_input_and_working_detection() {
+        assert!(is_needs_input("Would you like to execute this tool? [y/n]"));
+        assert!(is_needs_input("Permission to read /etc/hosts? (yes/no)"));
+        assert!(is_needs_input("Allow tool execution?"));
+        assert!(!is_needs_input("All tests passed with 0 errors."));
+
+        assert!(is_working_text("Thinking about next refactor step..."));
+        assert!(is_working_text("Executing command in background"));
+        assert!(is_working_text("Searching codebase for usages"));
+        assert!(!is_working_text("Finished compilation successfully."));
+    }
+    #[test]
+    fn confirm_start_all_modal_formatting() {
+        assert_eq!(confirm_start_all_prompt(3), "Start all 3 sessions?");
+        let lines = confirm_start_all_lines(3);
+        assert!(lines[0]
+            .spans
+            .iter()
+            .any(|s| s.content.contains("Start all 3 sessions?")));
+        assert!(lines[2].spans.iter().any(|s| s.content.contains("starts")));
+    }
+    #[test]
+    fn modal_backdrop_dim() {
+        use ratatui::buffer::Buffer;
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 10, 5));
+        buf.set_string(0, 0, "hello", Style::default());
+        assert!(!buf[(0, 0)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM));
+        dim_area(&mut buf, ratatui::layout::Rect::new(0, 0, 10, 5));
+        assert!(buf[(0, 0)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM));
     }
     #[test]
     fn scrollback_view() {
