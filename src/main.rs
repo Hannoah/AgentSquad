@@ -2850,6 +2850,26 @@ mod tests {
         assert!(quit_text.contains('y') && quit_text.contains("quits"));
     }
     #[test]
+    fn rendered_lines_compose_in_buffer() {
+        use ratatui::{backend::TestBackend, widgets::Paragraph};
+        fn row(line: Line<'static>, width: u16) -> String {
+            let mut term = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            term.draw(|f| {
+                f.render_widget(Paragraph::new(line), f.area());
+            })
+            .unwrap();
+            let buf = term.backend().buffer();
+            (0..width).map(|x| buf[(x, 0)].symbol()).collect()
+        }
+        let header = row(group_header("Agents", Kind::Agent, 2, 3), 30);
+        assert!(header.starts_with("Agents (2/3)"), "got {header:?}");
+        let stop = confirm_stop_lines("web").into_iter().next().unwrap();
+        let first = row(stop, 40);
+        assert!(first.contains("Stop session 'web'?"), "got {first:?}");
+        let narrow = row(Line::from(fitted_hints(Mode::Manager, 38)), 40);
+        assert!(narrow.contains("? help"), "got {narrow:?}");
+    }
+    #[test]
     fn notice_styles_rank_severity() {
         assert_eq!(notice_style(Notice::Info), Style::default());
         assert_eq!(
