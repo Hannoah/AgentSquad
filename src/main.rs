@@ -787,6 +787,17 @@ Quitting stops managed child processes; no detached daemon.",
 }
 /// One-time notice when a session leaves Running. Returns the message
 /// the first time only; `announced` flips so repeats stay silent.
+/// Severity of a session-exit notice: errors alarm, crashes warn,
+/// clean exits stay quiet like any other confirmation.
+fn exit_notice_kind(status: &str) -> Notice {
+    if status.starts_with("Error") {
+        Notice::Error
+    } else if needs_attention(status) {
+        Notice::Warn
+    } else {
+        Notice::Info
+    }
+}
 fn exit_notice(name: &str, was_running: bool, now: &str, announced: &mut bool) -> Option<String> {
     if was_running && now != "Running" && !*announced {
         *announced = true;
@@ -1247,7 +1258,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     &s.status,
                     &mut s.announced_exit,
                 ) {
-                    message = (note, Notice::Warn);
+                    message = (note, exit_notice_kind(&s.status));
                 }
             }
         }
@@ -2876,6 +2887,14 @@ mod tests {
             input_window("abcdef", 'g', "hij", 5),
             ("cdef".into(), 'g', "".into())
         );
+    }
+    #[test]
+    fn exit_notice_kind_ranks_outcomes() {
+        assert_eq!(exit_notice_kind("Error: boom"), Notice::Error);
+        assert_eq!(exit_notice_kind("Exited (1)"), Notice::Warn);
+        assert_eq!(exit_notice_kind("Exited (137)"), Notice::Warn);
+        assert_eq!(exit_notice_kind("Exited (0)"), Notice::Info);
+        assert_eq!(exit_notice_kind("Stopped"), Notice::Info);
     }
     #[test]
     fn plural_sessions_counts_nouns() {
