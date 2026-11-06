@@ -400,14 +400,16 @@ fn mode_of(focus: bool, sending: bool, filtering: bool, adding: bool, show_help:
     }
 }
 fn mode_chip(m: Mode) -> (&'static str, Style) {
-    match m {
-        Mode::Manager => (" MANAGER ", Style::default().fg(Color::Cyan)),
-        Mode::Focus => (" INPUT ", Style::default().fg(Color::Green)),
-        Mode::Send => (" SEND ", Style::default().fg(Color::Yellow)),
-        Mode::Filter => (" FILTER ", Style::default().fg(Color::Magenta)),
-        Mode::Add => (" ADD ", Style::default().fg(Color::Blue)),
-        Mode::Help => (" HELP ", Style::default().fg(Color::White)),
-    }
+    // Solid-background chips so the current mode reads at a glance.
+    let (label, fg, bg) = match m {
+        Mode::Manager => (" MANAGER ", Color::Black, Color::Cyan),
+        Mode::Focus => (" INPUT ", Color::Black, Color::Green),
+        Mode::Send => (" SEND ", Color::Black, Color::Yellow),
+        Mode::Filter => (" FILTER ", Color::Black, Color::Magenta),
+        Mode::Add => (" ADD ", Color::White, Color::Blue),
+        Mode::Help => (" HELP ", Color::Black, Color::Gray),
+    };
+    (label, Style::default().fg(fg).bg(bg))
 }
 /// Status bar segments as (key, description) pairs. An empty key means
 /// the text is a plain instruction, not a key press.
@@ -2123,6 +2125,21 @@ mod tests {
             chips,
             vec!["MANAGER", "INPUT", "SEND", "FILTER", "ADD", "HELP"]
         );
+    }
+    #[test]
+    fn mode_chips_have_solid_backgrounds() {
+        for m in [
+            Mode::Manager,
+            Mode::Focus,
+            Mode::Send,
+            Mode::Filter,
+            Mode::Add,
+            Mode::Help,
+        ] {
+            let style = mode_chip(m).1;
+            assert!(style.bg.is_some(), "{m:?} chip needs a background");
+            assert!(style.fg.is_some(), "{m:?} chip needs a foreground");
+        }
     }
     #[test]
     fn empty_state_guides_first_run() {
