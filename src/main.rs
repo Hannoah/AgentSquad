@@ -449,6 +449,7 @@ struct Session {
     status: String,
     scroll: usize,
     started: Option<Instant>,
+    announced_exit: bool,
 }
 impl Session {
     fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
@@ -494,6 +495,7 @@ impl Session {
             status: "Running".into(),
             scroll: 0,
             started: Some(Instant::now()),
+            announced_exit: false,
         })
     }
     fn update(&mut self) -> bool {
@@ -543,6 +545,16 @@ impl Session {
     fn scroll_live(&mut self) {
         self.scroll = 0;
         self.parser.screen_mut().set_scrollback(0);
+    }
+}
+/// One-time notice when a session leaves Running. Returns the message
+/// the first time only; `announced` flips so repeats stay silent.
+fn exit_notice(name: &str, was_running: bool, now: &str, announced: &mut bool) -> Option<String> {
+    if was_running && now != "Running" && !*announced {
+        *announced = true;
+        Some(format!("Session '{name}' {now}; Enter restarts it"))
+    } else {
+        None
     }
 }
 /// Move the visible viewport of the selected session's scrollback.
@@ -832,8 +844,19 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
             }
         }
-        for s in sessions.iter_mut().flatten() {
-            dirty |= s.update();
+        for (pi, slot) in sessions.iter_mut().enumerate() {
+            if let Some(s) = slot {
+                let was_running = s.status == "Running";
+                dirty |= s.update();
+                if let Some(note) = exit_notice(
+                    &c.projects[pi].name,
+                    was_running,
+                    &s.status,
+                    &mut s.announced_exit,
+                ) {
+                    message = note;
+                }
+            }
         }
         if dirty {
             terminal.draw(|f| {
@@ -1698,7 +1721,7 @@ fn main() -> Result<()> {
         args.first().map(String::as_str),
         Some("--help" | "-h" | "help")
     ) {
-        println!("AgentSquad v{}\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, x stops, 1-9 jumps, Shift+PgUp scrolls, q quits, ? help.\nTerminal: Ctrl+G returns to manager; then g sends Ctrl+G.\nQuitting stops managed child processes; no detached daemon.", env!("CARGO_PKG_VERSION"));
+        println!("AgentSquad v{}\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, s starts all, x stops, 1-9 jumps, Shift+PgUp scrolls, q quits, ? help.\nTerminal: Esc returns to manager; Ctrl+G then g sends Ctrl+G, Ctrl+G then Esc sends Esc.\nQuitting stops managed child processes; no detached daemon.", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--version") {
@@ -2172,6 +2195,26 @@ mod tests {
         let env = pty_env();
         assert!(env.contains(&("TERM", "xterm-256color")));
         assert!(env.contains(&("COLORTERM", "truecolor")));
+    }
+    #[test]
+    fn exit_notice_fires_once() {
+        let mut announced = false;
+        assert_eq!(
+            exit_notice("web", true, "Exited (1)", &mut announced),
+            Some("Session 'web' Exited (1); Enter restarts it".to_string())
+        );
+        assert!(announced);
+        assert_eq!(
+            exit_notice("web", false, "Exited (1)", &mut announced),
+            None
+        );
+        let mut fresh = false;
+        assert_eq!(exit_notice("web", true, "Running", &mut fresh), None);
+        assert!(!fresh);
+        assert_eq!(
+            exit_notice("api", true, "Error: boom", &mut fresh),
+            Some("Session 'api' Error: boom; Enter restarts it".to_string())
+        );
     }
     #[test]
     fn split_help_line_columns() {
