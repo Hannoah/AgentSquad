@@ -317,7 +317,7 @@ fn help_lines() -> Vec<&'static str> {
         "Shift+PgUp/Dn  scroll history",
         "r          restart session",
         "s          start all stopped sessions",
-        "x          stop session (asks to confirm)",
+        "x/Del      stop session (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
         "Esc        terminal back to manager",
@@ -580,6 +580,14 @@ fn confirm_key(code: KeyCode) -> Option<bool> {
 fn confirm_stop_prompt(name: &str) -> String {
     format!("Stop session '{name}'?")
 }
+/// Manager-mode stop target shared by `x` and `Delete`: the selected
+/// project, but only while it actually holds a session.
+fn stop_target<T>(order: &[usize], selected: usize, slots: &[Option<T>]) -> Option<usize> {
+    order
+        .get(selected)
+        .copied()
+        .filter(|&pi| slots.get(pi).and_then(|s| s.as_ref()).is_some())
+}
 fn confirm_quit_prompt(n: usize) -> String {
     format!("Quit and discard {}?", plural_sessions(n))
 }
@@ -775,7 +783,7 @@ Usage:
 
 Manager keys:
   n/p, arrows  select · Enter  start/focus · a  add · /  send a line
-  f  filter · r  restart · s  start all · x  stop · 1-9  jump
+  f  filter · r  restart · s  start all · x/Del  stop · 1-9  jump
   Shift+PgUp/Dn  scroll · q  quit · ?  help
 
 Terminal keys:
@@ -2208,12 +2216,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ),
                         };
                     }
-                    KeyCode::Char('x') => {
-                        if let Some(&pi) = order.get(selected) {
-                            if sessions.get(pi).and_then(|o| o.as_ref()).is_some() {
-                                confirm_stop = Some(pi);
-                            }
-                        }
+                    KeyCode::Char('x') | KeyCode::Delete => {
+                        confirm_stop = stop_target(&order, selected, &sessions);
                     }
                     KeyCode::Enter => {
                         if order.is_empty() {
@@ -2422,7 +2426,7 @@ mod tests {
             "--version",
             "Manager keys",
             "Terminal keys",
-            "x  stop",
+            "x/Del  stop",
             "Esc  back to manager",
         ] {
             assert!(h.contains(c), "help mentions {c}");
@@ -2432,7 +2436,7 @@ mod tests {
     fn help_covers_keys() {
         let h = help_lines().join("\n");
         for k in [
-            "Enter", "/", "n/p", "filter", "restart", "add", "scroll", "1-9", "x", "q", "?",
+            "Enter", "/", "n/p", "filter", "restart", "add", "scroll", "1-9", "x", "Del", "q", "?",
             "Ctrl+G",
         ] {
             assert!(h.contains(k), "help missing {k}");
@@ -2807,6 +2811,17 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn stop_selects_live_session() {
+        // Shared by `x` and `Delete`: the selected project, but only while
+        // it actually holds a session.
+        let order = vec![0usize, 1, 2];
+        let live: Vec<Option<u8>> = vec![None, Some(1), None];
+        assert_eq!(stop_target(&order, 1, &live), Some(1));
+        assert_eq!(stop_target(&order, 0, &live), None);
+        assert_eq!(stop_target(&order, 5, &live), None);
+        assert_eq!(stop_target(&[], 0, &live), None);
     }
     #[test]
     fn pty_env_advertises_truecolor() {
