@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.3
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.4
 ```
 
 To install elsewhere:
@@ -43,6 +43,22 @@ To install elsewhere:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -InstallDir C:\tools\squad
 ```
+
+## Updates
+
+On launch, `squad` checks GitHub for a newer release in the background (it
+never delays startup). When one exists, the manager asks whether to update:
+
+- `y` downloads and installs it; `n` or `Esc` skips until the next launch.
+  `Enter` deliberately does not accept, so a prompt that appears as you
+  press it cannot start a download.
+- The prompt waits while you are typing into a session or another input.
+- Running sessions keep running. Restart `squad` to switch to the new build.
+- Offline or blocked networks simply show no prompt. Set
+  `AGENTSQUAD_NO_UPDATE_CHECK=1` to turn the check off.
+- It uses the `curl.exe` and `tar.exe` that ship with Windows 10+, and
+  refuses a download whose `--version` does not match the release tag.
+  Debug builds (`cargo run`) never check or self-replace.
 
 ## Quickstart
 
@@ -107,17 +123,17 @@ and `start`.
 | `S` | Start all stopped sessions |
 | `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
-| `Esc` | Back to the manager (from inside a terminal) |
-| `Ctrl+G`, then `g` / `Esc` | Send a literal `Ctrl+G` / `Esc` to the session |
+| `Ctrl+Q` | Back to the manager (from inside a terminal; clicking the project list works too) |
 | `?` | Toggle the help popup |
 | `q`, `Ctrl+C` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.
 
-Inside a terminal, `Esc` returns to the manager. To send a literal `Esc`
-to the session, press `Ctrl+G` then `Esc` instead (likewise, `Ctrl+G` then
-`g` sends a literal `Ctrl+G`).
+Inside a terminal, every key reaches the session, including `Esc` and
+`Ctrl+G`, which agents such as Claude Code use to interrupt, rewind or open
+an editor. `Ctrl+Q` is the only key squad keeps for itself: it returns to
+the manager.
 
 ## CLI reference
 

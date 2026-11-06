@@ -26,7 +26,18 @@
 이 PC에는 `gh`가 없어서 공개 API로 확인했다:
 `https://api.github.com/repos/Hannoah/AgentSquad/actions/runs` 와 `.../releases/tags/vX.Y.Z`.
 
-## 업데이트(사용자 쪽)
+## 자동 업데이트 (다음 릴리스부터)
+
+- 시작할 때 백그라운드 스레드가 새 버전을 확인한다. 화면과 입력은 기다리지 않는다. `https://github.com/Hannoah/AgentSquad/releases/latest`가 `/releases/tag/<태그>`로 리다이렉트되는 점을 이용해 `curl.exe`의 최종 URL만 읽는다(API 호출, 속도 제한, JSON 없음).
+- 새 버전이 있으면 매니저에서 확인창을 띄운다. 포커스, 입력, 다른 확인창이 있으면 기다렸다가 키보드가 비었을 때 띄운다. 승인은 `y`만(`Enter`는 아님. 막 누르려던 Enter로 다운로드가 시작되는 사고를 막기 위해).
+- 승인하면 백그라운드에서 `curl.exe`로 zip을 받고 `System32\tar.exe`(bsdtar)로 풀고, 새 바이너리의 `--version`이 태그와 같은지 확인한 뒤 교체한다. 실행 중인 세션은 그대로이고 다음 실행부터 새 버전을 쓴다.
+- `tar.exe`는 PATH 대신 `System32` 전체 경로로 부른다. 이 PC는 Git의 GNU tar가 먼저 잡히는데 GNU tar는 zip을 못 푼다.
+- 교체 방식: 실행 중인 exe는 이름 변경은 되지만 덮어쓰기와 삭제는 안 된다(이 PC에서 직접 확인). 그래서 `squad.exe`를 `squad.exe.old-<pid>`로 옮기고 새 파일을 복사한다. 복사가 실패하면 되돌린다. 옛 파일은 다음 실행 때 지운다(다른 창이 아직 쓰는 것은 못 지우고 남는다).
+- 끄기: 환경 변수 `AGENTSQUAD_NO_UPDATE_CHECK=1`. 디버그 빌드는 확인도 교체도 하지 않는다(`cargo run`이 자기 자신을 덮어쓰지 않도록).
+- 검증한 것: 버전 비교, `y`만 승인, 교체와 롤백(임시 파일), 실제 GitHub에서 v0.5.3 내려받기, 압축 해제, 버전 확인(`--ignored` 네트워크 테스트). 검증하지 못한 것: 화면의 확인창을 실제로 띄워 눌러 보는 것, 새 버전이 나온 상태에서의 전체 흐름.
+- 한계: 체크섬 검증이 없다. HTTPS와 `--version` 일치 확인까지만 한다([open-work.md](open-work.md)).
+
+## 업데이트(수동)
 
 - 실행 중인 `squad`를 모두 종료한 뒤 설치 명령을 다시 실행한다. 설치 스크립트는 실행 중인 프로그램을 덮어쓸 수 없어서, 실행 중이면 중단하고 PID를 알려 준다.
 - `irm https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.ps1 | iex` 후 `squad --version`.

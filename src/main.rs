@@ -22,6 +22,7 @@ use std::{
     io::{self, IsTerminal, Read, Write},
     num::NonZero,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     str::FromStr,
     sync::mpsc::{self, Receiver},
     thread,
@@ -502,8 +503,7 @@ fn help_lines() -> Vec<&'static str> {
         "d/Del      remove project (asks to confirm)",
         "S          start all stopped sessions",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
-        "Esc        terminal back to manager",
-        "Ctrl+G,Esc  send Esc to terminal",
+        "Ctrl+Q     terminal back to manager (Esc goes to the session)",
         "q, Ctrl+C  quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
@@ -627,7 +627,7 @@ fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("q", "quit"),
             ("?", "help"),
         ],
-        Mode::Focus => &[("Esc", "manager"), ("", "type to input")],
+        Mode::Focus => &[("Ctrl+Q", "manager"), ("", "other keys go to the session")],
         Mode::Send => &[("Enter", "sends"), ("Esc", "cancels")],
         Mode::Filter => &[
             ("", "type to narrow"),
@@ -878,6 +878,166 @@ fn centered_rect(w_pct: u16, h_pct: u16, area: ratatui::layout::Rect) -> ratatui
         ])
         .split(v[1])[1]
 }
+const REPO: &str = "Hannoah/AgentSquad";
+const ASSET: &str = "squad-windows-x86_64.zip";
+/// "v0.5.4" or "0.5.4" as (major, minor, patch); anything else is None.
+fn parse_version(s: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = s.trim().trim_start_matches('v').split('.');
+    let v = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(v)
+}
+fn is_newer(current: &str, latest: &str) -> bool {
+    matches!((parse_version(current), parse_version(latest)), (Some(c), Some(l)) if l > c)
+}
+/// Debug builds never check (so `cargo run` cannot overwrite itself), and
+/// `AGENTSQUAD_NO_UPDATE_CHECK` turns it off for offline or locked-down use.
+fn update_check_enabled() -> bool {
+    !cfg!(debug_assertions) && env::var_os("AGENTSQUAD_NO_UPDATE_CHECK").is_none()
+}
+/// Windows' own copy of a tool. A bare `tar` can resolve to Git's GNU tar,
+/// which cannot read zip files, so go through System32 explicitly.
+fn system_tool(name: &str) -> PathBuf {
+    let root = env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    PathBuf::from(root).join("System32").join(name)
+}
+/// A child process with no console window and no stdin.
+fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut c = Command::new(program);
+    c.stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+/// Newest release tag. `releases/latest` redirects to `releases/tag/<tag>`,
+/// so the final URL is enough: no API call, no rate limit, no JSON.
+fn latest_tag() -> Option<String> {
+    let out = quiet(system_tool("curl.exe"))
+        .args(["-sL", "-m", "10", "-o", "NUL", "-w", "%{url_effective}"])
+        .arg(format!("https://github.com/{REPO}/releases/latest"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(out.stdout).ok()?;
+    let tag = url.trim().rsplit_once("/tag/")?.1;
+    parse_version(tag).map(|_| tag.to_string())
+}
+/// Replace `current` with `new`. Windows lets a running exe be renamed but
+/// not overwritten, so move it aside first and put it back if the copy fails.
+fn swap_binary(new: &Path, current: &Path) -> Result<()> {
+    let mut old = current.as_os_str().to_owned();
+    old.push(format!(".old-{}", std::process::id()));
+    let old = PathBuf::from(old);
+    fs::rename(current, &old)
+        .with_context(|| format!("Cannot move {} aside", current.display()))?;
+    if let Err(e) = fs::copy(new, current) {
+        let _ = fs::remove_file(current);
+        let _ = fs::rename(&old, current);
+        return Err(e).with_context(|| format!("Cannot write {}", current.display()));
+    }
+    Ok(())
+}
+/// Delete `squad.exe.old-*` left by earlier updates. One that is still
+/// running (another squad window) simply fails to delete and stays.
+fn cleanup_old_binaries() {
+    let Ok(exe) = env::current_exe() else { return };
+    let (Some(dir), Some(name)) = (exe.parent(), exe.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.old-", name.to_string_lossy());
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+/// Download release `tag` into `work`, unpack it, and check that the binary
+/// really is that version. Returns the path of the verified `squad.exe`.
+fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
+    let zip = work.join(ASSET);
+    let ok = quiet(system_tool("curl.exe"))
+        .args(["-fsSL", "-m", "180", "-o"])
+        .arg(&zip)
+        .arg(format!(
+            "https://github.com/{REPO}/releases/download/{tag}/{ASSET}"
+        ))
+        .stdout(Stdio::null())
+        .status()?
+        .success();
+    if !ok {
+        bail!("Download failed");
+    }
+    let ok = quiet(system_tool("tar.exe"))
+        .arg("-xf")
+        .arg(&zip)
+        .arg("-C")
+        .arg(work)
+        .stdout(Stdio::null())
+        .status()?
+        .success();
+    if !ok {
+        bail!("Could not unpack the download");
+    }
+    let new_exe = work.join("squad.exe");
+    let said = quiet(&new_exe).arg("--version").output()?;
+    let said = String::from_utf8_lossy(&said.stdout);
+    let want = format!("squad {}", tag.trim_start_matches('v'));
+    if said.trim() != want {
+        bail!("Downloaded build says '{}', expected '{want}'", said.trim());
+    }
+    Ok(new_exe)
+}
+/// Fetch release `tag` and swap it in for the running binary.
+/// Slow: call from a worker thread.
+fn install_update(tag: &str) -> Result<()> {
+    let exe = env::current_exe()?;
+    let work = env::temp_dir().join(format!("squad-update-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&work);
+    fs::create_dir_all(&work)?;
+    let result = fetch_release(tag, &work).and_then(|new_exe| swap_binary(&new_exe, &exe));
+    let _ = fs::remove_dir_all(&work);
+    result
+}
+/// Progress of the background update, reported to the UI thread.
+enum UpdateMsg {
+    Available(String),
+    Installed(String),
+    Failed(String),
+}
+/// Only `y` accepts: an update prompt can pop up while the user is about to
+/// press Enter, so Enter must not start a download.
+fn update_key(code: KeyCode) -> Option<bool> {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
+        _ => None,
+    }
+}
+fn confirm_update_lines(tag: &str) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            format!(
+                "squad {tag} is out (you have v{}).",
+                env!("CARGO_PKG_VERSION")
+            ),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from("Download and install it now?"),
+        Line::from("Running sessions keep running; restart squad to switch."),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "updates"), ("n / Esc", "later")])),
+    ]
+}
 /// Centered rect of an exact size, clamped to `area`.
 fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));
@@ -1066,7 +1226,7 @@ Manager keys:
   PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:
-  Esc  back to manager · Ctrl+G, g  send Ctrl+G · Ctrl+G, Esc  send Esc
+  Ctrl+Q  back to manager · every other key, Esc included, goes to the session
 
 Quitting stops managed child processes; no detached daemon.",
         env!("CARGO_PKG_VERSION")
@@ -1600,9 +1760,10 @@ fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
         format!("\x1b[{n}~").into_bytes()
     }
 }
-/// Plain Esc leaves terminal focus; modified Esc still reaches the app.
+/// Ctrl+Q leaves terminal focus. Every other key, Esc and Ctrl+G included,
+/// belongs to the session: agents use Esc to interrupt and rewind.
 fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
-    code == KeyCode::Esc && mods == KeyModifiers::NONE
+    code == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
 }
 fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
@@ -1672,7 +1833,6 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut row_targets: Vec<Option<usize>> = Vec::new();
     let mut pane_rect = ratatui::layout::Rect::default();
     let mut focus = false;
-    let mut prefix = false;
     let mut sending = false;
     let mut send_buf = LineInput::new();
     let mut show_help = false;
@@ -1709,6 +1869,20 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         .checked_sub(sample_every)
         .unwrap_or_else(Instant::now);
     let mut sampling = false;
+    // Self-update: the check runs on a worker so it can never delay startup.
+    let (upd_tx, upd_rx) = mpsc::channel::<UpdateMsg>();
+    let mut update_offer: Option<String> = None;
+    let mut confirm_update = false;
+    let mut updating = false;
+    if update_check_enabled() {
+        let tx = upd_tx.clone();
+        thread::spawn(move || {
+            cleanup_old_binaries();
+            if let Some(tag) = latest_tag().filter(|t| is_newer(env!("CARGO_PKG_VERSION"), t)) {
+                let _ = tx.send(UpdateMsg::Available(tag));
+            }
+        });
+    }
     let mut tick: u64 = 0;
     loop {
         let area = terminal.size()?;
@@ -1756,6 +1930,43 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 sampling = true;
             }
             last_sample = Instant::now();
+        }
+        while let Ok(m) = upd_rx.try_recv() {
+            match m {
+                UpdateMsg::Available(tag) => {
+                    message = (format!("Update {tag} available"), Notice::Warn);
+                    update_offer = Some(tag);
+                }
+                UpdateMsg::Installed(tag) => {
+                    updating = false;
+                    message = (
+                        format!(
+                            "Updated to {tag}. Restart squad to use it; sessions keep running."
+                        ),
+                        Notice::Info,
+                    );
+                }
+                UpdateMsg::Failed(e) => {
+                    updating = false;
+                    update_offer = None;
+                    message = (format!("Update failed: {e}"), Notice::Error);
+                }
+            }
+            dirty = true;
+        }
+        // Ask only when nothing else owns the keyboard, so a prompt never
+        // swallows keystrokes meant for a session or another input.
+        let keyboard_free = !(focus
+            || sending
+            || filtering
+            || adding
+            || show_help
+            || confirm_quit
+            || confirm_stop.is_some()
+            || confirm_remove.is_some());
+        if keyboard_free && !updating && !confirm_update && update_offer.is_some() {
+            confirm_update = true;
+            dirty = true;
         }
         for (pi, slot) in sessions.iter_mut().enumerate() {
             if let Some(s) = slot {
@@ -2086,13 +2297,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .split(vertical[1]);
                 let input_w =
                     (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
-                if prefix {
-                    bar.extend(hint_spans(&[
-                        ("g", "send Ctrl+G"),
-                        ("Esc", "send Esc"),
-                        ("", "any other key = manager"),
-                    ]));
-                } else if focus {
+                if focus {
                     bar.extend(fitted_hints(Mode::Focus, input_w));
                 } else if filtering {
                     bar.extend(input_line(
@@ -2218,6 +2423,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     "Remove project",
                                     Style::default()
                                         .fg(Color::Red)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
+                        ),
+                        popup,
+                    );
+                }
+                if confirm_update {
+                    let tag = update_offer.as_deref().unwrap_or("?");
+                    let popup = centered_rect(60, 40, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(confirm_update_lines(tag)).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title(Line::from(Span::styled(
+                                    "Update available",
+                                    Style::default()
+                                        .fg(Color::Yellow)
                                         .add_modifier(ratatui::style::Modifier::BOLD),
                                 ))),
                         ),
@@ -2373,7 +2597,6 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     {
                         selected = i;
                         focus = false;
-                        prefix = false;
                         dirty = true;
                     } else if pane_rect.contains(ratatui::layout::Position::new(m.column, m.row)) {
                         // Clicking the terminal pane focuses a live session.
@@ -2384,7 +2607,6 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             .is_some_and(|s| s.status == "Running");
                         if live {
                             focus = true;
-                            prefix = false;
                             dirty = true;
                         }
                     }
@@ -2393,11 +2615,6 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             Event::Key(k) if k.kind != KeyEventKind::Release => {
                 dirty = true;
                 if focus {
-                    if k.code == KeyCode::Char('g') && k.modifiers.contains(KeyModifiers::CONTROL) {
-                        focus = false;
-                        prefix = true;
-                        continue;
-                    }
                     if focus_exit_key(k.code, k.modifiers) {
                         focus = false;
                         continue;
@@ -2652,28 +2869,33 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     continue;
                 }
-                if prefix {
-                    prefix = false;
-                    if k.code == KeyCode::Char('g') {
-                        if let Some(&pi) = order.get(selected) {
-                            if let Some(Some(s)) = sessions.get_mut(pi) {
-                                let _ = s.input(&[7]);
-                                focus = true;
+                if confirm_update {
+                    match update_key(k.code) {
+                        Some(true) => {
+                            confirm_update = false;
+                            if let Some(tag) = update_offer.take() {
+                                updating = true;
+                                message = (format!("Updating to {tag}..."), Notice::Info);
+                                let tx = upd_tx.clone();
+                                thread::spawn(move || {
+                                    let m = match install_update(&tag) {
+                                        Ok(()) => UpdateMsg::Installed(tag),
+                                        Err(e) => UpdateMsg::Failed(format!("{e:#}")),
+                                    };
+                                    let _ = tx.send(m);
+                                });
                             }
                         }
-                        continue;
-                    }
-                    if k.code == KeyCode::Esc {
-                        if let Some(&pi) = order.get(selected) {
-                            if let Some(Some(s)) = sessions.get_mut(pi) {
-                                let _ = s.input(&[27]);
-                                focus = true;
-                            }
+                        Some(false) => {
+                            confirm_update = false;
+                            update_offer = None;
+                            message = (
+                                "Update skipped; squad asks again next launch.".to_string(),
+                                Notice::Info,
+                            );
                         }
-                        continue;
+                        None => {}
                     }
-                    // Any other key only cancels the prefix; it must not
-                    // fire as a manager command (Ctrl+G, q would quit).
                     continue;
                 }
                 if confirm_quit {
@@ -3052,7 +3274,7 @@ mod tests {
             "Terminal keys",
             "s  stop",
             "d/Del  remove",
-            "Esc  back to manager",
+            "Ctrl+Q  back to manager",
         ] {
             assert!(h.contains(c), "help mentions {c}");
         }
@@ -3062,7 +3284,7 @@ mod tests {
         let h = help_lines().join("\n");
         for k in [
             "Enter", "/", "j/k", "filter", "restart", "add", "scroll", "1-9", "stop", "d/Del", "q",
-            "?", "Ctrl+G",
+            "?", "Ctrl+Q",
         ] {
             assert!(h.contains(k), "help missing {k}");
         }
@@ -3573,13 +3795,86 @@ mod tests {
         assert_eq!(names, ["b", "c", "d"]);
     }
     #[test]
-    fn focus_exit_key_is_plain_esc() {
+    fn version_comparison() {
+        assert_eq!(parse_version("v0.5.4"), Some((0, 5, 4)));
+        assert_eq!(parse_version("0.5.4\n"), Some((0, 5, 4)));
+        assert_eq!(parse_version("v1.2"), None);
+        assert_eq!(parse_version("v1.2.3.4"), None);
+        assert_eq!(parse_version("v1.2.3-rc1"), None);
+        assert_eq!(parse_version("latest"), None);
+        assert!(is_newer("0.5.3", "v0.5.4"));
+        assert!(is_newer("0.5.9", "v0.6.0"));
+        assert!(is_newer("0.5.3", "v0.10.0"), "numeric, not textual");
+        assert!(!is_newer("0.5.3", "v0.5.3"), "same version");
+        assert!(!is_newer("0.5.3", "v0.5.2"), "never downgrade");
+        assert!(!is_newer("0.5.3", "garbage"), "unparseable tag is ignored");
+    }
+    #[test]
+    fn update_prompt_accepts_only_y() {
+        assert_eq!(update_key(KeyCode::Char('y')), Some(true));
+        assert_eq!(update_key(KeyCode::Enter), None, "Enter must not update");
+        assert_eq!(update_key(KeyCode::Char(' ')), None);
+        assert_eq!(update_key(KeyCode::Esc), Some(false));
+        assert_eq!(update_key(KeyCode::Char('n')), Some(false));
+        let text: String = confirm_update_lines("v9.9.9")
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(text.contains("v9.9.9") && text.contains(env!("CARGO_PKG_VERSION")));
+    }
+    #[test]
+    fn swap_binary_replaces_and_rolls_back() {
+        let dir = env::temp_dir().join(format!("squad-swap-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let (cur, new) = (dir.join("squad.exe"), dir.join("new.exe"));
+        fs::write(&cur, "old build").unwrap();
+        fs::write(&new, "new build").unwrap();
+        swap_binary(&new, &cur).unwrap();
+        assert_eq!(fs::read_to_string(&cur).unwrap(), "new build");
+        let old = format!("squad.exe.old-{}", std::process::id());
+        assert_eq!(fs::read_to_string(dir.join(&old)).unwrap(), "old build");
+        // A failed copy puts the previous build back.
+        fs::remove_file(dir.join(&old)).unwrap();
+        assert!(swap_binary(&dir.join("missing.exe"), &cur).is_err());
+        assert_eq!(fs::read_to_string(&cur).unwrap(), "new build");
+        fs::remove_dir_all(&dir).ok();
+    }
+    #[test]
+    #[ignore = "needs network"]
+    fn fetch_release_downloads_and_verifies() {
+        // The real pipeline minus the swap: curl, bsdtar, `--version` check.
+        let work = env::temp_dir().join(format!("squad-fetch-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        let exe = fetch_release("v0.5.3", &work).expect("download and verify v0.5.3");
+        assert!(exe.is_file());
+        // A tag whose binary reports another version is refused.
+        let wrong = fetch_release("v0.5.2", &work);
+        assert!(wrong.is_ok(), "v0.5.2 reports itself as 0.5.2");
+        assert!(fetch_release("v0.0.1", &work).is_err(), "no such release");
+        fs::remove_dir_all(&work).ok();
+    }
+    #[test]
+    #[ignore = "needs network"]
+    fn latest_tag_reads_github() {
+        let tag = latest_tag().expect("curl and network available");
+        assert!(parse_version(&tag).is_some(), "got {tag}");
+    }
+    #[test]
+    fn only_ctrl_q_leaves_terminal_focus() {
         use crossterm::event::KeyModifiers as M;
-        assert!(focus_exit_key(KeyCode::Esc, M::NONE));
-        assert!(!focus_exit_key(KeyCode::Esc, M::SHIFT));
-        assert!(!focus_exit_key(KeyCode::Esc, M::CONTROL));
-        assert!(!focus_exit_key(KeyCode::Enter, M::NONE));
+        assert!(focus_exit_key(KeyCode::Char('q'), M::CONTROL));
+        // Esc and Ctrl+G are the agent's, not ours.
+        assert!(!focus_exit_key(KeyCode::Esc, M::NONE));
+        assert!(!focus_exit_key(KeyCode::Char('g'), M::CONTROL));
+        assert!(!focus_exit_key(KeyCode::Char('q'), M::NONE));
+        assert!(!focus_exit_key(KeyCode::Char('q'), M::CONTROL | M::SHIFT));
         assert_eq!(key_bytes(KeyEvent::new(KeyCode::Esc, M::NONE), false), [27]);
+        assert_eq!(
+            key_bytes(KeyEvent::new(KeyCode::Char('g'), M::CONTROL), false),
+            [7]
+        );
     }
     #[test]
     fn key_bytes_encodes_modifiers() {
@@ -3862,7 +4157,10 @@ mod tests {
             mode_hints(Mode::Manager),
             "Enter open | j/k select | / filter | a add | m message | s stop | r restart | d/Del remove | S start all | q quit | ? help"
         );
-        assert_eq!(mode_hints(Mode::Focus), "Esc manager | type to input");
+        assert_eq!(
+            mode_hints(Mode::Focus),
+            "Ctrl+Q manager | other keys go to the session"
+        );
         assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
         assert_eq!(
             mode_hints(Mode::Filter),
@@ -3894,7 +4192,10 @@ mod tests {
         let add: String = text(vec![Line::from(fitted_hints(Mode::Add, 40))]);
         assert!(add.contains("Enter save") && !add.contains("Space"));
         let focus: String = text(vec![Line::from(fitted_hints(Mode::Focus, 10))]);
-        assert!(focus.contains("type to input"), "short modes never compact");
+        assert!(
+            focus.contains("go to the session"),
+            "short modes never compact"
+        );
         let help: String = text(vec![Line::from(fitted_hints(Mode::Help, 40))]);
         assert!(help.contains("closes"), "help hints show in help mode");
     }
