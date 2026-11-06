@@ -1030,6 +1030,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     bar.push(Span::raw(
                         "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
                     ));
+                } else if focus {
+                    bar.push(Span::styled(
+                        mode_hints(Mode::Focus),
+                        Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                    ));
                 } else if filtering {
                     bar.extend(input_line(
                         "Filter: ".to_string(),
@@ -1048,6 +1053,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     ));
                 } else if adding {
                     bar.push(Span::raw(mode_hints(Mode::Add)));
+                } else if message == mode_hints(Mode::Manager) {
+                    // Idle hints recede so action feedback stands out.
+                    bar.push(Span::styled(
+                        message.clone(),
+                        Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                    ));
                 } else {
                     bar.push(Span::raw(message.clone()));
                 }
