@@ -157,9 +157,10 @@ powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 test
 ```
 
 Tests cover config round-trips, kind parsing, sidebar ordering, filtering,
-and group counts, status colors and uptime labels, help content, keyboard
-encoding, line editing, stop/quit confirmations, session start helpers and
-config merging, terminal parsing, and live PTY smoke tests (spawn output,
+group counts and filter-title counts, status colors and uptime labels, help
+content, keyboard encoding including xterm modifiers, line editing,
+stop/quit confirmations, session start helpers and config merging, truecolor
+advertising, terminal parsing, and live PTY smoke tests (spawn output,
 process-tree kill). Releases are built by GitHub Actions on every `v*` tag
 (see [.github/workflows/release.yml](.github/workflows/release.yml)).
 
