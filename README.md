@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.1
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.2
 ```
 
 To install elsewhere:
@@ -86,22 +86,24 @@ and `start`.
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Start the selected session / focus its terminal |
-| `/` | Type a line and send it to the selected session (starts it if stopped) |
-| `f` | Filter the project list by name or command (`Enter` keeps, `Esc` clears) |
-| `r` | Restart the selected session |
-| `s` | Start all stopped sessions |
-| `n` / `p`, `↑` / `↓` | Move selection |
+| `Enter` | Open the selected session: start it if stopped, then focus its terminal |
+| Click | Click a project to select it; click a live terminal to focus it |
+| `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
 | `1`–`9` | Jump to a visible row |
+| `Home` / `End` | First / last project |
+| `/` | Filter the project list by name or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `a` | Add a project without leaving the manager |
-| `x` | Stop the selected session (asks to confirm; process is killed, files untouched) |
-| `Delete` | Remove the selected project (asks to confirm; a running session is stopped, files untouched) |
-| `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
+| `m` | Message: type a line and send it to the selected session (starts it if stopped) |
+| `s` | Stop the selected session (asks to confirm; process is killed, files untouched; `x` also works) |
+| `r` | Restart the selected session |
+| `d` / `Delete` | Remove the selected project (asks to confirm; a running session is stopped, files untouched) |
+| `S` | Start all stopped sessions |
+| `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
 | `Esc` | Back to the manager (from inside a terminal) |
 | `Ctrl+G`, then `g` / `Esc` | Send a literal `Ctrl+G` / `Esc` to the session |
 | `?` | Toggle the help popup |
-| `q` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
+| `q`, `Ctrl+C` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.

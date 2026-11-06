@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, MouseEventKind,
+        KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -405,20 +405,22 @@ fn pane_status_text(status: &str, uptime_secs: Option<u64>, tick: u64) -> String
 }
 fn help_lines() -> Vec<&'static str> {
     vec![
-        "Enter      start / focus session",
-        "/          send a line to session",
-        "a          add project",
-        "f          filter projects",
-        "Shift+PgUp/Dn  scroll history",
-        "r          restart session",
-        "s          start all stopped sessions",
-        "x          stop session (asks to confirm)",
-        "Del        remove project (asks to confirm)",
-        "n/p, arrows  select project",
+        "Enter      open session (starts it if stopped)",
+        "Click      select a project / focus its terminal",
+        "j/k, arrows  select project",
         "1-9        jump to project",
+        "Home/End   first / last project",
+        "/          filter projects (Esc clears)",
+        "a          add project",
+        "m          message: send a line to session",
+        "s          stop session (asks to confirm)",
+        "r          restart session",
+        "d/Del      remove project (asks to confirm)",
+        "S          start all stopped sessions",
+        "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
         "Esc        terminal back to manager",
         "Ctrl+G,Esc  send Esc to terminal",
-        "q          quit (confirms when sessions exist)",
+        "q, Ctrl+C  quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
 }
@@ -529,15 +531,15 @@ fn mode_chip(m: Mode) -> (&'static str, Style) {
 fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
     match m {
         Mode::Manager => &[
-            ("Enter", "focus"),
-            ("/", "send"),
+            ("Enter", "open"),
+            ("j/k", "select"),
+            ("/", "filter"),
             ("a", "add"),
-            ("f", "filter"),
+            ("m", "message"),
+            ("s", "stop"),
             ("r", "restart"),
-            ("s", "start all"),
-            ("n/p", "select"),
-            ("x", "stop"),
-            ("Del", "remove"),
+            ("d/Del", "remove"),
+            ("S", "start all"),
             ("q", "quit"),
             ("?", "help"),
         ],
@@ -573,17 +575,17 @@ fn mode_hints(m: Mode) -> String {
 fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
     match m {
         Mode::Manager => &[
-            ("Enter", "focus"),
-            ("/", "send"),
+            ("Enter", "open"),
+            ("/", "filter"),
             ("q", "quit"),
-            ("x", "stop"),
+            ("s", "stop"),
             ("?", "help"),
-            ("f", "filter"),
-            ("Del", "remove"),
-            ("s", "start all"),
+            ("m", "message"),
             ("a", "add"),
-            ("n/p", "select"),
+            ("d/Del", "remove"),
             ("r", "restart"),
+            ("S", "start all"),
+            ("j/k", "select"),
         ],
         Mode::Add => &[
             ("Enter", "save"),
@@ -678,7 +680,7 @@ fn confirm_key(code: KeyCode) -> Option<bool> {
 fn confirm_stop_prompt(name: &str) -> String {
     format!("Stop session '{name}'?")
 }
-/// Manager-mode stop target shared by `x` and `Delete`: the selected
+/// Manager-mode stop target shared by `s` and `d`/`Delete`: the selected
 /// project, but only while it actually holds a session.
 fn stop_target<T>(order: &[usize], selected: usize, slots: &[Option<T>]) -> Option<usize> {
     order
@@ -791,6 +793,37 @@ fn centered_rect(w_pct: u16, h_pct: u16, area: ratatui::layout::Rect) -> ratatui
             Constraint::Percentage(100 - w_pct - (100 - w_pct) / 2),
         ])
         .split(v[1])[1]
+}
+/// Centered rect of an exact size, clamped to `area`.
+fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let (w, h) = (w.min(area.width), h.min(area.height));
+    ratatui::layout::Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    )
+}
+/// Map a left click to the sidebar's position in `order`, if it landed on
+/// a project row (borders, headers and "(none)" placeholders miss).
+fn sidebar_click(
+    side: ratatui::layout::Rect,
+    offset: usize,
+    targets: &[Option<usize>],
+    col: u16,
+    row: u16,
+) -> Option<usize> {
+    if col <= side.x
+        || col + 1 >= side.x + side.width
+        || row <= side.y
+        || row + 1 >= side.y + side.height
+    {
+        return None;
+    }
+    targets
+        .get((row - side.y - 1) as usize + offset)
+        .copied()
+        .flatten()
 }
 struct Session {
     master: Box<dyn MasterPty + Send>,
@@ -913,9 +946,10 @@ Usage:
   squad --version                                    Print version
 
 Manager keys:
-  n/p, arrows  select · Enter  start/focus · a  add · /  send a line
-  f  filter · r  restart · s  start all · x  stop · Del  remove · 1-9  jump
-  Shift+PgUp/Dn  scroll · q  quit · ?  help
+  j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
+  /  filter · a  add · m  message (send a line)
+  s  stop · r  restart · d/Del  remove · S  start all
+  PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:
   Esc  back to manager · Ctrl+G, g  send Ctrl+G · Ctrl+G, Esc  send Esc
@@ -1416,6 +1450,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         .and_then(|i| order.iter().position(|&x| x == i))
         .unwrap_or(0);
     let mut list_offset = 0usize;
+    // Last drawn sidebar geometry, so mouse clicks can be mapped to rows:
+    // `row_targets[i]` is the position in `order` of list item `i` (None for headers).
+    let mut side_rect = ratatui::layout::Rect::default();
+    let mut row_targets: Vec<Option<usize>> = Vec::new();
+    let mut pane_rect = ratatui::layout::Rect::default();
     let mut focus = false;
     let mut prefix = false;
     let mut sending = false;
@@ -1467,6 +1506,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     &mut s.announced_exit,
                 ) {
                     message = (note, exit_notice_kind(&s.status));
+                    // Typing into a dead terminal does nothing: hand the keyboard
+                    // back to the manager so Enter can restart it.
+                    if focus && order.get(selected) == Some(&pi) {
+                        focus = false;
+                    }
                 }
             }
         }
@@ -1480,10 +1524,13 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Length(sidebar), Constraint::Min(1)])
                     .split(vertical[0]);
+                side_rect = panels[0];
+                pane_rect = panels[1];
                 if sidebar > 0 {
                     let sel_pi = order.get(selected).copied();
                     let inner_w = (sidebar as usize).saturating_sub(2);
                     let mut items: Vec<ListItem> = Vec::new();
+                    let mut targets: Vec<Option<usize>> = Vec::new();
                     let mut sel_row: Option<usize> = None;
                     let mut n = 0;
                     let running: Vec<bool> = sessions
@@ -1493,6 +1540,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
                         let (up, total) = group_counts(&c.projects, &running, k);
                         items.push(ListItem::new(group_header(title, k, up, total)));
+                        targets.push(None);
                         let mut any = false;
                         for &pi in order.iter().filter(|&&i| c.projects[i].kind == k) {
                             any = true;
@@ -1547,6 +1595,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             if Some(pi) == sel_pi {
                                 sel_row = Some(items.len());
                             }
+                            targets.push(Some(n - 1));
                             items.push(ListItem::new(Line::from(vec![
                                 Span::styled(prefix, row_style),
                                 Span::styled(fit(&status_full, status_w), status_span_style),
@@ -1559,6 +1608,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ])));
                         }
                         if !any {
+                            targets.push(None);
                             items.push(ListItem::new("  (none)").style(
                                 Style::default().add_modifier(ratatui::style::Modifier::DIM),
                             ));
@@ -1569,6 +1619,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         list_offset = keep_visible(list_offset, sr, visible_rows);
                     }
                     list_offset = list_offset.min(items.len().saturating_sub(1));
+                    row_targets = targets;
                     let mut window = items.split_off(list_offset);
                     window.truncate(visible_rows);
                     f.render_widget(
@@ -1678,6 +1729,37 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         lines.push(Line::from(spans));
                     }
                     f.render_widget(Paragraph::new(lines), inner);
+                    // A finished session leaves its last output on screen; say so
+                    // and say how to bring it back, right where the eyes are.
+                    if s.status != "Running" && inner.height > 0 {
+                        let bg = if needs_attention(&s.status) {
+                            Color::Red
+                        } else {
+                            Color::DarkGray
+                        };
+                        f.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::styled(
+                                    format!(" {} ", s.status),
+                                    Style::default()
+                                        .fg(Color::White)
+                                        .bg(bg)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    " Enter / r restarts ",
+                                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                                ),
+                            ]))
+                            .alignment(Alignment::Right),
+                            ratatui::layout::Rect::new(
+                                inner.x,
+                                inner.y + inner.height - 1,
+                                inner.width,
+                                1,
+                            ),
+                        );
+                    }
                     if focus && !screen.hide_cursor() {
                         let (r, c) = screen.cursor_position();
                         if r < inner.height && c < inner.width {
@@ -1777,7 +1859,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     status_row[1],
                 );
                 if show_help {
-                    let popup = centered_rect(60, 50, f.area());
+                    // Fixed-size so every row fits on short terminals (a 50%
+                    // popup clipped the last help rows at 24 lines).
+                    let popup = fixed_rect(66, help_lines().len() as u16 + 2, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
                     let lines: Vec<Line> = help_lines()
                         .iter()
@@ -1982,6 +2066,35 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 if let Some(lines) = wheel_lines(m.kind) {
                     scroll_lines_selected(&mut sessions, &order, selected, lines);
                     dirty = true;
+                } else if m.kind == MouseEventKind::Down(MouseButton::Left)
+                    && !(adding
+                        || show_help
+                        || sending
+                        || filtering
+                        || confirm_quit
+                        || confirm_stop.is_some()
+                        || confirm_remove.is_some())
+                {
+                    if let Some(i) =
+                        sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
+                    {
+                        selected = i;
+                        focus = false;
+                        prefix = false;
+                        dirty = true;
+                    } else if pane_rect.contains(ratatui::layout::Position::new(m.column, m.row)) {
+                        // Clicking the terminal pane focuses a live session.
+                        let live = order
+                            .get(selected)
+                            .and_then(|&pi| sessions.get(pi))
+                            .and_then(|o| o.as_ref())
+                            .is_some_and(|s| s.status == "Running");
+                        if live {
+                            focus = true;
+                            prefix = false;
+                            dirty = true;
+                        }
+                    }
                 }
             }
             Event::Key(k) if k.kind != KeyEventKind::Release => {
@@ -2337,20 +2450,26 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     continue;
                 }
                 match k.code {
-                    KeyCode::Char('q') => {
+                    KeyCode::Char('q') | KeyCode::Char('c')
+                        if k.code == KeyCode::Char('q')
+                            || k.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
                         if live_session_count(&sessions) > 0 {
                             confirm_quit = true;
                         } else {
                             break;
                         }
                     }
-                    KeyCode::Down | KeyCode::Char('n') if !order.is_empty() => {
+                    // `n`/`p` stay bound for muscle memory; `j`/`k` and arrows are documented.
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n')
+                        if !order.is_empty() =>
+                    {
                         selected = (selected + 1) % order.len()
                     }
-                    KeyCode::Up | KeyCode::Char('p') if !order.is_empty() => {
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') if !order.is_empty() => {
                         selected = (selected + order.len() - 1) % order.len()
                     }
-                    KeyCode::Char('/') if !order.is_empty() => {
+                    KeyCode::Char('m') if !order.is_empty() => {
                         sending = true;
                         send_buf.clear();
                     }
@@ -2369,10 +2488,19 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             selected = i;
                         }
                     }
-                    KeyCode::Char('f') if !order.is_empty() => {
+                    // Reopening keeps the current text so a filter can be refined,
+                    // and works even when it matched nothing.
+                    KeyCode::Char('/') if !c.projects.is_empty() => {
                         filtering = true;
-                        filter_buf.clear();
                     }
+                    // Esc in the manager drops a kept filter.
+                    KeyCode::Esc if !filter_buf.is_empty() => {
+                        filter_buf.clear();
+                        order = display_order(&c.projects);
+                        selected = 0;
+                    }
+                    KeyCode::Home if !order.is_empty() => selected = 0,
+                    KeyCode::End if !order.is_empty() => selected = order.len() - 1,
                     KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
                         scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
                     }
@@ -2401,7 +2529,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             }
                         }
                     }
-                    KeyCode::Char('s') | KeyCode::Char('S') if !order.is_empty() => {
+                    KeyCode::Char('S') if !order.is_empty() => {
                         let mut started_n = 0;
                         let mut failed: Option<String> = None;
                         for &pi in order.iter() {
@@ -2429,10 +2557,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ),
                         };
                     }
-                    KeyCode::Char('x') => {
+                    // `x` stays bound to stop for muscle memory; `s` is the documented key.
+                    KeyCode::Char('s') | KeyCode::Char('x') => {
                         confirm_stop = stop_target(&order, selected, &sessions);
                     }
-                    KeyCode::Delete => {
+                    KeyCode::Delete | KeyCode::Char('d') => {
                         confirm_remove = order.get(selected).copied();
                     }
                     KeyCode::Enter => {
@@ -2628,8 +2757,8 @@ mod tests {
             "--version",
             "Manager keys",
             "Terminal keys",
-            "x  stop",
-            "Del  remove",
+            "s  stop",
+            "d/Del  remove",
             "Esc  back to manager",
         ] {
             assert!(h.contains(c), "help mentions {c}");
@@ -2639,8 +2768,8 @@ mod tests {
     fn help_covers_keys() {
         let h = help_lines().join("\n");
         for k in [
-            "Enter", "/", "n/p", "filter", "restart", "add", "scroll", "1-9", "x", "Del", "q", "?",
-            "Ctrl+G",
+            "Enter", "/", "j/k", "filter", "restart", "add", "scroll", "1-9", "stop", "d/Del", "q",
+            "?", "Ctrl+G",
         ] {
             assert!(h.contains(k), "help missing {k}");
         }
@@ -2925,6 +3054,54 @@ mod tests {
         );
     }
     #[test]
+    fn hints_and_help_stay_in_sync() {
+        // Every key the status bar advertises is documented in the help
+        // popup and the CLI help, and the two hint tables list the same keys.
+        let help = help_lines().join("\n");
+        let cli = cli_help();
+        let mut a: Vec<&str> = mode_hint_parts(Mode::Manager).iter().map(|p| p.0).collect();
+        let mut b: Vec<&str> = priority_hint_parts(Mode::Manager)
+            .iter()
+            .map(|p| p.0)
+            .collect();
+        for key in &a {
+            assert!(help.contains(key), "help popup missing {key}");
+            assert!(cli.contains(key), "CLI help missing {key}");
+        }
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "hint tables disagree");
+    }
+    #[test]
+    fn fixed_rect_fits_short_terminals() {
+        use ratatui::layout::Rect;
+        let r = fixed_rect(66, 18, Rect::new(0, 0, 100, 24));
+        assert_eq!((r.width, r.height, r.x, r.y), (66, 18, 17, 3));
+        // Clamped, never larger than the screen.
+        let r = fixed_rect(66, 18, Rect::new(0, 0, 40, 10));
+        assert_eq!((r.width, r.height), (40, 10));
+        // Every help row fits the popup interior on a 24-line terminal.
+        assert!(help_lines().len() as u16 + 2 <= 24);
+    }
+    #[test]
+    fn sidebar_click_maps_rows() {
+        use ratatui::layout::Rect;
+        let side = Rect::new(0, 0, 30, 10);
+        // header, two projects, header, (none)
+        let t = [None, Some(0), Some(1), None, None];
+        assert_eq!(sidebar_click(side, 0, &t, 5, 2), Some(0));
+        assert_eq!(sidebar_click(side, 0, &t, 5, 3), Some(1));
+        assert_eq!(sidebar_click(side, 0, &t, 5, 1), None, "header");
+        assert_eq!(sidebar_click(side, 0, &t, 5, 5), None, "placeholder");
+        assert_eq!(sidebar_click(side, 0, &t, 5, 0), None, "top border");
+        assert_eq!(sidebar_click(side, 0, &t, 0, 2), None, "left border");
+        assert_eq!(sidebar_click(side, 0, &t, 29, 2), None, "right border");
+        assert_eq!(sidebar_click(side, 0, &t, 5, 9), None, "bottom border");
+        // A scrolled list shifts the mapping by the offset.
+        assert_eq!(sidebar_click(side, 1, &t, 5, 1), Some(0));
+        assert_eq!(sidebar_click(side, 0, &t, 40, 2), None, "outside");
+    }
+    #[test]
     fn plain_path_strips_verbatim_prefix() {
         assert_eq!(
             plain_path(PathBuf::from(r"\\?\C:\work\app")),
@@ -3167,7 +3344,7 @@ mod tests {
     }
     #[test]
     fn stop_selects_live_session() {
-        // `x` stops the selected project, but only while it actually
+        // `s` stops the selected project, but only while it actually
         // holds a session.
         let order = vec![0usize, 1, 2];
         let live: Vec<Option<u8>> = vec![None, Some(1), None];
@@ -3282,7 +3459,7 @@ mod tests {
     fn hint_text_matches_legacy_strings() {
         assert_eq!(
             mode_hints(Mode::Manager),
-            "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | Del remove | q quit | ? help"
+            "Enter open | j/k select | / filter | a add | m message | s stop | r restart | d/Del remove | S start all | q quit | ? help"
         );
         assert_eq!(mode_hints(Mode::Focus), "Esc manager | type to input");
         assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
@@ -3308,7 +3485,7 @@ mod tests {
         assert!(wide.contains("start all"), "wide bar shows everything");
         let normal: String = text(vec![Line::from(fitted_hints(Mode::Manager, 59))]);
         assert!(normal.contains("q quit"), "normal bar keeps quit");
-        assert!(normal.contains("f filter"), "normal bar keeps filter");
+        assert!(normal.contains("/ filter"), "normal bar keeps filter");
         assert!(!normal.contains("start all"), "normal bar drops the rest");
         let narrow: String = text(vec![Line::from(fitted_hints(Mode::Manager, 40))]);
         assert!(narrow.contains("q quit"), "narrow bar keeps quit");
