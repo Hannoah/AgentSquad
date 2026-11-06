@@ -365,6 +365,90 @@ fn status_glyph(status: &str, tick: u64) -> char {
         '●'
     }
 }
+/// CPU and memory of one session's process tree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Usage {
+    /// Percent of the whole machine (all cores = 100), like Task Manager.
+    cpu: f32,
+    /// Working set in bytes, summed over the tree (shared pages count twice).
+    mem: u64,
+}
+/// CPU percent from process CPU time (100 ns units) between two samples.
+fn cpu_percent(prev: u64, now: u64, secs: f64, cores: usize) -> f32 {
+    if secs <= 0.0 || cores == 0 {
+        return 0.0;
+    }
+    (now.saturating_sub(prev) as f64 / 1e7 / secs / cores as f64 * 100.0).clamp(0.0, 100.0) as f32
+}
+/// Whole-machine CPU percent from two (idle, kernel, user) readings.
+/// Kernel time already includes idle time.
+fn sys_cpu_percent(prev: CpuTimes, now: CpuTimes) -> f32 {
+    let idle = now.0.saturating_sub(prev.0);
+    let total = (now.1 + now.2).saturating_sub(prev.1 + prev.2);
+    if total == 0 {
+        0.0
+    } else {
+        (total.saturating_sub(idle) as f64 / total as f64 * 100.0) as f32
+    }
+}
+/// Compact byte size: "512M", "1.4G".
+fn mem_label(bytes: u64) -> String {
+    const MIB: u64 = 1 << 20;
+    if bytes >= 1 << 30 {
+        format!("{:.1}G", bytes as f64 / (1u64 << 30) as f64)
+    } else {
+        format!("{}M", bytes / MIB)
+    }
+}
+/// Sidebar/title label for a session: "12% 340M".
+fn usage_label(u: Usage) -> String {
+    format!("{:.0}% {}", u.cpu, mem_label(u.mem))
+}
+/// Whole-machine load, refreshed by `sample`.
+#[derive(Default)]
+struct SysUsage {
+    cpu: f32,
+    used: u64,
+    total: u64,
+    prev: Option<CpuTimes>,
+}
+impl SysUsage {
+    fn apply(&mut self, (times, (total, avail)): (CpuTimes, MemInfo)) {
+        if let Some(prev) = self.prev {
+            self.cpu = sys_cpu_percent(prev, times);
+        }
+        self.prev = Some(times);
+        self.total = total;
+        self.used = total.saturating_sub(avail);
+    }
+    fn ram_percent(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            (self.used as f64 / self.total as f64 * 100.0) as f32
+        }
+    }
+    /// Right-hand status bar text: "CPU 23% · RAM 9.7G/16.0G".
+    fn summary(&self) -> String {
+        format!(
+            "CPU {:.0}% · RAM {}/{}",
+            self.cpu,
+            mem_label(self.used),
+            mem_label(self.total)
+        )
+    }
+    /// Yellow past 70%, red past 90% on whichever resource is worse.
+    fn style(&self) -> Style {
+        let load = self.cpu.max(self.ram_percent());
+        if load >= 90.0 {
+            Style::default().fg(Color::Red)
+        } else if load >= 70.0 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        }
+    }
+}
 /// Short uptime label for a running session: "7s", "12m", "3h".
 fn uptime_label(secs: u64) -> String {
     if secs < 60 {
@@ -835,6 +919,9 @@ struct Session {
     scroll: usize,
     started: Option<Instant>,
     announced_exit: bool,
+    usage: Option<Usage>,
+    cpu_prev: u64,
+    sampled: Option<Instant>,
 }
 impl Session {
     fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
@@ -881,6 +968,9 @@ impl Session {
             scroll: 0,
             started: Some(Instant::now()),
             announced_exit: false,
+            usage: None,
+            cpu_prev: 0,
+            sampled: None,
         })
     }
     fn update(&mut self) -> bool {
@@ -926,6 +1016,30 @@ impl Session {
         let max = self.parser.screen().scrollback_len() as isize;
         self.scroll = (self.scroll as isize + delta_rows).clamp(0, max) as usize;
         self.parser.screen_mut().set_scrollback(self.scroll);
+    }
+    /// Record a measurement of this session's process tree taken at `at`.
+    /// CPU needs two samples, so it reads 0% on the first one. Results for
+    /// a previous process (the session was restarted meanwhile) are dropped.
+    fn apply_usage(&mut self, pid: u32, cpu_time: u64, mem: u64, at: Instant, cores: usize) {
+        if self.status != "Running" || self.child.process_id() != Some(pid) {
+            return;
+        }
+        let cpu = self.sampled.map_or(0.0, |prev| {
+            cpu_percent(
+                self.cpu_prev,
+                cpu_time,
+                at.saturating_duration_since(prev).as_secs_f64(),
+                cores,
+            )
+        });
+        self.cpu_prev = cpu_time;
+        self.sampled = Some(at);
+        self.usage = Some(Usage { cpu, mem });
+    }
+    /// Forget usage once the session stops running.
+    fn clear_usage(&mut self) {
+        self.usage = None;
+        self.sampled = None;
     }
     fn scroll_live(&mut self) {
         self.scroll = 0;
@@ -1342,6 +1456,108 @@ fn kill_tree_by_pid(root: u32) {
         }
     }
 }
+/// (CPU time in 100 ns units, working-set bytes) summed over the process
+/// tree rooted at `root`. None when the platform has no probe.
+#[cfg(windows)]
+fn tree_usage(root: u32) -> Option<(u64, u64)> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FALSE, FILETIME},
+        System::{
+            ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
+    };
+    let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let (mut cpu, mut mem) = (0u64, 0u64);
+    for pid in descendant_pids(root) {
+        // SAFETY: read-only queries on a handle we open and close here; a
+        // null handle only means the process is gone or out of reach.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if handle.is_null() {
+                continue;
+            }
+            let zero = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+            if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0 {
+                cpu += ticks(kernel) + ticks(user);
+            }
+            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0 {
+                mem += counters.WorkingSetSize as u64;
+            }
+            CloseHandle(handle);
+        }
+    }
+    Some((cpu, mem))
+}
+#[cfg(not(windows))]
+fn tree_usage(_root: u32) -> Option<(u64, u64)> {
+    None
+}
+/// (idle, kernel, user) system CPU times in 100 ns units.
+type CpuTimes = (u64, u64, u64);
+/// (total, available) physical memory in bytes.
+type MemInfo = (u64, u64);
+#[cfg(windows)]
+fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::{
+            SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
+            Threading::GetSystemTimes,
+        },
+    };
+    let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut idle, mut kernel, mut user) = (zero, zero, zero);
+    // SAFETY: out-pointers reference live locals; dwLength is set as required.
+    unsafe {
+        if GetSystemTimes(&mut idle, &mut kernel, &mut user) == 0 {
+            return None;
+        }
+        let mut mem: MEMORYSTATUSEX = std::mem::zeroed();
+        mem.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut mem) == 0 {
+            return None;
+        }
+        Some((
+            (ticks(idle), ticks(kernel), ticks(user)),
+            (mem.ullTotalPhys, mem.ullAvailPhys),
+        ))
+    }
+}
+#[cfg(not(windows))]
+fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
+    None
+}
+/// One round of measurements, taken off the UI thread.
+struct Measurement {
+    at: Instant,
+    sys: Option<(CpuTimes, MemInfo)>,
+    /// (project index, root pid, cpu ticks, working-set bytes)
+    procs: Vec<(usize, u32, u64, u64)>,
+}
+/// Probe the machine and the given session roots. Walking the process
+/// table can take tens of milliseconds, which is why this never runs on
+/// the thread that draws and reads keys.
+fn measure(roots: &[(usize, u32)]) -> Measurement {
+    Measurement {
+        at: Instant::now(),
+        sys: system_snapshot(),
+        procs: roots
+            .iter()
+            .filter_map(|&(pi, pid)| tree_usage(pid).map(|(cpu, mem)| (pi, pid, cpu, mem)))
+            .collect(),
+    }
+}
 impl Drop for Session {
     fn drop(&mut self) {
         // Sweep the whole tree first: the direct child may already be dead
@@ -1474,6 +1690,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut message = (mode_hints(Mode::Manager).to_string(), Notice::Info);
     let mut dirty = true;
     let mut first = initial.is_some();
+    let cores = thread::available_parallelism().map_or(1, |n| n.get());
+    let mut sys = SysUsage::default();
+    // Measuring walks the process table, so it runs on its own thread and
+    // the UI only ever does a non-blocking `try_recv` for the result.
+    let (req_tx, req_rx) = mpsc::channel::<Vec<(usize, u32)>>();
+    let (res_tx, res_rx) = mpsc::channel::<Measurement>();
+    thread::spawn(move || {
+        for roots in req_rx {
+            if res_tx.send(measure(&roots)).is_err() {
+                break;
+            }
+        }
+    });
+    let sample_every = Duration::from_secs(2);
+    // Start "overdue" so the first numbers appear immediately.
+    let mut last_sample = Instant::now()
+        .checked_sub(sample_every)
+        .unwrap_or_else(Instant::now);
+    let mut sampling = false;
     let mut tick: u64 = 0;
     loop {
         let area = terminal.size()?;
@@ -1494,6 +1729,33 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     Some(e) => message = (e, Notice::Error),
                 }
             }
+        }
+        while let Ok(m) = res_rx.try_recv() {
+            sampling = false;
+            if let Some(snap) = m.sys {
+                sys.apply(snap);
+            }
+            for (pi, pid, cpu_time, mem) in m.procs {
+                if let Some(Some(s)) = sessions.get_mut(pi) {
+                    s.apply_usage(pid, cpu_time, mem, m.at, cores);
+                }
+            }
+            dirty = true;
+        }
+        if !sampling && last_sample.elapsed() >= sample_every {
+            let mut roots = Vec::new();
+            for (pi, slot) in sessions.iter_mut().enumerate() {
+                if let Some(s) = slot {
+                    match s.child.process_id().filter(|_| s.status == "Running") {
+                        Some(pid) => roots.push((pi, pid)),
+                        None => s.clear_usage(),
+                    }
+                }
+            }
+            if req_tx.send(roots).is_ok() {
+                sampling = true;
+            }
+            last_sample = Instant::now();
         }
         for (pi, slot) in sessions.iter_mut().enumerate() {
             if let Some(s) = slot {
@@ -1556,6 +1818,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     if let Some(started) = s.started {
                                         detail.push(' ');
                                         detail.push_str(&uptime_label(started.elapsed().as_secs()));
+                                    }
+                                    if let Some(u) = s.usage {
+                                        detail.push(' ');
+                                        detail.push_str(&usage_label(u));
                                     }
                                 }
                             }
@@ -1638,6 +1904,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref()))
                     .map(|s| (s.status.as_str(), s.started.map(|t| t.elapsed().as_secs())))
                     .unwrap_or(("Stopped", None));
+                let usage_note = sel_pi
+                    .and_then(|pi| sessions.get(pi))
+                    .and_then(|o| o.as_ref())
+                    .and_then(|s| s.usage)
+                    .map(|u| format!(" · {}", usage_label(u)))
+                    .unwrap_or_default();
                 let title = sel_pi
                     .and_then(|pi| c.projects.get(pi))
                     .map(|p| {
@@ -1676,7 +1948,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     Style::default().fg(Color::DarkGray)
                                 },
                             ),
-                            Span::raw(format!("{scroll_note}]")),
+                            Span::raw(format!("{usage_note}{scroll_note}]")),
                         ])
                     })
                     .unwrap_or_else(|| Line::from("No projects: squad add <path>"));
@@ -1792,11 +2064,24 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .flatten()
                     .filter(|s| needs_attention(&s.status))
                     .count();
+                // Machine load is shown only when the bar has room for it.
+                let sys_text = if area.width >= 70 && sys.total > 0 {
+                    sys.summary()
+                } else {
+                    String::new()
+                };
+                let sys_w = if sys_text.is_empty() {
+                    0
+                } else {
+                    sys_text.chars().count() as u16 + 3
+                };
                 let status_row = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
                         Constraint::Min(1),
-                        Constraint::Length(summary_width(running_n, c.projects.len(), failed_n)),
+                        Constraint::Length(
+                            summary_width(running_n, c.projects.len(), failed_n) + sys_w,
+                        ),
                     ])
                     .split(vertical[1]);
                 let input_w =
@@ -1838,14 +2123,22 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     bar.push(Span::styled(message.0.clone(), notice_style(message.1)));
                 }
                 f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
-                let mut right = vec![Span::styled(
+                let mut right = Vec::new();
+                if !sys_text.is_empty() {
+                    right.push(Span::styled(sys_text, sys.style()));
+                    right.push(Span::styled(
+                        " · ".to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                right.push(Span::styled(
                     fleet_summary(running_n, c.projects.len()),
                     if running_n > 0 {
                         Style::default().fg(Color::Green)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
-                )];
+                ));
                 if failed_n > 0 {
                     right.push(Span::styled(
                         format!(" ✖ {failed_n}"),
@@ -3052,6 +3345,114 @@ mod tests {
             key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), true),
             b"\x1bOA"
         );
+    }
+    #[test]
+    fn cpu_percent_normalizes_by_cores() {
+        // 1 s of CPU time (1e7 ticks) over 1 s wall on 4 cores = 25%.
+        assert_eq!(cpu_percent(0, 10_000_000, 1.0, 4), 25.0);
+        assert_eq!(cpu_percent(10, 10, 1.0, 4), 0.0);
+        // A shrinking tree (a child exited) never goes negative.
+        assert_eq!(cpu_percent(500, 100, 1.0, 4), 0.0);
+        assert_eq!(cpu_percent(0, 1, 0.0, 4), 0.0, "zero interval");
+        assert_eq!(cpu_percent(0, u64::MAX, 1.0, 1), 100.0, "clamped");
+    }
+    #[test]
+    fn sys_cpu_percent_uses_idle_share() {
+        // Over the interval: 100 ticks total, 75 of them idle => 25% busy.
+        assert_eq!(sys_cpu_percent((0, 0, 0), (75, 80, 20)), 25.0);
+        assert_eq!(
+            sys_cpu_percent((5, 10, 10), (5, 10, 10)),
+            0.0,
+            "no time passed"
+        );
+    }
+    #[test]
+    fn mem_and_usage_labels() {
+        assert_eq!(mem_label(0), "0M");
+        assert_eq!(mem_label(340 << 20), "340M");
+        assert_eq!(mem_label(1 << 30), "1.0G");
+        assert_eq!(mem_label(5 * (1 << 29)), "2.5G");
+        let u = Usage {
+            cpu: 12.4,
+            mem: 340 << 20,
+        };
+        assert_eq!(usage_label(u), "12% 340M");
+        let sys = SysUsage {
+            cpu: 23.0,
+            used: 5 << 30,
+            total: 16 << 30,
+            prev: None,
+        };
+        assert_eq!(sys.summary(), "CPU 23% · RAM 5.0G/16.0G");
+        assert_eq!(sys.style().fg, Some(Color::DarkGray));
+        let hot = SysUsage { cpu: 95.0, ..sys };
+        assert_eq!(hot.style().fg, Some(Color::Red));
+        let warm = SysUsage {
+            cpu: 1.0,
+            used: 12 << 30,
+            total: 16 << 30,
+            prev: None,
+        };
+        assert_eq!(warm.style().fg, Some(Color::Yellow), "75% RAM warns");
+    }
+    #[test]
+    #[cfg(windows)]
+    fn probes_read_real_numbers() {
+        let (times, (total, avail)) = system_snapshot().expect("system snapshot");
+        assert!(total > 0 && avail <= total);
+        assert!(times.1 + times.2 > 0);
+        let (cpu, mem) = tree_usage(std::process::id()).expect("tree usage");
+        assert!(cpu > 0, "this test process has used some CPU");
+        assert!(mem > 0, "this test process has a working set");
+        let mut s = SysUsage::default();
+        s.apply(system_snapshot().unwrap());
+        std::thread::sleep(Duration::from_millis(50));
+        s.apply(system_snapshot().unwrap());
+        assert!(s.total > 0 && s.used > 0 && (0.0..=100.0).contains(&s.cpu));
+        // Cost of one round on this machine; it is why measuring is off-thread.
+        let t = Instant::now();
+        let m = measure(&[(0, std::process::id())]);
+        eprintln!("measure() took {:?}", t.elapsed());
+        assert_eq!(m.procs.len(), 1);
+    }
+    #[test]
+    #[cfg(windows)]
+    fn session_sampling_tracks_a_live_tree() {
+        let p = Project {
+            name: "usage".into(),
+            path: env::current_dir().unwrap(),
+            command: vec![
+                "cmd.exe".into(),
+                "/d".into(),
+                "/c".into(),
+                "timeout".into(),
+                "/t".into(),
+                "20".into(),
+                "/nobreak".into(),
+            ],
+            kind: Kind::Agent,
+        };
+        let mut s = Session::spawn(&p, 24, 80).unwrap();
+        let pid = s.child.process_id().expect("pid");
+        assert!(s.usage.is_none());
+        let first = measure(&[(0, pid)]);
+        let (_, _, cpu, mem) = first.procs[0];
+        s.apply_usage(pid, cpu, mem, first.at, 4);
+        let u = s.usage.expect("running session reports usage");
+        assert!(u.mem > 0);
+        assert_eq!(u.cpu, 0.0, "first sample has no baseline");
+        let second = measure(&[(0, pid)]);
+        let (_, _, cpu, mem) = second.procs[0];
+        s.apply_usage(pid, cpu, mem, second.at, 4);
+        assert!(s.usage.unwrap().cpu >= 0.0);
+        // A result for some other process (restarted session) is ignored.
+        let before = s.usage;
+        s.apply_usage(pid + 1, 1, 1, Instant::now(), 4);
+        assert_eq!(s.usage, before);
+        // A finished session stops reporting.
+        s.status = "Exited (0)".into();
+        s.clear_usage();
+        assert!(s.usage.is_none());
     }
     #[test]
     fn hints_and_help_stay_in_sync() {

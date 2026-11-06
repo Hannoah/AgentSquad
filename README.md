@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.2
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.3
 ```
 
 To install elsewhere:
@@ -73,14 +73,21 @@ and `start`.
 
 - **Left:** project list, grouped under **Agents** and **Services** headers,
   each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: …`).
-  Running rows spin while active and show uptime (`Running 3m`).
+  Running rows spin while active and show uptime plus the session's CPU and
+  memory (`Running 3m 12% 340M`). Usage covers the whole process tree
+  (the agent and everything it spawned); CPU is a share of the entire
+  machine, like Task Manager, and memory is the summed working set.
   Group headers show running/total counts (`Agents (1/2)`).
   Service rows also show their command; agent rows show their program
   unless it is the default shell.
 - **Right:** the selected session's terminal output (full xterm emulation:
   colors, bold/italic/underline, cursor positioning).
 - **Bottom:** a one-line status bar with hints, which doubles as the input
-  line for send/filter mode and a popup host for help.
+  line for send/filter mode and a popup host for help. Its right side shows
+  whole-PC load (`CPU 23% · RAM 9.7G/16.0G`, yellow past 70%, red past 90%;
+  hidden on terminals narrower than 70 columns) next to the running count.
+  Usage is sampled every 2 seconds on a background thread, so it never
+  slows typing or redraws.
 
 ### Keys
 
