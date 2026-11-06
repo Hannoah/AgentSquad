@@ -542,6 +542,15 @@ fn scroll_selected(
         }
     }
 }
+/// Sidebar title: plain normally, `AgentSquad (shown/total)` while a
+/// filter hides projects.
+fn list_title(total: usize, shown: usize) -> String {
+    if shown == total {
+        "AgentSquad".to_string()
+    } else {
+        format!("AgentSquad ({shown}/{total})")
+    }
+}
 /// (running, total) projects of one kind. `running[i]` mirrors
 /// `projects[i]` and reports whether that project is up right now.
 fn group_counts(projects: &[Project], running: &[bool], kind: Kind) -> (usize, usize) {
@@ -842,7 +851,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Rounded)
-                                .title("AgentSquad"),
+                                .title(list_title(c.projects.len(), order.len())),
                         ),
                         panels[0],
                     );
@@ -1979,6 +1988,12 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn list_title_shows_filter_counts() {
+        assert_eq!(list_title(5, 5), "AgentSquad");
+        assert_eq!(list_title(0, 0), "AgentSquad");
+        assert_eq!(list_title(5, 2), "AgentSquad (2/5)");
     }
     #[test]
     fn group_counts_split_by_kind() {
