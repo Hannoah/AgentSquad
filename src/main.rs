@@ -686,8 +686,30 @@ fn color(c: vt100::Color) -> Color {
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
+/// CSI cursor key: modified keys always use the `CSI 1 ; param` form,
+/// unmodified keys honor application-cursor mode.
+fn arrow_bytes(letter: u8, app_cursor: bool, shift: bool, ctrl: bool) -> Vec<u8> {
+    if shift || ctrl {
+        let param = 1 + (shift as u8) + 4 * (ctrl as u8);
+        format!("\x1b[1;{param}{}", letter as char).into_bytes()
+    } else if app_cursor {
+        vec![27, b'O', letter]
+    } else {
+        vec![27, b'[', letter]
+    }
+}
+/// `CSI n ~` key (Delete/Insert/PageUp/PageDown) with xterm modifiers.
+fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
+    if shift || ctrl {
+        let param = 1 + (shift as u8) + 4 * (ctrl as u8);
+        format!("\x1b[{n};{param}~").into_bytes()
+    } else {
+        format!("\x1b[{n}~").into_bytes()
+    }
+}
 fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
     let mut bytes = match k.code {
         KeyCode::Char(c) if ctrl && c.is_ascii() => vec![(c.to_ascii_lowercase() as u8) & 0x1f],
         KeyCode::Char(c) => c.to_string().into_bytes(),
@@ -696,16 +718,16 @@ fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
         KeyCode::Tab => vec![9],
         KeyCode::Esc => vec![27],
         KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Up => if app_cursor { b"\x1bOA" } else { b"\x1b[A" }.to_vec(),
-        KeyCode::Down => if app_cursor { b"\x1bOB" } else { b"\x1b[B" }.to_vec(),
-        KeyCode::Right => if app_cursor { b"\x1bOC" } else { b"\x1b[C" }.to_vec(),
-        KeyCode::Left => if app_cursor { b"\x1bOD" } else { b"\x1b[D" }.to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Up => arrow_bytes(b'A', app_cursor, shift, ctrl),
+        KeyCode::Down => arrow_bytes(b'B', app_cursor, shift, ctrl),
+        KeyCode::Right => arrow_bytes(b'C', app_cursor, shift, ctrl),
+        KeyCode::Left => arrow_bytes(b'D', app_cursor, shift, ctrl),
+        KeyCode::Home => arrow_bytes(b'H', false, shift, ctrl),
+        KeyCode::End => arrow_bytes(b'F', false, shift, ctrl),
+        KeyCode::Delete => tilde_bytes(3, shift, ctrl),
+        KeyCode::Insert => tilde_bytes(2, shift, ctrl),
+        KeyCode::PageUp => tilde_bytes(5, shift, ctrl),
+        KeyCode::PageDown => tilde_bytes(6, shift, ctrl),
         _ => Vec::new(),
     };
     if k.modifiers.contains(KeyModifiers::ALT) && !bytes.is_empty() {
@@ -1909,6 +1931,21 @@ mod tests {
             key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), true),
             b"\x1bOA"
         );
+    }
+    #[test]
+    fn key_bytes_encodes_modifiers() {
+        use crossterm::event::KeyModifiers as M;
+        let ev = |code, mods| KeyEvent::new(code, mods);
+        assert_eq!(key_bytes(ev(KeyCode::Left, M::NONE), false), b"\x1b[D");
+        assert_eq!(key_bytes(ev(KeyCode::Left, M::SHIFT), false), b"\x1b[1;2D");
+        assert_eq!(key_bytes(ev(KeyCode::Up, M::CONTROL), true), b"\x1b[1;5A");
+        assert_eq!(key_bytes(ev(KeyCode::Home, M::SHIFT), false), b"\x1b[1;2H");
+        assert_eq!(
+            key_bytes(ev(KeyCode::Delete, M::CONTROL), false),
+            b"\x1b[3;5~"
+        );
+        // Alt keeps the ESC-prefix form on top of the base sequence.
+        assert_eq!(key_bytes(ev(KeyCode::Up, M::ALT), false), b"\x1b\x1b[A");
     }
     #[test]
     fn terminal_parser() {
