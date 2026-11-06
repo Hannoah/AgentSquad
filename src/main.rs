@@ -734,6 +734,15 @@ fn sidebar_width(area_w: u16) -> u16 {
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
 }
+/// Width of the right-hand fleet summary so the layout reserves enough
+/// room for the failure alert instead of clipping it.
+fn summary_width(running: usize, total: usize, failed: usize) -> u16 {
+    let mut w = fleet_summary(running, total).chars().count();
+    if failed > 0 {
+        w += format!(" ✖ {failed}").chars().count();
+    }
+    (w + 1) as u16
+}
 /// Sidebar border: bright cyan while navigating, dimmed once typing
 /// moves into the terminal pane. Mirrors `pane_border_style` so exactly
 /// one panel looks active at a time.
@@ -1286,9 +1295,22 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     ),
                     Span::raw(" "),
                 ];
+                let running_n = sessions
+                    .iter()
+                    .flatten()
+                    .filter(|s| s.status == "Running")
+                    .count();
+                let failed_n = sessions
+                    .iter()
+                    .flatten()
+                    .filter(|s| needs_attention(&s.status))
+                    .count();
                 let status_row = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(1), Constraint::Length(12)])
+                    .constraints([
+                        Constraint::Min(1),
+                        Constraint::Length(summary_width(running_n, c.projects.len(), failed_n)),
+                    ])
                     .split(vertical[1]);
                 let input_w =
                     (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
@@ -1324,17 +1346,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 } else {
                     bar.push(Span::raw(message.clone()));
                 }
-                let running_n = sessions
-                    .iter()
-                    .flatten()
-                    .filter(|s| s.status == "Running")
-                    .count();
                 f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
-                let failed_n = sessions
-                    .iter()
-                    .flatten()
-                    .filter(|s| needs_attention(&s.status))
-                    .count();
                 let mut right = vec![Span::styled(
                     fleet_summary(running_n, c.projects.len()),
                     if running_n > 0 {
@@ -2596,6 +2608,14 @@ mod tests {
     fn fleet_summary_counts() {
         assert_eq!(fleet_summary(2, 5), "● 2/5");
         assert_eq!(fleet_summary(0, 0), "● 0/0");
+    }
+    #[test]
+    fn summary_width_fits_alert() {
+        assert_eq!(summary_width(2, 5, 0), ("● 2/5".chars().count() + 1) as u16);
+        assert_eq!(
+            summary_width(12, 34, 5),
+            ("● 12/34".chars().count() + " ✖ 5".chars().count() + 1) as u16
+        );
     }
     #[test]
     fn sidebar_border_marks_focus() {
