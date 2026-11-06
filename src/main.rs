@@ -878,6 +878,30 @@ fn keep_visible(offset: usize, sel_row: usize, visible: usize) -> usize {
         offset
     }
 }
+/// Selected sidebar row: bright cyan on dark gray so it wins over every
+/// other hue in the row.
+fn selected_row_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .bg(Color::DarkGray)
+        .add_modifier(ratatui::style::Modifier::BOLD)
+}
+/// Sidebar project name: selection highlight wins; otherwise the kind
+/// hue, bright while running and dimmed while idle, so Agents and
+/// Services read apart at a glance.
+fn row_name_style(selected: bool, status: &str, kind: Kind) -> Style {
+    if selected {
+        selected_row_style()
+    } else if status == "Running" {
+        Style::default()
+            .fg(kind_color(kind))
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(kind_color(kind))
+            .add_modifier(ratatui::style::Modifier::DIM)
+    }
+}
 /// Split a sidebar row's inner width into (status, name, detail) budgets.
 /// The list widget clips anything past the row width, so the status head
 /// is reserved first; the name takes what it needs and the detail gets
@@ -1238,10 +1262,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             }
                             let mark = if Some(pi) == sel_pi { ">" } else { " " };
                             let row_style = if Some(pi) == sel_pi {
-                                Style::default()
-                                    .fg(Color::Cyan)
-                                    .bg(Color::DarkGray)
-                                    .add_modifier(ratatui::style::Modifier::BOLD)
+                                selected_row_style()
                             } else if status == "Running" {
                                 Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                             } else {
@@ -1272,7 +1293,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Span::styled(prefix, row_style),
                                 Span::styled(fit(&status_full, status_w), status_span_style),
                                 Span::raw(" "),
-                                Span::styled(fit(&p.name, name_w), row_style),
+                                Span::styled(
+                                    fit(&p.name, name_w),
+                                    row_name_style(Some(pi) == sel_pi, status, p.kind),
+                                ),
                                 Span::styled(fit(&detail, detail_w), detail_style),
                             ])));
                         }
@@ -2684,6 +2708,26 @@ mod tests {
         assert_eq!(keep_visible(5, 3, 10), 3);
         assert_eq!(keep_visible(5, 5, 10), 5);
         assert_eq!(keep_visible(0, 5, 0), 0);
+    }
+    #[test]
+    fn row_name_style_marks_kind() {
+        use ratatui::style::Modifier as M;
+        assert_eq!(
+            row_name_style(true, "Running", Kind::Agent),
+            selected_row_style()
+        );
+        assert_eq!(
+            row_name_style(false, "Running", Kind::Service),
+            Style::default().fg(Color::Magenta).add_modifier(M::BOLD)
+        );
+        assert_eq!(
+            row_name_style(false, "Stopped", Kind::Agent),
+            Style::default().fg(Color::Cyan).add_modifier(M::DIM)
+        );
+        assert_eq!(
+            row_name_style(false, "Exited (1)", Kind::Service),
+            Style::default().fg(Color::Magenta).add_modifier(M::DIM)
+        );
     }
     #[test]
     fn sidebar_width_scales() {
