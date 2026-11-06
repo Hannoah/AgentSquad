@@ -683,7 +683,19 @@ fn scroll_selected(
 /// the width (clamped) otherwise so names and commands stay readable.
 /// `squad list` rows in manager (agents-first) order, with the name
 /// and kind columns padded so they line up in a terminal.
-fn list_table(projects: &[Project]) -> Vec<String> {
+/// Paint the kind column of `squad list` with the same hue as the TUI
+/// sidebar. Plain text when `enabled` is false so piped output stays clean.
+fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
+    if !enabled {
+        return cell.to_string();
+    }
+    use crossterm::style::Stylize;
+    match kind {
+        Kind::Agent => cell.cyan().to_string(),
+        Kind::Service => cell.magenta().to_string(),
+    }
+}
+fn list_table(projects: &[Project], color: bool) -> Vec<String> {
     let order = display_order(projects);
     let name_w = order
         .iter()
@@ -699,10 +711,10 @@ fn list_table(projects: &[Project]) -> Vec<String> {
         .iter()
         .map(|&i| {
             let p = &projects[i];
+            let kind = paint_kind(&format!("{:<kind_w$}", p.kind.as_str()), p.kind, color);
             format!(
-                "{:<name_w$}  {:<kind_w$}  {}  {}",
+                "{:<name_w$}  {kind}  {}  {}",
                 p.name,
-                p.kind.as_str(),
                 p.path.display(),
                 p.command.join(" ")
             )
@@ -2015,7 +2027,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
-            for line in list_table(&c.projects) {
+            // Colors only on a real terminal; pipes and NO_COLOR stay plain.
+            let color = io::stdout().is_terminal() && env::var("NO_COLOR").is_err();
+            for line in list_table(&c.projects, color) {
                 println!("{line}");
             }
             Ok(())
@@ -2480,13 +2494,19 @@ mod tests {
             mk("web", Kind::Agent, &["claude"]),
         ];
         assert_eq!(
-            list_table(&projects),
+            list_table(&projects, false),
             vec![
                 "web  agent    /tmp  claude".to_string(),
                 "api  service  /tmp  node server.js".to_string(),
             ]
         );
-        assert!(list_table(&[]).is_empty());
+        assert!(list_table(&[], false).is_empty());
+        let colored = list_table(&projects, true).join("\n");
+        assert!(colored.contains("agent"), "kind text stays readable");
+        assert!(
+            colored.contains("\x1b["),
+            "terminal output carries ANSI colors"
+        );
     }
     #[test]
     fn sidebar_width_scales() {
@@ -2620,6 +2640,16 @@ mod tests {
             None,
             "hand-written configs may omit the command"
         );
+    }
+    #[test]
+    fn paint_kind_matches_tui_hues() {
+        assert_eq!(paint_kind("agent  ", Kind::Agent, false), "agent  ");
+        assert_eq!(paint_kind("service", Kind::Service, false), "service");
+        let agent = paint_kind("agent  ", Kind::Agent, true);
+        let service = paint_kind("service", Kind::Service, true);
+        assert_ne!(agent, service, "kinds stay distinguishable");
+        assert!(agent.contains("agent  "));
+        assert!(service.contains("service"));
     }
     #[test]
     fn kind_colors_are_distinct() {
