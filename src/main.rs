@@ -1620,7 +1620,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     );
                 }
                 if adding {
-                    let popup = centered_rect(70, 60, f.area());
+                    let popup = centered_rect(70, 40, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
                     let kind_hint = if add_kind == Kind::Agent {
                         "agent (Space toggles)"
