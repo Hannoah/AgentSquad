@@ -296,6 +296,18 @@ fn status_style(status: &str) -> Style {
         Style::default().fg(Color::DarkGray)
     }
 }
+/// Status segment for the terminal pane title: "◐ Running 7s".
+/// Reuses the sidebar glyph and color language so both panels read as one.
+fn pane_status_text(status: &str, uptime_secs: Option<u64>, tick: u64) -> String {
+    let mut text = format!("{} {status}", status_glyph(status, tick));
+    if status == "Running" {
+        if let Some(secs) = uptime_secs {
+            text.push(' ');
+            text.push_str(&uptime_label(secs));
+        }
+    }
+    text
+}
 fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      start / focus session",
@@ -1108,6 +1120,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     );
                 }
                 let sel_pi = order.get(selected).copied();
+                let (sel_status, sel_uptime): (&str, Option<u64>) = sel_pi
+                    .and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref()))
+                    .map(|s| (s.status.as_str(), s.started.map(|t| t.elapsed().as_secs())))
+                    .unwrap_or(("Stopped", None));
                 let title = sel_pi
                     .and_then(|pi| c.projects.get(pi))
                     .map(|p| {
@@ -1128,6 +1144,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 p.kind.as_str(),
                                 Style::default()
                                     .fg(kind_color(p.kind))
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                            Span::raw(" · "),
+                            Span::styled(
+                                pane_status_text(sel_status, sel_uptime, tick),
+                                status_style(sel_status)
                                     .add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                             Span::styled(
@@ -2563,6 +2585,19 @@ mod tests {
         assert_eq!(live_session_count(&empty), 0);
         let prompt = confirm_quit_prompt(2);
         assert!(prompt.contains('2'), "prompt names the count");
+    }
+    #[test]
+    fn pane_status_text_shows_state() {
+        assert_eq!(
+            pane_status_text("Running", Some(125), 0),
+            format!("{} Running 2m", spinner_frame(0))
+        );
+        assert_eq!(
+            pane_status_text("Running", None, 3),
+            format!("{} Running", spinner_frame(3))
+        );
+        assert_eq!(pane_status_text("Stopped", None, 9), "● Stopped");
+        assert_eq!(pane_status_text("Exited (1)", None, 9), "● Exited (1)");
     }
     #[test]
     fn uptime_labels_scale() {
