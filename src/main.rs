@@ -1095,36 +1095,90 @@ fn start_session(
     }
     restart_session(sessions, projects, pi, rows, cols)
 }
-/// Best-effort kill of the whole process tree.
+/// Every PID in the process tree rooted at `root`, parents before children.
 ///
-/// Agent sessions are usually grandchildren (e.g. `cmd.exe -> node.exe` for
-/// `cmd /d /c claude`). Terminating only the direct child orphans the real
-/// agent, which keeps running (and keeps its ports). `taskkill /T /F` takes
-/// down the tree; on failure the caller falls back to `Child::kill`.
+/// Agent sessions often outlive their wrapper: `cmd /d /c start ...` exits
+/// at once while the real agent keeps running as a grandchild. Toolhelp32
+/// still reports the original parent PID after the parent exits, so walking
+/// the snapshot finds those orphans where a live-child-only kill misses them.
+/// Returns empty when the snapshot cannot be taken.
 #[cfg(windows)]
-fn kill_tree(child: &dyn Child) -> bool {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let Some(pid) = child.process_id() else {
-        return false;
+fn descendant_pids(root: u32) -> Vec<u32> {
+    use std::collections::HashMap;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FALSE, INVALID_HANDLE_VALUE},
+        System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
     };
-    std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut ordered = Vec::new();
+    // SAFETY: process snapshot of our own machine; the handle is closed below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return ordered;
+    }
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    // SAFETY: dwSize is initialized; the API fills the remaining fields.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    // SAFETY: `entry` stays a valid buffer for the whole walk.
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while more != FALSE {
+        children
+            .entry(entry.th32ParentProcessID)
+            .or_default()
+            .push(entry.th32ProcessID);
+        // SAFETY: same valid buffer as above.
+        more = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+    unsafe { CloseHandle(snapshot) };
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        ordered.push(pid);
+        if let Some(kids) = children.remove(&pid) {
+            stack.extend(kids);
+        }
+    }
+    ordered
+}
+
+/// Best-effort kill of a whole process tree by PID, leaves first.
+///
+/// Terminates every enumerated descendant (and the root) directly instead of
+/// asking a live wrapper to take its tree down, so already-orphaned
+/// grandchildren die too. Missing or denied PIDs are skipped silently.
+#[cfg(windows)]
+fn kill_tree_by_pid(root: u32) {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FALSE},
+        System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE},
+    };
+    let mut pids = descendant_pids(root);
+    pids.reverse();
+    for pid in pids {
+        // SAFETY: terminating processes inside our own session tree; a null
+        // handle only means the PID is already gone or out of reach.
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+            if handle.is_null() {
+                continue;
+            }
+            TerminateProcess(handle, 1);
+            CloseHandle(handle);
+        }
+    }
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        // Sweep the whole tree first: the direct child may already be dead
+        // while orphaned grandchildren (the real agent) live on.
+        #[cfg(windows)]
+        if let Some(pid) = self.child.process_id() {
+            kill_tree_by_pid(pid);
+        }
         if self.child.try_wait().ok().flatten().is_none() {
-            #[cfg(windows)]
-            let tree_killed = kill_tree(self.child.as_ref());
-            #[cfg(not(windows))]
-            let tree_killed = false;
-            if !tree_killed {
-                let _ = self.child.kill();
-            }
+            let _ = self.child.kill();
             let _ = self.child.wait();
         }
     }
@@ -2526,6 +2580,60 @@ mod tests {
             "process tree survived stop: parent alive={} kids={:?}",
             pid_alive(pid),
             grandkids
+                .iter()
+                .map(|g| (*g, pid_alive(*g)))
+                .collect::<Vec<_>>()
+        );
+    }
+    #[test]
+    #[cfg(windows)]
+    fn stop_kills_orphaned_grandchildren() {
+        // A `start`ed grandchild outlives its wrapper: the direct child is
+        // already dead when the session drops, yet the orphan must still die.
+        let p = Project {
+            name: "orphankill".into(),
+            path: env::current_dir().unwrap(),
+            command: vec![
+                "cmd.exe".into(),
+                "/d".into(),
+                "/c".into(),
+                "start".into(),
+                "/min".into(),
+                "ping".into(),
+                // Long-lived on purpose: the stop poll below stretches over
+                // tens of seconds (one powershell probe per PID per round),
+                // so a short ping would die naturally and fake a pass.
+                "-n".into(),
+                "300".into(),
+                "127.0.0.1".into(),
+            ],
+            kind: Kind::Agent,
+        };
+        let mut s = Session::spawn(&p, 24, 80).unwrap();
+        let pid = s.child.process_id().expect("pty child pid");
+        let mut orphans: Vec<u32> = Vec::new();
+        for _ in 0..100 {
+            let wrapper_dead = s.child.try_wait().ok().flatten().is_some();
+            orphans = descendant_pids(pid)
+                .into_iter()
+                .filter(|p| *p != pid)
+                .collect();
+            if wrapper_dead && !orphans.is_empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!orphans.is_empty(), "orphan never appeared");
+        drop(s);
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(100));
+            if orphans.iter().all(|g| !pid_alive(*g)) {
+                return;
+            }
+        }
+        panic!(
+            "orphaned grandchild survived stop: {:?}",
+            orphans
                 .iter()
                 .map(|g| (*g, pid_alive(*g)))
                 .collect::<Vec<_>>()
