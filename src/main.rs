@@ -1600,7 +1600,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
-            for p in c.projects {
+            // Same agents-first order as the manager sidebar.
+            for &pi in display_order(&c.projects).iter() {
+                let p = &c.projects[pi];
                 println!(
                     "{}\t{}\t{}\t{}",
                     p.name,
