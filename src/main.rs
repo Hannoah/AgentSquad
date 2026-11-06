@@ -84,7 +84,12 @@ fn load_from(p: &Path) -> Result<Config> {
         return Ok(Config::default());
     }
     let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
-    toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))
+    let mut config: Config =
+        toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))?;
+    for proj in &mut config.projects {
+        proj.path = plain_path(proj.path.clone());
+    }
+    Ok(config)
 }
 fn load() -> Result<Config> {
     let p = config_path()?;
@@ -207,8 +212,28 @@ fn display_order(projects: &[Project]) -> Vec<usize> {
 }
 /// Validate raw add-form input into a Project without touching disk state.
 ///
-/// Services may leave the path empty: they run in squad's own working
-/// directory and take their name from the served program instead of a folder.
+/// Find a unique project name by appending `-2`, `-3`, ... when `base` is taken.
+fn unique_name(base: &str, existing: &[Project]) -> String {
+    if !existing.iter().any(|p| p.name.eq_ignore_ascii_case(base)) {
+        return base.to_string();
+    }
+    let mut i = 2;
+    loop {
+        let candidate = format!("{base}-{i}");
+        if !existing
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+/// Build and validate a project from user inputs.
+///
+/// Services take their name from the program being run and can share a directory
+/// with other services (unique names like `node-2` are assigned automatically).
+/// Agents require an explicit path and default to the directory's name.
 fn build_project(
     existing: &[Project],
     path_raw: &str,
@@ -232,14 +257,18 @@ fn build_project(
     if dir_name.is_empty() {
         return Err("Cannot use filesystem root as project.".into());
     }
-    let name = if trimmed.is_empty() {
-        program_name(&parts).unwrap_or(dir_name)
+    let name = if kind == Kind::Service {
+        let base = program_name(&parts).unwrap_or(dir_name);
+        unique_name(&base, existing)
     } else {
+        if existing
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&dir_name))
+        {
+            return Err(format!("Project name already registered: {dir_name}"));
+        }
         dir_name
     };
-    if existing.iter().any(|p| p.name.eq_ignore_ascii_case(&name)) {
-        return Err(format!("Project name already registered: {name}"));
-    }
     let command = if parts.is_empty() { shell() } else { parts };
     Ok(Project {
         name,
@@ -1508,7 +1537,9 @@ fn restart_session(
     cols: u16,
 ) -> Option<String> {
     if let Some(slot) = sessions.get_mut(pi) {
-        *slot = None;
+        if let Some(old) = slot.take() {
+            thread::spawn(move || drop(old));
+        }
     }
     let Some(p) = projects.get(pi) else {
         return Some(format!("No such project #{pi}"));
@@ -1809,7 +1840,12 @@ struct ScreenGuard;
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        );
     }
 }
 fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
@@ -1818,9 +1854,14 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     }
     enable_raw_mode()?;
     let _guard = ScreenGuard;
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    execute!(io::stdout(), EnableMouseCapture)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        crossterm::cursor::Hide
+    )?;
+    let stdout = io::BufWriter::new(io::stdout());
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut sessions: Vec<Option<Session>> = (0..c.projects.len()).map(|_| None).collect();
     let mut order = display_order(&c.projects);
     let mut selected = initial
@@ -1884,16 +1925,18 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         });
     }
     let mut tick: u64 = 0;
+    let mut last_anim_tick = Instant::now();
     loop {
         let area = terminal.size()?;
         let sidebar = sidebar_width(area.width);
         let rows = area.height.saturating_sub(3).max(1);
         let cols = area.width.saturating_sub(sidebar).saturating_sub(2).max(1);
-        tick = tick.wrapping_add(1);
-        // The periodic redraw only animates spinners and uptimes, so skip
-        // it while nothing is running.
-        if tick.is_multiple_of(3) && sessions.iter().flatten().any(|s| s.status == "Running") {
-            dirty = true;
+        if last_anim_tick.elapsed() >= Duration::from_millis(200) {
+            last_anim_tick = Instant::now();
+            tick = tick.wrapping_add(1);
+            if sessions.iter().flatten().any(|s| s.status == "Running") {
+                dirty = true;
+            }
         }
         if first {
             first = false;
@@ -2031,7 +2074,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                         detail.push_str(&uptime_label(started.elapsed().as_secs()));
                                     }
                                     if let Some(u) = s.usage {
-                                        detail.push(' ');
+                                        detail.push_str(" · ");
                                         detail.push_str(&usage_label(u));
                                     }
                                 }
@@ -2043,7 +2086,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 detail.push(' ');
                                 detail.push_str(tag);
                             }
-                            let mark = if Some(pi) == sel_pi { ">" } else { " " };
+                            let mark = if Some(pi) == sel_pi { "▎" } else { " " };
                             let row_style = if Some(pi) == sel_pi {
                                 selected_row_style()
                             } else if status == "Running" {
@@ -2062,7 +2105,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Style::default().fg(Color::DarkGray)
                             };
                             let prefix = format!("{mark}{n} ");
-                            let status_full = format!("{} {status}", status_glyph(status, tick));
+                            let status_full = if status == "Running" {
+                                format!("{}", status_glyph(status, tick))
+                            } else {
+                                format!("{} {status}", status_glyph(status, tick))
+                            };
                             let (status_w, name_w, detail_w) = row_widths(
                                 inner_w,
                                 prefix.chars().count(),
@@ -2131,6 +2178,17 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             .filter(|&n| n > 0)
                             .map(|n| format!(" · ⇅{n}"))
                             .unwrap_or_default();
+                        let focus_label = if panels[1].width >= 60 {
+                            if focus {
+                                " · INPUT (Ctrl+Q to exit)"
+                            } else {
+                                " · PREVIEW (Enter to type)"
+                            }
+                        } else if focus {
+                            " · INPUT"
+                        } else {
+                            " · MANAGER"
+                        };
                         Line::from(vec![
                             Span::styled(
                                 p.name.clone(),
@@ -2150,7 +2208,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     .add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                             Span::styled(
-                                format!(" · {}", if focus { "INPUT" } else { "MANAGER" }),
+                                focus_label,
                                 if focus {
                                     Style::default()
                                         .fg(Color::Green)
@@ -2172,9 +2230,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 f.render_widget(block, panels[1]);
                 if let Some(s) = sel_pi.and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref())) {
                     let screen = s.parser.screen();
-                    let mut lines = Vec::new();
+                    let mut lines = Vec::with_capacity(inner.height as usize);
                     for row in 0..inner.height {
                         let mut spans = Vec::new();
+                        let mut current_text = String::new();
+                        let mut current_style: Option<Style> = None;
                         for col in 0..inner.width {
                             if let Some(cell) = screen.cell(row, col) {
                                 if cell.is_wide_continuation() {
@@ -2199,14 +2259,28 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 if cell.inverse() {
                                     style = style.add_modifier(ratatui::style::Modifier::REVERSED);
                                 }
-                                spans.push(Span::styled(
-                                    if cell.has_contents() {
-                                        cell.contents()
-                                    } else {
-                                        " "
-                                    },
-                                    style,
-                                ));
+                                let ch = if cell.has_contents() {
+                                    cell.contents()
+                                } else {
+                                    " "
+                                };
+                                if current_style == Some(style) {
+                                    current_text.push_str(ch);
+                                } else {
+                                    if let Some(prev_style) = current_style {
+                                        spans.push(Span::styled(
+                                            std::mem::take(&mut current_text),
+                                            prev_style,
+                                        ));
+                                    }
+                                    current_style = Some(style);
+                                    current_text.push_str(ch);
+                                }
+                            }
+                        }
+                        if let Some(prev_style) = current_style {
+                            if !current_text.is_empty() {
+                                spans.push(Span::styled(current_text, prev_style));
                             }
                         }
                         lines.push(Line::from(spans));
@@ -2243,7 +2317,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ),
                         );
                     }
-                    if focus && !screen.hide_cursor() {
+                    if focus && s.scroll == 0 && !screen.hide_cursor() {
                         let (r, c) = screen.cursor_position();
                         if r < inner.height && c < inner.width {
                             f.set_cursor_position((inner.x + c, inner.y + r));
@@ -2253,7 +2327,21 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let body = empty_state_lines(!c.projects.is_empty());
                     let pad = inner.height.saturating_sub(body.len() as u16) / 2;
                     let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
-                    lines.extend(body.iter().map(|l| Line::from(l.as_str())));
+                    for (idx, line) in body.iter().enumerate() {
+                        if idx == 0 {
+                            lines.push(Line::from(Span::styled(
+                                line.clone(),
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
+                            )));
+                        } else {
+                            lines.push(Line::from(Span::styled(
+                                line.clone(),
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        }
+                    }
                     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
                 }
                 let mode = mode_of(focus, sending, filtering, adding, show_help);
@@ -2380,7 +2468,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(lines).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Help (?/Esc closes)",
                                     Style::default()
@@ -2399,7 +2487,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(confirm_stop_lines(name)).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Stop session",
                                     Style::default()
@@ -2418,7 +2506,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(confirm_remove_lines(name)).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Remove project",
                                     Style::default()
@@ -2437,7 +2525,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(confirm_update_lines(tag)).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Update available",
                                     Style::default()
@@ -2455,7 +2543,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(confirm_quit_lines(live_session_count(&sessions))).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Quit",
                                     Style::default()
@@ -2546,7 +2634,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Paragraph::new(lines).block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_type(BorderType::Double)
+                                .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Add project (Enter save, Esc cancel)",
                                     Style::default()
@@ -2583,32 +2671,164 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 if let Some(lines) = wheel_lines(m.kind) {
                     scroll_lines_selected(&mut sessions, &order, selected, lines);
                     dirty = true;
-                } else if m.kind == MouseEventKind::Down(MouseButton::Left)
+                } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                    if show_help {
+                        show_help = false;
+                        dirty = true;
+                    } else if let Some(pi) = confirm_stop {
+                        let popup = centered_rect(60, 30, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if popup.contains(clicked) {
+                            if let Some(slot) = sessions.get_mut(pi) {
+                                if let Some(old) = slot.take() {
+                                    thread::spawn(move || drop(old));
+                                }
+                            }
+                            message = (
+                                "Session stopped. Enter restarts it.".to_string(),
+                                Notice::Warn,
+                            );
+                        }
+                        confirm_stop = None;
+                        dirty = true;
+                    } else if let Some(pi) = confirm_remove {
+                        let popup = centered_rect(60, 30, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if popup.contains(clicked) {
+                            if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take()) {
+                                thread::spawn(move || drop(old));
+                            }
+                            if let Some(removed) =
+                                remove_project(&mut c.projects, &mut sessions, pi)
+                            {
+                                match persist_remove(&removed.name) {
+                                    Ok(()) => {
+                                        order = apply_filter(&c.projects, &filter_buf.as_str());
+                                        selected = selected.min(order.len().saturating_sub(1));
+                                        message =
+                                            (format!("Removed {}.", removed.name), Notice::Warn);
+                                    }
+                                    Err(e) => {
+                                        let at = pi.min(c.projects.len());
+                                        c.projects.insert(at, removed);
+                                        if at <= sessions.len() {
+                                            sessions.insert(at, None);
+                                        }
+                                        message = (format!("Cannot save: {e:#}"), Notice::Error);
+                                    }
+                                }
+                            }
+                        }
+                        confirm_remove = None;
+                        dirty = true;
+                    } else if confirm_quit {
+                        let popup = centered_rect(60, 30, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if popup.contains(clicked) {
+                            break;
+                        } else {
+                            confirm_quit = false;
+                        }
+                        dirty = true;
+                    } else if confirm_update {
+                        let popup = centered_rect(60, 40, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if popup.contains(clicked) {
+                            if let Some(tag) = update_offer.take() {
+                                updating = true;
+                                message = (format!("Updating to {tag}..."), Notice::Warn);
+                                let tx = upd_tx.clone();
+                                thread::spawn(move || match install_update(&tag) {
+                                    Ok(()) => {
+                                        let _ = tx.send(UpdateMsg::Installed(tag));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(UpdateMsg::Failed(e.to_string()));
+                                    }
+                                });
+                            }
+                        }
+                        confirm_update = false;
+                        dirty = true;
+                    } else if adding || sending || filtering {
+                        // In text input modals, keep input focus
+                    } else if let Some(i) =
+                        sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
+                    {
+                        if selected == i {
+                            // Re-clicking selected project: start if stopped, focus if running
+                            if let Some(&pi) = order.get(selected) {
+                                let live = sessions
+                                    .get(pi)
+                                    .and_then(|o| o.as_ref())
+                                    .is_some_and(|s| s.status == "Running");
+                                if live {
+                                    focus = true;
+                                } else {
+                                    match start_session(&mut sessions, &c.projects, pi, rows, cols)
+                                    {
+                                        None => focus = true,
+                                        Some(e) => message = (e, Notice::Error),
+                                    }
+                                }
+                            }
+                        } else {
+                            selected = i;
+                            focus = false;
+                        }
+                        dirty = true;
+                    } else if pane_rect.contains(ratatui::layout::Position::new(m.column, m.row)) {
+                        // Clicking terminal pane: start if stopped, focus if running
+                        if let Some(&pi) = order.get(selected) {
+                            let live = sessions
+                                .get(pi)
+                                .and_then(|o| o.as_ref())
+                                .is_some_and(|s| s.status == "Running");
+                            if live {
+                                focus = true;
+                            } else {
+                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                    None => focus = true,
+                                    Some(e) => message = (e, Notice::Error),
+                                }
+                            }
+                        }
+                        dirty = true;
+                    } else if m.row >= area.height.saturating_sub(1) && m.column < 12 {
+                        // Clicking the status-bar mode chip toggles help
+                        show_help = !show_help;
+                        dirty = true;
+                    }
+                } else if m.kind == MouseEventKind::Down(MouseButton::Right)
                     && !(adding
                         || show_help
                         || sending
                         || filtering
                         || confirm_quit
                         || confirm_stop.is_some()
-                        || confirm_remove.is_some())
+                        || confirm_remove.is_some()
+                        || confirm_update)
                 {
+                    // Right-click on sidebar: quick toggle (stop if running, start if stopped)
                     if let Some(i) =
                         sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
                     {
                         selected = i;
-                        focus = false;
-                        dirty = true;
-                    } else if pane_rect.contains(ratatui::layout::Position::new(m.column, m.row)) {
-                        // Clicking the terminal pane focuses a live session.
-                        let live = order
-                            .get(selected)
-                            .and_then(|&pi| sessions.get(pi))
-                            .and_then(|o| o.as_ref())
-                            .is_some_and(|s| s.status == "Running");
-                        if live {
-                            focus = true;
-                            dirty = true;
+                        if let Some(&pi) = order.get(selected) {
+                            let live = sessions
+                                .get(pi)
+                                .and_then(|o| o.as_ref())
+                                .is_some_and(|s| s.status == "Running");
+                            if live {
+                                confirm_stop = Some(pi);
+                            } else {
+                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                    None => focus = true,
+                                    Some(e) => message = (e, Notice::Error),
+                                }
+                            }
                         }
+                        dirty = true;
                     }
                 }
             }
@@ -2911,7 +3131,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Some(true) => {
                             if let Some(pi) = confirm_stop.take() {
                                 if let Some(slot) = sessions.get_mut(pi) {
-                                    *slot = None;
+                                    if let Some(old) = slot.take() {
+                                        thread::spawn(move || drop(old));
+                                    }
                                 }
                                 message = (
                                     "Session stopped. Enter restarts it.".to_string(),
@@ -2930,6 +3152,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     match confirm_key(k.code) {
                         Some(true) => {
                             if let Some(pi) = confirm_remove.take() {
+                                if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take()) {
+                                    thread::spawn(move || drop(old));
+                                }
                                 if let Some(removed) =
                                     remove_project(&mut c.projects, &mut sessions, pi)
                                 {
@@ -3507,13 +3732,39 @@ mod tests {
         let dir_str = dir.to_str().unwrap();
         let p = build_project(&[], dir_str, Kind::Service, parts("node server.js")).unwrap();
         assert_eq!(p.kind, Kind::Service);
+        assert_eq!(p.name, "node");
         assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
-        let existing = vec![p];
+        // Duplicate agent with same directory is rejected:
+        let agent = build_project(&[], dir_str, Kind::Agent, parts("")).unwrap();
+        let existing = vec![agent];
         assert!(build_project(&existing, dir_str, Kind::Agent, parts("")).is_err());
         assert!(build_project(&[], "", Kind::Agent, parts("")).is_err());
         assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, parts("")).is_err());
         let shell_p = build_project(&[], dir_str, Kind::Agent, parts("   ")).unwrap();
         assert_eq!(shell_p.command, shell());
+    }
+    #[test]
+    fn services_allow_multiple_in_same_directory() {
+        let parts = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
+        let dir = env::temp_dir();
+        let dir_str = dir.to_str().unwrap();
+        let s1 = build_project(&[], dir_str, Kind::Service, parts("npm run dev")).unwrap();
+        assert_eq!(s1.name, "npm");
+        assert_eq!(s1.path, plain_path(fs::canonicalize(&dir).unwrap()));
+        let existing = [s1.clone()];
+        let s2 = build_project(&existing, dir_str, Kind::Service, parts("npm run server")).unwrap();
+        assert_eq!(s2.name, "npm-2");
+        assert_eq!(s2.path, s1.path);
+        let existing_both = [s1.clone(), s2];
+        let s3 = build_project(
+            &existing_both,
+            dir_str,
+            Kind::Service,
+            parts("python app.py"),
+        )
+        .unwrap();
+        assert_eq!(s3.name, "python");
+        assert_eq!(s3.path, s1.path);
     }
     #[test]
     fn service_without_path_uses_current_dir() {
@@ -3734,6 +3985,23 @@ mod tests {
         let unc = PathBuf::from(r"\\?\UNC\srv\share");
         assert_eq!(plain_path(unc.clone()), unc);
         assert_eq!(plain_path(PathBuf::from("rel")), PathBuf::from("rel"));
+    }
+    #[test]
+    fn load_from_normalizes_stored_verbatim_paths() {
+        let dir = env::temp_dir().join(format!("squad-test-norm-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let toml_content = r#"
+[[projects]]
+name = "legacy"
+path = "\\\\?\\C:\\work\\app"
+command = ["claude"]
+kind = "agent"
+"#;
+        fs::write(&path, toml_content).unwrap();
+        let loaded = load_from(&path).unwrap();
+        assert_eq!(loaded.projects[0].path, PathBuf::from(r"C:\work\app"));
+        let _ = fs::remove_dir_all(&dir);
     }
     #[test]
     fn split_command_honors_quotes() {

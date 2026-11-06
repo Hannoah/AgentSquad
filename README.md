@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.4
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.5
 ```
 
 To install elsewhere:
@@ -79,9 +79,10 @@ squad list
 squad start my-app
 ```
 
-Project names default to the directory name (path-less services use the
-program name instead). Names are matched case-insensitively by `remove`
-and `start`.
+Project names default to the directory name for agents, and to the program
+name for services. Multiple services can share the same directory (automatically
+disambiguated as `program`, `program-2`, etc.). Names are matched
+case-insensitively by `remove` and `start`.
 
 ## The manager
 
