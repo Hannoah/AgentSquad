@@ -1,5 +1,7 @@
 # AgentSquad
 
+[![ci](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml/badge.svg)](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml)
+
 AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows.
 Register your projects once, then open a single TUI manager to start, watch, and
 interact with a terminal session per project — an ideal setup for running one
