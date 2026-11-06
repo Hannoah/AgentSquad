@@ -791,6 +791,22 @@ fn kind_color(kind: Kind) -> Color {
         Kind::Service => Color::Magenta,
     }
 }
+/// Sidebar group header: bright kind-colored name, dimmed live/total
+/// count so the numbers read as metadata instead of shouting.
+fn group_header(title: &str, kind: Kind, up: usize, total: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(kind_color(kind))
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" ({up}/{total})"),
+            Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ),
+    ])
+}
 /// (running, total) projects of one kind. `running[i]` mirrors
 /// `projects[i]` and reports whether that project is up right now.
 fn group_counts(projects: &[Project], running: &[bool], kind: Kind) -> (usize, usize) {
@@ -1072,13 +1088,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         .collect();
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
                         let (up, total) = group_counts(&c.projects, &running, k);
-                        items.push(
-                            ListItem::new(format!("{title} ({up}/{total})")).style(
-                                Style::default()
-                                    .fg(kind_color(k))
-                                    .add_modifier(ratatui::style::Modifier::BOLD),
-                            ),
-                        );
+                        items.push(ListItem::new(group_header(title, k, up, total)));
                         let mut any = false;
                         for &pi in order.iter().filter(|&&i| c.projects[i].kind == k) {
                             any = true;
@@ -2656,6 +2666,24 @@ mod tests {
         assert_eq!(kind_color(Kind::Agent), Color::Cyan);
         assert_eq!(kind_color(Kind::Service), Color::Magenta);
         assert_ne!(kind_color(Kind::Agent), kind_color(Kind::Service));
+    }
+    #[test]
+    fn group_header_dims_counts() {
+        let line = group_header("Agents", Kind::Agent, 2, 3);
+        assert_eq!(line.width(), "Agents (2/3)".len());
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content, "Agents");
+        assert_eq!(
+            line.spans[0].style,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        );
+        assert_eq!(line.spans[1].content, " (2/3)");
+        assert_eq!(
+            line.spans[1].style,
+            Style::default().add_modifier(ratatui::style::Modifier::DIM)
+        );
     }
     #[test]
     fn group_counts_split_by_kind() {
