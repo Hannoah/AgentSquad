@@ -1462,9 +1462,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 let input_w =
                     (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
                 if prefix {
-                    bar.push(Span::raw(
-                        "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
-                    ));
+                    bar.extend(hint_spans(&[
+                        ("g", "send Ctrl+G"),
+                        ("Esc", "send Esc"),
+                        ("", "any other key = manager"),
+                    ]));
                 } else if focus {
                     bar.extend(fitted_hints(Mode::Focus, input_w));
                 } else if filtering {
