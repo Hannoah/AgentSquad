@@ -399,6 +399,23 @@ fn mode_of(focus: bool, sending: bool, filtering: bool, adding: bool, show_help:
         Mode::Manager
     }
 }
+/// Severity of the one-line status bar message, so errors and exit
+/// notices read differently from idle hints and confirmations.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Notice {
+    Info,
+    Warn,
+    Error,
+}
+fn notice_style(kind: Notice) -> Style {
+    match kind {
+        Notice::Error => Style::default()
+            .fg(Color::Red)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+        Notice::Warn => Style::default().fg(Color::Yellow),
+        Notice::Info => Style::default(),
+    }
+}
 fn mode_chip(m: Mode) -> (&'static str, Style) {
     // Solid-background chips so the current mode reads at a glance.
     let (label, fg, bg) = match m {
@@ -1077,7 +1094,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut add_err = String::new();
     let mut confirm_stop: Option<usize> = None;
     let mut confirm_quit = false;
-    let mut message = mode_hints(Mode::Manager).to_string();
+    let mut message = (mode_hints(Mode::Manager).to_string(), Notice::Info);
     let mut dirty = true;
     let mut first = initial.is_some();
     let mut tick: u64 = 0;
@@ -1095,7 +1112,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             if let Some(&pi) = order.get(selected) {
                 match start_session(&mut sessions, &c.projects, pi, rows, cols) {
                     None => focus = true,
-                    Some(e) => message = e,
+                    Some(e) => message = (e, Notice::Error),
                 }
             }
         }
@@ -1109,7 +1126,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     &s.status,
                     &mut s.announced_exit,
                 ) {
-                    message = note;
+                    message = (note, Notice::Warn);
                 }
             }
         }
@@ -1388,11 +1405,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     ));
                 } else if adding {
                     bar.extend(hint_spans(mode_hint_parts(Mode::Add)));
-                } else if message == mode_hints(Mode::Manager) {
+                } else if message.0 == mode_hints(Mode::Manager) {
                     // Idle hints recede so action feedback stands out.
                     bar.extend(hint_spans(mode_hint_parts(Mode::Manager)));
                 } else {
-                    bar.push(Span::raw(message.clone()));
+                    bar.push(Span::styled(message.0.clone(), notice_style(message.1)));
                 }
                 f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
                 let mut right = vec![Span::styled(
@@ -1584,7 +1601,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         a.height.saturating_sub(3).max(1),
                         a.width.saturating_sub(side).saturating_sub(2).max(1),
                     ) {
-                        message = e.to_string();
+                        message = (e.to_string(), Notice::Error);
                     }
                 }
                 dirty = true;
@@ -1628,7 +1645,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             s.scroll_live();
                             let bytes = key_bytes(k, s.parser.screen().application_cursor());
                             if let Err(e) = s.input(&bytes) {
-                                message = e.to_string();
+                                message = (e.to_string(), Notice::Error);
                                 focus = false;
                             }
                         }
@@ -1645,7 +1662,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             let line = send_buf.take();
                             sending = false;
                             if line.is_empty() {
-                                message = "Empty. Nothing sent.".into();
+                                message = ("Empty. Nothing sent.".to_string(), Notice::Info);
                             } else if let Some(&pi) = order.get(selected) {
                                 let alive = sessions
                                     .get(pi)
@@ -1656,7 +1673,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     if let Some(e) =
                                         start_session(&mut sessions, &c.projects, pi, rows, cols)
                                     {
-                                        message = e;
+                                        message = (e, Notice::Error);
                                     }
                                 }
                                 if let Some(Some(s)) = sessions.get_mut(pi) {
@@ -1664,9 +1681,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     bytes.push(b'\n');
                                     match s.input(&bytes) {
                                         Ok(()) => {
-                                            message = format!("Sent to {}", c.projects[pi].name)
+                                            message = (
+                                                format!("Sent to {}", c.projects[pi].name),
+                                                Notice::Info,
+                                            )
                                         }
-                                        Err(e) => message = e.to_string(),
+                                        Err(e) => message = (e.to_string(), Notice::Error),
                                     }
                                 }
                             }
@@ -1766,8 +1786,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                                     .position(|&x| x == c.projects.len() - 1)
                                                     .unwrap_or(0);
                                                 adding = false;
-                                                message =
-                                                    format!("Registered {name} ({kind_label})");
+                                                message = (
+                                                    format!("Registered {name} ({kind_label})"),
+                                                    Notice::Info,
+                                                );
                                             }
                                         }
                                     }
@@ -1886,7 +1908,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 if let Some(slot) = sessions.get_mut(pi) {
                                     *slot = None;
                                 }
-                                message = "Session stopped. Enter restarts it.".into();
+                                message = (
+                                    "Session stopped. Enter restarts it.".to_string(),
+                                    Notice::Warn,
+                                );
                             }
                         }
                         Some(false) => {
@@ -1952,9 +1977,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         if let Some(&pi) = order.get(selected) {
                             match restart_session(&mut sessions, &c.projects, pi, rows, cols) {
                                 None => {
-                                    message = format!("Restarted {}", c.projects[pi].name);
+                                    message = (
+                                        format!("Restarted {}", c.projects[pi].name),
+                                        Notice::Info,
+                                    );
                                 }
-                                Some(e) => message = e,
+                                Some(e) => message = (e, Notice::Error),
                             }
                         }
                     }
@@ -1976,9 +2004,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             }
                         }
                         message = match failed {
-                            Some(e) => format!("Started {started_n}; error: {e}"),
-                            None if started_n == 0 => "All sessions already running.".into(),
-                            None => format!("Started {started_n} session(s)."),
+                            Some(e) => (format!("Started {started_n}; error: {e}"), Notice::Error),
+                            None if started_n == 0 => {
+                                ("All sessions already running.".to_string(), Notice::Info)
+                            }
+                            None => (format!("Started {started_n} session(s)."), Notice::Info),
                         };
                     }
                     KeyCode::Char('x') => {
@@ -2001,7 +2031,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             if let Some(e) =
                                 start_session(&mut sessions, &c.projects, pi, rows, cols)
                             {
-                                message = e;
+                                message = (e, Notice::Error);
                                 continue;
                             }
                             focus = true;
@@ -2669,6 +2699,20 @@ mod tests {
             .collect();
         assert!(quit_text.contains('2'), "quit modal names the count");
         assert!(quit_text.contains('y') && quit_text.contains("quits"));
+    }
+    #[test]
+    fn notice_styles_rank_severity() {
+        assert_eq!(notice_style(Notice::Info), Style::default());
+        assert_eq!(
+            notice_style(Notice::Warn),
+            Style::default().fg(Color::Yellow)
+        );
+        assert_eq!(
+            notice_style(Notice::Error),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        );
     }
     #[test]
     fn fleet_summary_counts() {
