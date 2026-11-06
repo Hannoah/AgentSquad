@@ -681,6 +681,24 @@ fn sidebar_width(area_w: u16) -> u16 {
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
 }
+/// Split a sidebar row's inner width into (status, name, detail) budgets.
+/// The list widget clips anything past the row width, so the status head
+/// is reserved first; the name takes what it needs and the detail gets
+/// the rest only when at least a few columns remain.
+fn row_widths(
+    inner_w: usize,
+    prefix_len: usize,
+    status_len: usize,
+    name_len: usize,
+) -> (usize, usize, usize) {
+    let status_w = status_len.min(inner_w.saturating_sub(prefix_len + 1 + 4));
+    let rest = inner_w.saturating_sub(prefix_len + status_w + 1);
+    if rest.saturating_sub(name_len) >= 5 {
+        (status_w, name_len, rest - name_len)
+    } else {
+        (status_w, rest, 0)
+    }
+}
 fn list_title(total: usize, shown: usize) -> String {
     let base = format!("AgentSquad v{}", env!("CARGO_PKG_VERSION"));
     if shown == total {
@@ -1031,16 +1049,19 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Style::default().fg(Color::DarkGray)
                             };
                             let prefix = format!("{mark}{n} ");
-                            let name_w = inner_w.saturating_sub(prefix.chars().count() + 2);
+                            let status_full = format!("{} {status}", status_glyph(status, tick));
+                            let (status_w, name_w, detail_w) = row_widths(
+                                inner_w,
+                                prefix.chars().count(),
+                                status_full.chars().count(),
+                                p.name.chars().count(),
+                            );
                             items.push(ListItem::new(Line::from(vec![
                                 Span::styled(prefix, row_style),
-                                Span::styled(
-                                    format!("{} ", status_glyph(status, tick)),
-                                    status_span_style,
-                                ),
+                                Span::styled(fit(&status_full, status_w), status_span_style),
+                                Span::raw(" "),
                                 Span::styled(fit(&p.name, name_w), row_style),
-                                Span::styled(format!("  {status}"), status_span_style),
-                                Span::styled(fit(&detail, inner_w), detail_style),
+                                Span::styled(fit(&detail, detail_w), detail_style),
                             ])));
                         }
                         if !any {
@@ -2402,6 +2423,17 @@ mod tests {
             spans[2].style,
             Style::default().add_modifier(ratatui::style::Modifier::DIM)
         );
+    }
+    #[test]
+    fn row_widths_keep_status_visible() {
+        // Narrow panel: status reserved first, name takes the rest.
+        assert_eq!(row_widths(22, 3, 9, 10), (9, 9, 0));
+        // Wide panel: name fits fully, detail gets the remainder.
+        assert_eq!(row_widths(36, 3, 9, 10), (9, 10, 13));
+        // Long error status is capped so the name keeps some room.
+        let (sw, nw, dw) = row_widths(22, 3, 40, 6);
+        assert!(sw + nw + dw + 3 < 22);
+        assert!(sw >= 9, "status word must survive: {sw}");
     }
     #[test]
     fn fleet_summary_counts() {
