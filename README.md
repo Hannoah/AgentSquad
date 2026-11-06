@@ -2,7 +2,8 @@
 
 [![ci](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml/badge.svg)](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml)
 
-AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows.
+AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows
+(Windows only: CI, releases and tests target Windows).
 Register your projects once, then open a single TUI manager to start, watch, and
 interact with a terminal session per project — an ideal setup for running one
 coding agent (or dev server) per project side by side.
@@ -34,13 +35,13 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.3.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.1
 ```
 
 To install elsewhere:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir C:\tools\squad
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -InstallDir C:\tools\squad
 ```
 
 ## Quickstart

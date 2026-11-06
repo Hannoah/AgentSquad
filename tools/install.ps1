@@ -62,8 +62,11 @@ try {
 }
 Write-Host "Installed to $InstallDir"
 
-if (($env:Path -split ";") -notcontains $InstallDir) {
-  [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$InstallDir", "User")
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($userPath -split ";") -notcontains $InstallDir) {
+  # Append to the *user* PATH only; $env:Path also holds machine entries.
+  $newUserPath = if ([string]::IsNullOrEmpty($userPath)) { $InstallDir } else { $userPath.TrimEnd(";") + ";$InstallDir" }
+  [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
   # iex runs inside the current terminal, so refresh this session too.
   # New terminals pick up the User PATH on their own.
   $env:Path += ";$InstallDir"

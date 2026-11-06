@@ -93,12 +93,72 @@ fn save_to(c: &Config, p: &Path) -> Result<()> {
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(p, toml::to_string_pretty(c)?)?;
+    // Write-then-rename so a crash mid-write never leaves a torn config.
+    let tmp = p.with_extension("toml.tmp");
+    fs::write(&tmp, toml::to_string_pretty(c)?)?;
+    fs::rename(&tmp, p)?;
     Ok(())
 }
 fn save(c: &Config) -> Result<()> {
     let p = config_path()?;
     save_to(c, &p)
+}
+/// Register `p` on disk, re-reading the file first so projects added or
+/// removed by another process are not clobbered.
+fn persist_add(p: &Project) -> Result<()> {
+    let mut disk = load()?;
+    if !disk
+        .projects
+        .iter()
+        .any(|q| q.name.eq_ignore_ascii_case(&p.name))
+    {
+        disk.projects.push(p.clone());
+    }
+    save(&disk)
+}
+/// Unregister `name` on disk, re-reading the file first (see `persist_add`).
+fn persist_remove(name: &str) -> Result<()> {
+    let mut disk = load()?;
+    disk.projects.retain(|q| !q.name.eq_ignore_ascii_case(name));
+    save(&disk)
+}
+/// Drop the Windows verbatim prefix `fs::canonicalize` adds, so stored
+/// paths read `C:\x` instead of `\\?\C:\x` (many tools choke on the latter).
+fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => p,
+    }
+}
+/// Split a command line on whitespace, keeping "double quoted" runs whole.
+fn split_command(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut has = false;
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                has = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
 }
 fn shell() -> Vec<String> {
     if cfg!(windows) {
@@ -160,7 +220,7 @@ fn build_project(
     }
     // An omitted service path means "right here".
     let anchor = if trimmed.is_empty() { "." } else { trimmed };
-    let path = fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?;
+    let path = plain_path(fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?);
     if !path.is_dir() {
         return Err("Project path must be a directory.".into());
     }
@@ -900,10 +960,6 @@ fn scroll_selected(
         }
     }
 }
-/// Sidebar width in columns: hidden on narrow terminals, a quarter of
-/// the width (clamped) otherwise so names and commands stay readable.
-/// `squad list` rows in manager (agents-first) order, with the name
-/// and kind columns padded so they line up in a terminal.
 /// First-run hint when `squad list` has nothing to show. Stderr only,
 /// so stdout stays empty and machine-readable.
 fn empty_list_hint() -> &'static str {
@@ -921,6 +977,8 @@ fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
         Kind::Service => cell.magenta().to_string(),
     }
 }
+/// `squad list` rows in manager (agents-first) order, with the name
+/// and kind columns padded so they line up in a terminal.
 fn list_table(projects: &[Project], color: bool) -> Vec<String> {
     let order = display_order(projects);
     let name_w = order
@@ -947,6 +1005,8 @@ fn list_table(projects: &[Project], color: bool) -> Vec<String> {
         })
         .collect()
 }
+/// Sidebar width in columns: hidden on narrow terminals, a quarter of
+/// the width (clamped) otherwise so names and commands stay readable.
 fn sidebar_width(area_w: u16) -> u16 {
     if area_w < 60 {
         0
@@ -954,8 +1014,6 @@ fn sidebar_width(area_w: u16) -> u16 {
         (area_w / 4).clamp(24, 38)
     }
 }
-/// Sidebar title: plain normally, `AgentSquad vX.Y.Z (shown/total)`
-/// while a filter hides projects.
 /// Right-hand status bar summary: live sessions over registered projects.
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
@@ -1049,6 +1107,8 @@ fn row_widths(
         (status_w, rest, 0)
     }
 }
+/// Sidebar title: plain normally, `AgentSquad vX.Y.Z (shown/total)`
+/// while a filter hides projects.
 fn list_title(total: usize, shown: usize) -> String {
     let base = format!("AgentSquad v{}", env!("CARGO_PKG_VERSION"));
     if shown == total {
@@ -1315,6 +1375,18 @@ fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
         KeyCode::Insert => tilde_bytes(2, shift, ctrl),
         KeyCode::PageUp => tilde_bytes(5, shift, ctrl),
         KeyCode::PageDown => tilde_bytes(6, shift, ctrl),
+        // F1-F4 are SS3 letters; F5-F12 are `CSI n ~` with xterm's gapped numbers.
+        KeyCode::F(n @ 1..=4) if !(shift || ctrl) => vec![27, b'O', b'P' + (n - 1)],
+        KeyCode::F(n @ 1..=4) => format!(
+            "\x1b[1;{}{}",
+            1 + shift as u8 + 4 * ctrl as u8,
+            (b'P' + (n - 1)) as char
+        )
+        .into_bytes(),
+        KeyCode::F(n @ 5..=12) => {
+            let code = [15, 17, 18, 19, 20, 21, 23, 24][(n - 5) as usize];
+            tilde_bytes(code, shift, ctrl)
+        }
         _ => Vec::new(),
     };
     if k.modifiers.contains(KeyModifiers::ALT) && !bytes.is_empty() {
@@ -1370,7 +1442,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         let rows = area.height.saturating_sub(3).max(1);
         let cols = area.width.saturating_sub(sidebar).saturating_sub(2).max(1);
         tick = tick.wrapping_add(1);
-        if tick.is_multiple_of(3) {
+        // The periodic redraw only animates spinners and uptimes, so skip
+        // it while nothing is running.
+        if tick.is_multiple_of(3) && sessions.iter().flatten().any(|s| s.status == "Running") {
             dirty = true;
         }
         if first {
@@ -2049,6 +2123,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         KeyCode::Esc => adding = false,
                         KeyCode::Enter => {
                             add_err.clear();
+                            // A new project must be visible, so drop any filter.
+                            filter_buf.clear();
                             match load() {
                                 Err(e) => add_err = format!("Config reload failed: {e:#}"),
                                 Ok(disk) => {
@@ -2061,11 +2137,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     &c.projects,
                                     &add_path.as_str(),
                                     add_kind,
-                                    add_cmd
-                                        .as_str()
-                                        .split_whitespace()
-                                        .map(str::to_string)
-                                        .collect(),
+                                    split_command(&add_cmd.as_str()),
                                 ) {
                                     Err(e) => add_err = e,
                                     Ok(p) => {
@@ -2073,7 +2145,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                         let kind_label = p.kind.as_str();
                                         c.projects.push(p);
                                         sessions.push(None);
-                                        match save(&c) {
+                                        match persist_add(&c.projects[c.projects.len() - 1]) {
                                             Err(e) => {
                                                 c.projects.pop();
                                                 sessions.pop();
@@ -2194,6 +2266,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         continue;
                     }
+                    // Any other key only cancels the prefix; it must not
+                    // fire as a manager command (Ctrl+G, q would quit).
+                    continue;
                 }
                 if confirm_quit {
                     match confirm_key(k.code) {
@@ -2230,9 +2305,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 if let Some(removed) =
                                     remove_project(&mut c.projects, &mut sessions, pi)
                                 {
-                                    match save(&c) {
+                                    match persist_remove(&removed.name) {
                                         Ok(()) => {
-                                            order = display_order(&c.projects);
+                                            // Keep an active filter across the removal.
+                                            order = apply_filter(&c.projects, &filter_buf.as_str());
                                             selected = selected.min(order.len().saturating_sub(1));
                                             message = (
                                                 format!("Removed {}.", removed.name),
@@ -2806,8 +2882,9 @@ mod tests {
         assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
         assert_eq!(
             p.path,
-            fs::canonicalize(env::current_dir().unwrap()).unwrap()
+            plain_path(fs::canonicalize(env::current_dir().unwrap()).unwrap())
         );
+        assert!(!p.path.to_string_lossy().starts_with(r"\\?\"));
         // An .exe program names the project without its extension.
         let q = build_project(&[], "", Kind::Service, parts("ollama.exe serve")).unwrap();
         assert_eq!(q.name, "ollama");
@@ -2846,6 +2923,76 @@ mod tests {
             key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), true),
             b"\x1bOA"
         );
+    }
+    #[test]
+    fn plain_path_strips_verbatim_prefix() {
+        assert_eq!(
+            plain_path(PathBuf::from(r"\\?\C:\work\app")),
+            PathBuf::from(r"C:\work\app")
+        );
+        // UNC shares and ordinary paths are left alone.
+        let unc = PathBuf::from(r"\\?\UNC\srv\share");
+        assert_eq!(plain_path(unc.clone()), unc);
+        assert_eq!(plain_path(PathBuf::from("rel")), PathBuf::from("rel"));
+    }
+    #[test]
+    fn split_command_honors_quotes() {
+        assert_eq!(split_command("node  server.js"), ["node", "server.js"]);
+        assert_eq!(
+            split_command(r#""C:\Program Files\x.exe" --flag "a b""#),
+            [r"C:\Program Files\x.exe", "--flag", "a b"]
+        );
+        assert_eq!(split_command(r#"echo """#), ["echo", ""]);
+        assert!(split_command("   ").is_empty());
+    }
+    #[test]
+    fn function_keys_encode_xterm() {
+        let f = |n, m| key_bytes(KeyEvent::new(KeyCode::F(n), m), false);
+        let none = KeyModifiers::NONE;
+        assert_eq!(f(1, none), b"\x1bOP");
+        assert_eq!(f(4, none), b"\x1bOS");
+        assert_eq!(f(5, none), b"\x1b[15~");
+        assert_eq!(f(10, none), b"\x1b[21~");
+        assert_eq!(f(12, none), b"\x1b[24~");
+        assert_eq!(f(1, KeyModifiers::SHIFT), b"\x1b[1;2P");
+        assert_eq!(f(5, KeyModifiers::CONTROL), b"\x1b[15;5~");
+    }
+    #[test]
+    fn persist_helpers_keep_other_writers_projects() {
+        let file = env::temp_dir().join(format!("agentsquad-persist-{}.toml", std::process::id()));
+        let mk = |name: &str| Project {
+            name: name.into(),
+            path: PathBuf::from("x"),
+            command: vec!["sh".into()],
+            kind: Kind::Agent,
+        };
+        // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
+        // no other test reads it.
+        env::set_var("AGENTSQUAD_CONFIG", &file);
+        save_to(
+            &Config {
+                projects: vec![mk("a"), mk("b")],
+            },
+            &file,
+        )
+        .unwrap();
+        // Another process registers "c" after we loaded; our remove of "a"
+        // and add of "d" must keep it.
+        let mut other = load_from(&file).unwrap();
+        other.projects.push(mk("c"));
+        save_to(&other, &file).unwrap();
+        persist_remove("A").unwrap();
+        persist_add(&mk("d")).unwrap();
+        persist_add(&mk("D")).unwrap();
+        let names: Vec<String> = load_from(&file)
+            .unwrap()
+            .projects
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        env::remove_var("AGENTSQUAD_CONFIG");
+        std::fs::remove_file(&file).ok();
+        assert_eq!(names, ["b", "c", "d"]);
     }
     #[test]
     fn focus_exit_key_is_plain_esc() {
