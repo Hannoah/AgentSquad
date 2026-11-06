@@ -720,6 +720,11 @@ fn sidebar_width(area_w: u16) -> u16 {
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
 }
+/// Sessions that need attention: crashed exits and errors.
+/// Clean exits and stopped slots stay quiet.
+fn needs_attention(status: &str) -> bool {
+    status.starts_with("Error") || (status.starts_with("Exited") && !status.ends_with("(0)"))
+}
 /// Split a sidebar row's inner width into (status, name, detail) budgets.
 /// The list widget clips anything past the row width, so the status head
 /// is reserved first; the name takes what it needs and the detail gets
@@ -1285,16 +1290,29 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .filter(|s| s.status == "Running")
                     .count();
                 f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
+                let failed_n = sessions
+                    .iter()
+                    .flatten()
+                    .filter(|s| needs_attention(&s.status))
+                    .count();
+                let mut right = vec![Span::styled(
+                    fleet_summary(running_n, c.projects.len()),
+                    if running_n > 0 {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                )];
+                if failed_n > 0 {
+                    right.push(Span::styled(
+                        format!(" ✖ {failed_n}"),
+                        Style::default()
+                            .fg(Color::Red)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                }
                 f.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        fleet_summary(running_n, c.projects.len()),
-                        if running_n > 0 {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    )))
-                    .alignment(Alignment::Right),
+                    Paragraph::new(Line::from(right)).alignment(Alignment::Right),
                     status_row[1],
                 );
                 if show_help {
@@ -2515,6 +2533,15 @@ mod tests {
     fn fleet_summary_counts() {
         assert_eq!(fleet_summary(2, 5), "● 2/5");
         assert_eq!(fleet_summary(0, 0), "● 0/0");
+    }
+    #[test]
+    fn failed_sessions_need_attention() {
+        assert!(!needs_attention("Running"));
+        assert!(!needs_attention("Stopped"));
+        assert!(!needs_attention("Exited (0)"));
+        assert!(needs_attention("Exited (1)"));
+        assert!(needs_attention("Exited (137)"));
+        assert!(needs_attention("Error: boom"));
     }
     #[test]
     fn list_title_shows_filter_counts() {
