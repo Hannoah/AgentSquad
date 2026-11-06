@@ -303,7 +303,8 @@ fn help_lines() -> Vec<&'static str> {
         "x          stop session (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
-        "Ctrl+G     terminal back to manager",
+        "Esc        terminal back to manager",
+        "Ctrl+G,Esc send Esc to terminal",
         "q          quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
@@ -358,7 +359,7 @@ fn mode_chip(m: Mode) -> (&'static str, Style) {
 fn mode_hints(m: Mode) -> &'static str {
     match m {
         Mode::Manager => "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | q quit | ? help",
-        Mode::Focus => "type to input | Ctrl+G manager",
+        Mode::Focus => "Esc manager | type to input",
         Mode::Send => "Enter sends | Esc cancels",
         Mode::Filter => "type to narrow | Enter keeps | Esc clears",
         Mode::Add => "Tab next | Space kind | Enter save | Esc cancel",
@@ -707,6 +708,10 @@ fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
         format!("\x1b[{n}~").into_bytes()
     }
 }
+/// Plain Esc leaves terminal focus; modified Esc still reaches the app.
+fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
+    code == KeyCode::Esc && mods == KeyModifiers::NONE
+}
 fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
@@ -978,7 +983,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 ];
                 if prefix {
                     bar.push(Span::raw(
-                        "Ctrl+G prefix: g = send Ctrl+G; any other key = manager",
+                        "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
                     ));
                 } else if filtering {
                     bar.extend(input_line(
@@ -1167,6 +1172,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     if k.code == KeyCode::Char('g') && k.modifiers.contains(KeyModifiers::CONTROL) {
                         focus = false;
                         prefix = true;
+                        continue;
+                    }
+                    if focus_exit_key(k.code, k.modifiers) {
+                        focus = false;
                         continue;
                     }
                     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
@@ -1418,6 +1427,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         if let Some(&pi) = order.get(selected) {
                             if let Some(Some(s)) = sessions.get_mut(pi) {
                                 let _ = s.input(&[7]);
+                                focus = true;
+                            }
+                        }
+                        continue;
+                    }
+                    if k.code == KeyCode::Esc {
+                        if let Some(&pi) = order.get(selected) {
+                            if let Some(Some(s)) = sessions.get_mut(pi) {
+                                let _ = s.input(&[27]);
                                 focus = true;
                             }
                         }
@@ -1931,6 +1949,15 @@ mod tests {
             key_bytes(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), true),
             b"\x1bOA"
         );
+    }
+    #[test]
+    fn focus_exit_key_is_plain_esc() {
+        use crossterm::event::KeyModifiers as M;
+        assert!(focus_exit_key(KeyCode::Esc, M::NONE));
+        assert!(!focus_exit_key(KeyCode::Esc, M::SHIFT));
+        assert!(!focus_exit_key(KeyCode::Esc, M::CONTROL));
+        assert!(!focus_exit_key(KeyCode::Enter, M::NONE));
+        assert_eq!(key_bytes(KeyEvent::new(KeyCode::Esc, M::NONE), false), [27]);
     }
     #[test]
     fn key_bytes_encodes_modifiers() {

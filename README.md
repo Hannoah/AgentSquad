@@ -98,8 +98,9 @@ case-insensitively by `remove` and `start`.
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.
 
-Inside a terminal, `Ctrl+G` returns to the manager; pressing `g` right after
-sends a literal `Ctrl+G` to the session instead.
+Inside a terminal, `Esc` returns to the manager. To send a literal `Esc`
+to the session, press `Ctrl+G` then `Esc` instead (likewise, `Ctrl+G` then
+`g` sends a literal `Ctrl+G`).
 
 ## CLI reference
 
