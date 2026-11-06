@@ -370,15 +370,76 @@ fn mode_chip(m: Mode) -> (&'static str, Style) {
         Mode::Help => (" HELP ", Style::default().fg(Color::White)),
     }
 }
-fn mode_hints(m: Mode) -> &'static str {
+/// Status bar segments as (key, description) pairs. An empty key means
+/// the text is a plain instruction, not a key press.
+fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
     match m {
-        Mode::Manager => "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | q quit | ? help",
-        Mode::Focus => "Esc manager | type to input",
-        Mode::Send => "Enter sends | Esc cancels",
-        Mode::Filter => "type to narrow | Enter keeps | Esc clears",
-        Mode::Add => "Tab next | Space kind | Enter save | Esc cancel",
-        Mode::Help => "?/Esc closes",
+        Mode::Manager => &[
+            ("Enter", "focus"),
+            ("/", "send"),
+            ("a", "add"),
+            ("f", "filter"),
+            ("r", "restart"),
+            ("s", "start all"),
+            ("n/p", "select"),
+            ("x", "stop"),
+            ("q", "quit"),
+            ("?", "help"),
+        ],
+        Mode::Focus => &[("Esc", "manager"), ("", "type to input")],
+        Mode::Send => &[("Enter", "sends"), ("Esc", "cancels")],
+        Mode::Filter => &[
+            ("", "type to narrow"),
+            ("Enter", "keeps"),
+            ("Esc", "clears"),
+        ],
+        Mode::Add => &[
+            ("Tab", "next"),
+            ("Space", "kind"),
+            ("Enter", "save"),
+            ("Esc", "cancel"),
+        ],
+        Mode::Help => &[("?/Esc", "closes")],
     }
+}
+fn mode_hints(m: Mode) -> String {
+    mode_hint_parts(m)
+        .iter()
+        .map(|(k, d)| match (*k, *d) {
+            ("", d) => d.to_string(),
+            (k, "") => k.to_string(),
+            (k, d) => format!("{k} {d}"),
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+/// Styled status bar segments: bright keys, dimmed descriptions.
+fn hint_spans(parts: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    for (i, (key, desc)) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(Span::styled(
+                " | ".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if !key.is_empty() {
+            out.push(Span::styled(
+                key.to_string(),
+                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+        }
+        if !key.is_empty() && !desc.is_empty() {
+            out.push(Span::raw(" ".to_string()));
+        }
+        if !desc.is_empty() {
+            out.push(Span::styled(
+                desc.to_string(),
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ));
+        }
+    }
+    out
 }
 /// Digit key to selection index within the visible order.
 fn jump_to(order_len: usize, ch: char) -> Option<usize> {
@@ -1115,10 +1176,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
                     ));
                 } else if focus {
-                    bar.push(Span::styled(
-                        mode_hints(Mode::Focus),
-                        Style::default().add_modifier(ratatui::style::Modifier::DIM),
-                    ));
+                    bar.extend(hint_spans(mode_hint_parts(Mode::Focus)));
                 } else if filtering {
                     bar.extend(input_line(
                         "Filter: ".to_string(),
@@ -1136,13 +1194,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         " (Enter sends, Esc cancels)".to_string(),
                     ));
                 } else if adding {
-                    bar.push(Span::raw(mode_hints(Mode::Add)));
+                    bar.extend(hint_spans(mode_hint_parts(Mode::Add)));
                 } else if message == mode_hints(Mode::Manager) {
                     // Idle hints recede so action feedback stands out.
-                    bar.push(Span::styled(
-                        message.clone(),
-                        Style::default().add_modifier(ratatui::style::Modifier::DIM),
-                    ));
+                    bar.extend(hint_spans(mode_hint_parts(Mode::Manager)));
                 } else {
                     bar.push(Span::raw(message.clone()));
                 }
@@ -2315,6 +2370,38 @@ mod tests {
         assert_eq!(sidebar_width(100), 25);
         assert_eq!(sidebar_width(152), 38);
         assert_eq!(sidebar_width(300), 38);
+    }
+    #[test]
+    fn hint_text_matches_legacy_strings() {
+        assert_eq!(
+            mode_hints(Mode::Manager),
+            "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | q quit | ? help"
+        );
+        assert_eq!(mode_hints(Mode::Focus), "Esc manager | type to input");
+        assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
+        assert_eq!(
+            mode_hints(Mode::Filter),
+            "type to narrow | Enter keeps | Esc clears"
+        );
+        assert_eq!(
+            mode_hints(Mode::Add),
+            "Tab next | Space kind | Enter save | Esc cancel"
+        );
+        assert_eq!(mode_hints(Mode::Help), "?/Esc closes");
+    }
+    #[test]
+    fn hint_spans_bold_keys_dim_descriptions() {
+        let spans = hint_spans(&[("Enter", "focus"), ("", "type to input")]);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "Enter focus | type to input");
+        assert_eq!(
+            spans[0].style,
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+        );
+        assert_eq!(
+            spans[2].style,
+            Style::default().add_modifier(ratatui::style::Modifier::DIM)
+        );
     }
     #[test]
     fn fleet_summary_counts() {
