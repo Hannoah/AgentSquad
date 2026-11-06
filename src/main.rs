@@ -1520,6 +1520,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     ));
                 } else if adding {
                     bar.extend(fitted_hints(Mode::Add, input_w));
+                } else if show_help && message.0 == mode_hints(Mode::Manager) {
+                    bar.extend(fitted_hints(Mode::Help, input_w));
                 } else if message.0 == mode_hints(Mode::Manager) {
                     // Idle hints recede so action feedback stands out.
                     bar.extend(fitted_hints(Mode::Manager, input_w));
@@ -2813,6 +2815,8 @@ mod tests {
         assert!(add.contains("Enter save") && !add.contains("Space"));
         let focus: String = text(vec![Line::from(fitted_hints(Mode::Focus, 10))]);
         assert!(focus.contains("type to input"), "short modes never compact");
+        let help: String = text(vec![Line::from(fitted_hints(Mode::Help, 40))]);
+        assert!(help.contains("closes"), "help hints show in help mode");
     }
     #[test]
     fn hint_spans_bold_keys_dim_descriptions() {
