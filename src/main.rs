@@ -780,6 +780,11 @@ fn scroll_selected(
 /// the width (clamped) otherwise so names and commands stay readable.
 /// `squad list` rows in manager (agents-first) order, with the name
 /// and kind columns padded so they line up in a terminal.
+/// First-run hint when `squad list` has nothing to show. Stderr only,
+/// so stdout stays empty and machine-readable.
+fn empty_list_hint() -> &'static str {
+    "No projects yet. Run: squad add <path> [-- command]"
+}
 /// Paint the kind column of `squad list` with the same hue as the TUI
 /// sidebar. Plain text when `enabled` is false so piped output stays clean.
 fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
@@ -2201,6 +2206,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
+            if c.projects.is_empty() {
+                eprintln!("{}", empty_list_hint());
+                return Ok(());
+            }
             // Colors only on a real terminal; pipes and NO_COLOR stay plain.
             let color = io::stdout().is_terminal() && env::var("NO_COLOR").is_err();
             for line in list_table(&c.projects, color) {
@@ -2894,6 +2903,11 @@ mod tests {
         assert!(needs_attention("Exited (1)"));
         assert!(needs_attention("Exited (137)"));
         assert!(needs_attention("Error: boom"));
+    }
+    #[test]
+    fn empty_list_hint_guides_first_run() {
+        assert!(empty_list_hint().contains("squad add"));
+        assert!(list_table(&[], false).is_empty(), "stdout stays empty");
     }
     #[test]
     fn list_title_shows_filter_counts() {
