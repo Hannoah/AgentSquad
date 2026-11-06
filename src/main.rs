@@ -116,6 +116,12 @@ fn merge_projects(c: &mut Config, sessions: &mut Vec<Option<Session>>, disk: Con
         }
     }
 }
+/// Environment advertised to sessions. `COLORTERM` unlocks 24-bit color
+/// for apps like Claude that downgrade without it; the parser and the
+/// renderer already pass RGB through.
+fn pty_env() -> [(&'static str, &'static str); 2] {
+    [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")]
+}
 fn size(rows: u16, cols: u16) -> PtySize {
     PtySize {
         rows: rows.max(1),
@@ -440,7 +446,9 @@ impl Session {
         let mut cmd = CommandBuilder::new(&p.command[0]);
         cmd.args(&p.command[1..]);
         cmd.cwd(&p.path);
-        cmd.env("TERM", "xterm-256color");
+        for (k, v) in pty_env() {
+            cmd.env(k, v);
+        }
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let child = pair
@@ -1989,6 +1997,12 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn pty_env_advertises_truecolor() {
+        let env = pty_env();
+        assert!(env.contains(&("TERM", "xterm-256color")));
+        assert!(env.contains(&("COLORTERM", "truecolor")));
     }
     #[test]
     fn list_title_shows_filter_counts() {
