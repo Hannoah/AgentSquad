@@ -551,6 +551,15 @@ fn scroll_selected(
         }
     }
 }
+/// Sidebar width in columns: hidden on narrow terminals, a quarter of
+/// the width (clamped) otherwise so names and commands stay readable.
+fn sidebar_width(area_w: u16) -> u16 {
+    if area_w < 60 {
+        0
+    } else {
+        (area_w / 4).clamp(24, 38)
+    }
+}
 /// Sidebar title: plain normally, `AgentSquad vX.Y.Z (shown/total)`
 /// while a filter hides projects.
 fn list_title(total: usize, shown: usize) -> String {
@@ -798,7 +807,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut tick: u64 = 0;
     loop {
         let area = terminal.size()?;
-        let sidebar = if area.width >= 60 { 24 } else { 0 };
+        let sidebar = sidebar_width(area.width);
         let rows = area.height.saturating_sub(3).max(1);
         let cols = area.width.saturating_sub(sidebar).saturating_sub(2).max(1);
         tick = tick.wrapping_add(1);
@@ -1225,7 +1234,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         match event::read()? {
             Event::Resize(_, _) => {
                 let a = terminal.size()?;
-                let side = if a.width >= 60 { 24 } else { 0 };
+                let side = sidebar_width(a.width);
                 for s in sessions.iter_mut().flatten() {
                     if let Err(e) = s.resize(
                         a.height.saturating_sub(3).max(1),
@@ -2143,6 +2152,14 @@ mod tests {
         let env = pty_env();
         assert!(env.contains(&("TERM", "xterm-256color")));
         assert!(env.contains(&("COLORTERM", "truecolor")));
+    }
+    #[test]
+    fn sidebar_width_scales() {
+        assert_eq!(sidebar_width(59), 0);
+        assert_eq!(sidebar_width(60), 24);
+        assert_eq!(sidebar_width(100), 25);
+        assert_eq!(sidebar_width(152), 38);
+        assert_eq!(sidebar_width(300), 38);
     }
     #[test]
     fn list_title_shows_filter_counts() {
