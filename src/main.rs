@@ -471,6 +471,39 @@ fn mode_hints(m: Mode) -> String {
         .collect::<Vec<_>>()
         .join(" | ")
 }
+/// Essential-only hints for narrow screens; modes without a compact
+/// table are already short enough to show in full.
+fn compact_hint_parts(m: Mode) -> Option<&'static [(&'static str, &'static str)]> {
+    match m {
+        Mode::Manager => Some(&[
+            ("Enter", "focus"),
+            ("/", "send"),
+            ("x", "stop"),
+            ("?", "help"),
+        ]),
+        Mode::Add => Some(&[("Tab", "next"), ("Enter", "save"), ("Esc", "cancel")]),
+        _ => None,
+    }
+}
+/// Rendered length of hint pairs as joined by `mode_hints`/`hint_spans`.
+fn hint_text_len(parts: &[(&str, &str)]) -> usize {
+    parts
+        .iter()
+        .map(|(k, d)| k.len() + d.len() + usize::from(!k.is_empty() && !d.is_empty()))
+        .sum::<usize>()
+        + 3 * parts.len().saturating_sub(1)
+}
+/// Full hints when they fit, essential keys when the bar is narrow.
+fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
+    let full = mode_hint_parts(m);
+    if hint_text_len(full) <= width {
+        return hint_spans(full);
+    }
+    match compact_hint_parts(m) {
+        Some(short) => hint_spans(short),
+        None => hint_spans(full),
+    }
+}
 /// Styled status bar segments: bright keys, dimmed descriptions.
 fn hint_spans(parts: &[(&str, &str)]) -> Vec<Span<'static>> {
     let mut out = Vec::new();
@@ -1409,7 +1442,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
                     ));
                 } else if focus {
-                    bar.extend(hint_spans(mode_hint_parts(Mode::Focus)));
+                    bar.extend(fitted_hints(Mode::Focus, input_w));
                 } else if filtering {
                     bar.extend(input_line(
                         "Filter: ".to_string(),
@@ -1429,10 +1462,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         input_w,
                     ));
                 } else if adding {
-                    bar.extend(hint_spans(mode_hint_parts(Mode::Add)));
+                    bar.extend(fitted_hints(Mode::Add, input_w));
                 } else if message.0 == mode_hints(Mode::Manager) {
                     // Idle hints recede so action feedback stands out.
-                    bar.extend(hint_spans(mode_hint_parts(Mode::Manager)));
+                    bar.extend(fitted_hints(Mode::Manager, input_w));
                 } else {
                     bar.push(Span::styled(message.0.clone(), notice_style(message.1)));
                 }
@@ -2677,6 +2710,24 @@ mod tests {
             "Tab next | Space kind | Enter save | Esc cancel"
         );
         assert_eq!(mode_hints(Mode::Help), "?/Esc closes");
+    }
+    #[test]
+    fn fitted_hints_compact_on_narrow() {
+        let text = |spans: Vec<Line>| {
+            spans
+                .iter()
+                .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+                .collect::<String>()
+        };
+        let wide: String = text(vec![Line::from(fitted_hints(Mode::Manager, 200))]);
+        assert!(wide.contains("start all"), "wide bar shows everything");
+        let narrow: String = text(vec![Line::from(fitted_hints(Mode::Manager, 40))]);
+        assert!(narrow.contains("? help"), "narrow bar keeps essentials");
+        assert!(!narrow.contains("start all"), "narrow bar drops the rest");
+        let add: String = text(vec![Line::from(fitted_hints(Mode::Add, 40))]);
+        assert!(add.contains("Enter save") && !add.contains("Space"));
+        let focus: String = text(vec![Line::from(fitted_hints(Mode::Focus, 10))]);
+        assert!(focus.contains("type to input"), "short modes never compact");
     }
     #[test]
     fn hint_spans_bold_keys_dim_descriptions() {
