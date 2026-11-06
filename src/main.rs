@@ -333,8 +333,35 @@ enum Mode {
     Help,
 }
 /// Status-bar input row: prompt + editable text with a block cursor + hint.
-fn input_line(prompt: String, input: &LineInput, hint: String) -> Vec<Span<'static>> {
+/// Visible slice of a single-line input: shows the tail end once the
+/// text outgrows `width` so the block cursor never scrolls off screen.
+fn input_window(before: &str, at: char, after: &str, width: usize) -> (String, char, String) {
+    let b: Vec<char> = before.chars().collect();
+    let a: Vec<char> = after.chars().collect();
+    let total = b.len() + 1 + a.len();
+    if width == 0 || total <= width {
+        return (before.to_string(), at, after.to_string());
+    }
+    let full: Vec<char> = b
+        .iter()
+        .chain(std::iter::once(&at))
+        .chain(a.iter())
+        .copied()
+        .collect();
+    let cursor = b.len();
+    let start = (cursor + 1).saturating_sub(width);
+    let end = (start + width).min(full.len());
+    let rel = cursor - start;
+    (
+        full[start..rel + start].iter().collect(),
+        full[rel + start],
+        full[rel + start + 1..end].iter().collect(),
+    )
+}
+fn input_line(prompt: String, input: &LineInput, hint: String, width: usize) -> Vec<Span<'static>> {
     let (before, at, after) = input.render_parts();
+    let prompt_w = prompt.chars().count();
+    let (before, at, after) = input_window(&before, at, &after, width.saturating_sub(prompt_w));
     vec![
         Span::raw(prompt),
         Span::raw(before),
@@ -1192,6 +1219,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     ),
                     Span::raw(" "),
                 ];
+                let status_row = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(12)])
+                    .split(vertical[1]);
+                let input_w =
+                    (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
                 if prefix {
                     bar.push(Span::raw(
                         "Ctrl+G prefix: g = send Ctrl+G, Esc = send Esc; any other key = manager",
@@ -1203,6 +1236,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         "Filter: ".to_string(),
                         &filter_buf,
                         format!(" ({} matches, Enter keeps, Esc clears)", order.len()),
+                        input_w,
                     ));
                 } else if sending {
                     let name = sel_pi
@@ -1213,6 +1247,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         format!("Send to {name}: "),
                         &send_buf,
                         " (Enter sends, Esc cancels)".to_string(),
+                        input_w,
                     ));
                 } else if adding {
                     bar.extend(hint_spans(mode_hint_parts(Mode::Add)));
@@ -1227,10 +1262,6 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .flatten()
                     .filter(|s| s.status == "Running")
                     .count();
-                let status_row = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(1), Constraint::Length(12)])
-                    .split(vertical[1]);
                 f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
                 f.render_widget(
                     Paragraph::new(Line::from(Span::styled(
@@ -2434,6 +2465,29 @@ mod tests {
         let (sw, nw, dw) = row_widths(22, 3, 40, 6);
         assert!(sw + nw + dw + 3 < 22);
         assert!(sw >= 9, "status word must survive: {sw}");
+    }
+    #[test]
+    fn input_window_keeps_cursor_visible() {
+        // Short text passes through untouched.
+        assert_eq!(
+            input_window("ab", 'c', "de", 10),
+            ("ab".into(), 'c', "de".into())
+        );
+        // Typing at the end shows the tail with the cursor last.
+        assert_eq!(
+            input_window("hello world", ' ', "", 5),
+            ("orld".into(), ' ', "".into())
+        );
+        // Cursor at the front pins the window to the start.
+        assert_eq!(
+            input_window("", 'h', "ello world", 5),
+            ("".into(), 'h', "ello".into())
+        );
+        // Cursor past the window trims the left side.
+        assert_eq!(
+            input_window("abcdef", 'g', "hij", 5),
+            ("cdef".into(), 'g', "".into())
+        );
     }
     #[test]
     fn fleet_summary_counts() {
