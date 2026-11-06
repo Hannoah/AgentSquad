@@ -581,7 +581,15 @@ fn confirm_stop_prompt(name: &str) -> String {
     format!("Stop session '{name}'?")
 }
 fn confirm_quit_prompt(n: usize) -> String {
-    format!("Quit and discard {n} session(s)?")
+    format!("Quit and discard {}?", plural_sessions(n))
+}
+/// Count noun with a correct plural: "1 session", "3 sessions".
+fn plural_sessions(n: usize) -> String {
+    if n == 1 {
+        "1 session".to_string()
+    } else {
+        format!("{n} sessions")
+    }
 }
 /// Stop-confirm modal body: the prompt in alarming red, key hints in
 /// the shared status-bar style.
@@ -2125,7 +2133,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             None if started_n == 0 => {
                                 ("All sessions already running.".to_string(), Notice::Info)
                             }
-                            None => (format!("Started {started_n} session(s)."), Notice::Info),
+                            None => (
+                                format!("Started {}.", plural_sessions(started_n)),
+                                Notice::Info,
+                            ),
                         };
                     }
                     KeyCode::Char('x') => {
@@ -2865,6 +2876,13 @@ mod tests {
             input_window("abcdef", 'g', "hij", 5),
             ("cdef".into(), 'g', "".into())
         );
+    }
+    #[test]
+    fn plural_sessions_counts_nouns() {
+        assert_eq!(plural_sessions(0), "0 sessions");
+        assert_eq!(plural_sessions(1), "1 session");
+        assert_eq!(plural_sessions(2), "2 sessions");
+        assert_eq!(confirm_quit_prompt(1), "Quit and discard 1 session?");
     }
     #[test]
     fn confirm_modals_style_keys() {
