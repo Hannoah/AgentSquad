@@ -67,6 +67,7 @@ case-insensitively by `remove` and `start`.
 - **Left:** project list, grouped under **Agents** and **Services** headers,
   each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: …`).
   Running rows spin while active and show uptime (`Running 3m`).
+  Group headers show running/total counts (`Agents (1/2)`).
   Service rows also show their command.
 - **Right:** the selected session's terminal output (full xterm emulation:
   colors, bold/italic/underline, cursor positioning).

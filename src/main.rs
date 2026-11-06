@@ -542,6 +542,21 @@ fn scroll_selected(
         }
     }
 }
+/// (running, total) projects of one kind. `running[i]` mirrors
+/// `projects[i]` and reports whether that project is up right now.
+fn group_counts(projects: &[Project], running: &[bool], kind: Kind) -> (usize, usize) {
+    let mut total = 0;
+    let mut up = 0;
+    for (i, p) in projects.iter().enumerate() {
+        if p.kind == kind {
+            total += 1;
+            if running.get(i).copied().unwrap_or(false) {
+                up += 1;
+            }
+        }
+    }
+    (up, total)
+}
 /// Mouse wheel notch to scrolled lines: up moves into history.
 fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
     match kind {
@@ -757,9 +772,14 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let inner_w = (sidebar as usize).saturating_sub(2);
                     let mut items: Vec<ListItem> = Vec::new();
                     let mut n = 0;
+                    let running: Vec<bool> = sessions
+                        .iter()
+                        .map(|o| o.as_ref().map(|s| s.status == "Running").unwrap_or(false))
+                        .collect();
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
+                        let (up, total) = group_counts(&c.projects, &running, k);
                         items.push(
-                            ListItem::new(title).style(
+                            ListItem::new(format!("{title} ({up}/{total})")).style(
                                 Style::default().add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                         );
@@ -1957,6 +1977,24 @@ mod tests {
         assert_eq!(yes(KeyCode::Char('q')), None);
         let prompt = confirm_stop_prompt("web");
         assert!(prompt.contains("web"), "prompt names the session");
+    }
+    #[test]
+    fn group_counts_split_by_kind() {
+        let mk = |name: &str, kind: Kind| Project {
+            name: name.into(),
+            path: PathBuf::from("/tmp"),
+            command: vec!["sh".into()],
+            kind,
+        };
+        let projects = vec![
+            mk("a1", Kind::Agent),
+            mk("a2", Kind::Agent),
+            mk("s1", Kind::Service),
+        ];
+        let running = [true, false, true];
+        assert_eq!(group_counts(&projects, &running, Kind::Agent), (1, 2));
+        assert_eq!(group_counts(&projects, &running, Kind::Service), (1, 1));
+        assert_eq!(group_counts(&projects, &[], Kind::Agent), (0, 2));
     }
     #[test]
     fn wheel_maps_to_scroll_lines() {
