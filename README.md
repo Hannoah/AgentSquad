@@ -25,7 +25,7 @@ What this does:
 - Extracts `squad.exe` to `%LOCALAPPDATA%\AgentSquad\bin`.
 - Adds that folder to your **user** `PATH`.
 
-Open a **new** terminal afterwards, then verify:
+The installer also refreshes `PATH` for the current session, so verify right away:
 
 ```powershell
 squad --version
@@ -92,7 +92,8 @@ case-insensitively by `remove` and `start`.
 | `x` | Stop the selected session (asks to confirm; process is killed, files untouched) |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
-| `Ctrl+G` | Back to the manager (from inside a terminal) |
+| `Esc` | Back to the manager (from inside a terminal) |
+| `Ctrl+G`, then `g` / `Esc` | Send a literal `Ctrl+G` / `Esc` to the session |
 | `?` | Toggle the help popup |
 | `q` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
@@ -168,8 +169,9 @@ process-tree kill). Releases are built by GitHub Actions on every `v*` tag
 
 ## Troubleshooting
 
-- **`squad` not found after install:** open a new terminal so the updated
-  user `PATH` takes effect.
+- **`squad` not found after install:** the installer refreshes the
+  current session's `PATH`; if it still fails, open a new terminal so the
+  updated user `PATH` takes effect.
 - **Session shows `Error: …`:** the start command failed — check that the
   binary (e.g. `claude`, `node`) is on your `PATH` and the project path exists.
 - **`Exited (1)` right after start:** the process ran and exited; select it
