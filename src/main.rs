@@ -284,7 +284,12 @@ fn status_style(status: &str) -> Style {
     if status == "Running" {
         Style::default().fg(Color::Green)
     } else if status.starts_with("Exited") {
-        Style::default().fg(Color::Yellow)
+        // Clean exits fade away; crashes glow red.
+        if status.ends_with("(0)") {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::Red)
+        }
     } else if status.starts_with("Error") {
         Style::default().fg(Color::Red)
     } else {
@@ -1871,7 +1876,12 @@ mod tests {
         assert_eq!(status_style("Running"), Style::default().fg(Color::Green));
         assert_eq!(
             status_style("Exited (0)"),
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(Color::DarkGray)
+        );
+        assert_eq!(status_style("Exited (1)"), Style::default().fg(Color::Red));
+        assert_eq!(
+            status_style("Exited (137)"),
+            Style::default().fg(Color::Red)
         );
         assert_eq!(status_style("Error: boom"), Style::default().fg(Color::Red));
         assert_eq!(
