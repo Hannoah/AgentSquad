@@ -93,7 +93,8 @@ and `start`.
 | `n` / `p`, `↑` / `↓` | Move selection |
 | `1`–`9` | Jump to a visible row |
 | `a` | Add a project without leaving the manager |
-| `x` / `Delete` | Stop the selected session (asks to confirm; process is killed, files untouched) |
+| `x` | Stop the selected session (asks to confirm; process is killed, files untouched) |
+| `Delete` | Remove the selected project (asks to confirm; a running session is stopped, files untouched) |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the selected terminal (`Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
 | `Esc` | Back to the manager (from inside a terminal) |
