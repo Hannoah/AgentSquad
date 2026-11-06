@@ -1267,6 +1267,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Err(e) => add_err = format!("Config reload failed: {e:#}"),
                                 Ok(disk) => {
                                     merge_projects(&mut c, &mut sessions, disk);
+                                    order = display_order(&c.projects);
                                 }
                             }
                             if add_err.is_empty() {
