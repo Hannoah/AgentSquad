@@ -789,6 +789,20 @@ fn pane_border_style(focus: bool) -> Style {
 fn needs_attention(status: &str) -> bool {
     status.starts_with("Error") || (status.starts_with("Exited") && !status.ends_with("(0)"))
 }
+/// Keep the selected sidebar row inside the visible window: scroll down
+/// when it runs past the bottom, scroll up when it runs past the top.
+fn keep_visible(offset: usize, sel_row: usize, visible: usize) -> usize {
+    if visible == 0 {
+        return 0;
+    }
+    if sel_row < offset {
+        sel_row
+    } else if sel_row + 1 > offset + visible {
+        sel_row + 1 - visible
+    } else {
+        offset
+    }
+}
 /// Split a sidebar row's inner width into (status, name, detail) budgets.
 /// The list widget clips anything past the row width, so the status head
 /// is reserved first; the name takes what it needs and the detail gets
@@ -1047,6 +1061,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut selected = initial
         .and_then(|i| order.iter().position(|&x| x == i))
         .unwrap_or(0);
+    let mut list_offset = 0usize;
     let mut focus = false;
     let mut prefix = false;
     let mut sending = false;
@@ -1112,6 +1127,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let sel_pi = order.get(selected).copied();
                     let inner_w = (sidebar as usize).saturating_sub(2);
                     let mut items: Vec<ListItem> = Vec::new();
+                    let mut sel_row: Option<usize> = None;
                     let mut n = 0;
                     let running: Vec<bool> = sessions
                         .iter()
@@ -1174,6 +1190,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 status_full.chars().count(),
                                 p.name.chars().count(),
                             );
+                            if Some(pi) == sel_pi {
+                                sel_row = Some(items.len());
+                            }
                             items.push(ListItem::new(Line::from(vec![
                                 Span::styled(prefix, row_style),
                                 Span::styled(fit(&status_full, status_w), status_span_style),
@@ -1188,8 +1207,15 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ));
                         }
                     }
+                    let visible_rows = (panels[0].height as usize).saturating_sub(2).max(1);
+                    if let Some(sr) = sel_row {
+                        list_offset = keep_visible(list_offset, sr, visible_rows);
+                    }
+                    list_offset = list_offset.min(items.len().saturating_sub(1));
+                    let mut window = items.split_off(list_offset);
+                    window.truncate(visible_rows);
                     f.render_widget(
-                        List::new(items).block(
+                        List::new(window).block(
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Rounded)
@@ -2541,6 +2567,17 @@ mod tests {
             colored.contains("\x1b["),
             "terminal output carries ANSI colors"
         );
+    }
+    #[test]
+    fn keep_visible_tracks_selection() {
+        assert_eq!(keep_visible(0, 0, 10), 0);
+        assert_eq!(keep_visible(0, 9, 10), 0);
+        assert_eq!(keep_visible(0, 10, 10), 1);
+        assert_eq!(keep_visible(0, 15, 10), 6);
+        assert_eq!(keep_visible(5, 8, 10), 5);
+        assert_eq!(keep_visible(5, 3, 10), 3);
+        assert_eq!(keep_visible(5, 5, 10), 5);
+        assert_eq!(keep_visible(0, 5, 0), 0);
     }
     #[test]
     fn sidebar_width_scales() {
