@@ -70,7 +70,8 @@ case-insensitively by `remove` and `start`.
   each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: …`).
   Running rows spin while active and show uptime (`Running 3m`).
   Group headers show running/total counts (`Agents (1/2)`).
-  Service rows also show their command.
+  Service rows also show their command; agent rows show their program
+  unless it is the default shell.
 - **Right:** the selected session's terminal output (full xterm emulation:
   colors, bold/italic/underline, cursor positioning).
 - **Bottom:** a one-line status bar with hints, which doubles as the input

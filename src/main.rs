@@ -591,6 +591,14 @@ fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
         _ => None,
     }
 }
+/// First command word for agent rows, so agents with the same status
+/// stay distinguishable. Skipped when it is just the default shell.
+fn agent_tag(p: &Project) -> Option<&str> {
+    if p.command == shell() {
+        return None;
+    }
+    p.command.first().map(String::as_str)
+}
 fn scroll_lines_selected(
     sessions: &mut [Option<Session>],
     order: &[usize],
@@ -858,6 +866,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             if k == Kind::Service {
                                 second.push(' ');
                                 second.push_str(&p.command.join(" "));
+                            } else if let Some(tag) = agent_tag(p) {
+                                second.push(' ');
+                                second.push_str(tag);
                             }
                             let mark = if Some(pi) == sel_pi { ">" } else { " " };
                             let row_style = if Some(pi) == sel_pi {
@@ -2128,6 +2139,25 @@ mod tests {
         assert_eq!(list_title(5, 5), base);
         assert_eq!(list_title(0, 0), base);
         assert_eq!(list_title(5, 2), format!("{base} (2/5)"));
+    }
+    #[test]
+    fn agent_tag_shows_program() {
+        let mk = |command: Vec<String>| Project {
+            name: "x".into(),
+            path: PathBuf::from("/tmp"),
+            command,
+            kind: Kind::Agent,
+        };
+        assert_eq!(
+            agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
+            Some("claude")
+        );
+        assert_eq!(agent_tag(&mk(shell())), None);
+        assert_eq!(
+            agent_tag(&mk(vec![])),
+            None,
+            "hand-written configs may omit the command"
+        );
     }
     #[test]
     fn kind_colors_are_distinct() {
