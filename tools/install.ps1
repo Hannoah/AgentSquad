@@ -15,7 +15,8 @@
 param(
   [string]$Repo = "Hannoah/AgentSquad",
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "AgentSquad\bin"),
-  [string]$Version = "latest"
+  [string]$Version = "latest",
+  [string]$Token = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,21 +26,28 @@ if ([string]::IsNullOrWhiteSpace($Repo)) {
 }
 
 $Asset = "squad-windows-x86_64.zip"
+$apiHeaders = @{}
+if (-not [string]::IsNullOrWhiteSpace($Token)) {
+  $apiHeaders["Authorization"] = "Bearer $Token"
+}
 if ($Version -eq "latest") {
-  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+  # No API call here: the /latest/download redirect needs no
+  # authentication and is not subject to API rate limits.
+  $tagLabel = "latest"
+  $dl = "https://github.com/$Repo/releases/latest/download/$Asset"
 } else {
   $tag = $Version
   if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
-  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag"
+  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $apiHeaders
+  $tagLabel = $rel.tag_name
+  $dl = ($rel.assets | Where-Object { $_.name -eq $Asset }).browser_download_url
+  if (-not $dl) { throw "Asset '$Asset' not found in release $tagLabel." }
 }
-
-$dl = ($rel.assets | Where-Object { $_.name -eq $Asset }).browser_download_url
-if (-not $dl) { throw "Asset '$Asset' not found in release $($rel.tag_name)." }
 
 $tmp = Join-Path $env:TEMP "squad-install"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zip = Join-Path $tmp $Asset
-Write-Host "Downloading squad $($rel.tag_name)..."
+Write-Host "Downloading squad $tagLabel..."
 Invoke-WebRequest -Uri $dl -OutFile $zip -UseBasicParsing
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
