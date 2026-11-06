@@ -722,6 +722,15 @@ fn sidebar_width(area_w: u16) -> u16 {
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
 }
+/// Terminal pane border: bright green while typing, dimmed in manager
+/// mode so the focus state reads at a glance.
+fn pane_border_style(focus: bool) -> Style {
+    if focus {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
 /// Sessions that need attention: crashed exits and errors.
 /// Clean exits and stopped slots stay quiet.
 fn needs_attention(status: &str) -> bool {
@@ -1176,11 +1185,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(if focus {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default()
-                    })
+                    .border_style(pane_border_style(focus))
                     .title(title);
                 let inner = block.inner(panels[1]);
                 f.render_widget(block, panels[1]);
@@ -2550,6 +2555,14 @@ mod tests {
     fn fleet_summary_counts() {
         assert_eq!(fleet_summary(2, 5), "● 2/5");
         assert_eq!(fleet_summary(0, 0), "● 0/0");
+    }
+    #[test]
+    fn pane_border_marks_focus() {
+        assert_eq!(pane_border_style(true), Style::default().fg(Color::Green));
+        assert_eq!(
+            pane_border_style(false),
+            Style::default().fg(Color::DarkGray)
+        );
     }
     #[test]
     fn failed_sessions_need_attention() {
