@@ -1640,6 +1640,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
                 if adding {
                     let popup = centered_rect(70, 40, f.area());
+                    let modal_w = (popup.width as usize).saturating_sub(2);
                     f.render_widget(ratatui::widgets::Clear, popup);
                     let kind_hint = if add_kind == Kind::Agent {
                         "agent (Space toggles)"
@@ -1670,6 +1671,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         if editing {
                             let input = if i == 0 { &add_path } else { &add_cmd };
                             let (left, cur, right) = input.render_parts();
+                            let label_w = format!("{mark} {label}: ").chars().count();
+                            let (left, cur, right) =
+                                input_window(&left, cur, &right, modal_w.saturating_sub(label_w));
                             let value_style =
                                 Style::default().add_modifier(ratatui::style::Modifier::BOLD);
                             row.push(Span::styled(left, value_style));
