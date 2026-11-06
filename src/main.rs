@@ -471,18 +471,29 @@ fn mode_hints(m: Mode) -> String {
         .collect::<Vec<_>>()
         .join(" | ")
 }
-/// Essential-only hints for narrow screens; modes without a compact
-/// table are already short enough to show in full.
-fn compact_hint_parts(m: Mode) -> Option<&'static [(&'static str, &'static str)]> {
+/// Hint pairs in discovery order: most essential first. Narrow bars show
+/// a leading subset so `q` never disappears while trivia survives.
+fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
     match m {
-        Mode::Manager => Some(&[
+        Mode::Manager => &[
             ("Enter", "focus"),
             ("/", "send"),
+            ("q", "quit"),
             ("x", "stop"),
             ("?", "help"),
-        ]),
-        Mode::Add => Some(&[("Tab", "next"), ("Enter", "save"), ("Esc", "cancel")]),
-        _ => None,
+            ("f", "filter"),
+            ("s", "start all"),
+            ("a", "add"),
+            ("n/p", "select"),
+            ("r", "restart"),
+        ],
+        Mode::Add => &[
+            ("Enter", "save"),
+            ("Esc", "cancel"),
+            ("Tab", "next"),
+            ("Space", "kind"),
+        ],
+        _ => &[],
     }
 }
 /// Rendered length of hint pairs as joined by `mode_hints`/`hint_spans`.
@@ -493,16 +504,31 @@ fn hint_text_len(parts: &[(&str, &str)]) -> usize {
         .sum::<usize>()
         + 3 * parts.len().saturating_sub(1)
 }
-/// Full hints when they fit, essential keys when the bar is narrow.
+/// Full hints when they fit; otherwise the longest leading run of the
+/// priority order that fits, so narrow bars degrade gracefully instead
+/// of clipping mid-hint. Modes without a priority table are already
+/// short enough to show in full.
 fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
     let full = mode_hint_parts(m);
     if hint_text_len(full) <= width {
         return hint_spans(full);
     }
-    match compact_hint_parts(m) {
-        Some(short) => hint_spans(short),
-        None => hint_spans(full),
+    let order = priority_hint_parts(m);
+    if order.is_empty() {
+        return hint_spans(full);
     }
+    let mut take = 0usize;
+    let mut len = 0usize;
+    for (i, (k, d)) in order.iter().enumerate() {
+        let part = k.len() + d.len() + usize::from(!k.is_empty() && !d.is_empty());
+        let add = part + if i == 0 { 0 } else { 3 };
+        if len + add > width {
+            break;
+        }
+        len += add;
+        take = i + 1;
+    }
+    hint_spans(&order[..take])
 }
 /// Styled status bar segments: bright keys, dimmed descriptions.
 fn hint_spans(parts: &[(&str, &str)]) -> Vec<Span<'static>> {
@@ -2776,9 +2802,13 @@ mod tests {
         };
         let wide: String = text(vec![Line::from(fitted_hints(Mode::Manager, 200))]);
         assert!(wide.contains("start all"), "wide bar shows everything");
+        let normal: String = text(vec![Line::from(fitted_hints(Mode::Manager, 59))]);
+        assert!(normal.contains("q quit"), "normal bar keeps quit");
+        assert!(normal.contains("f filter"), "normal bar keeps filter");
+        assert!(!normal.contains("start all"), "normal bar drops the rest");
         let narrow: String = text(vec![Line::from(fitted_hints(Mode::Manager, 40))]);
-        assert!(narrow.contains("? help"), "narrow bar keeps essentials");
-        assert!(!narrow.contains("start all"), "narrow bar drops the rest");
+        assert!(narrow.contains("q quit"), "narrow bar keeps quit");
+        assert!(!narrow.contains("? help"), "narrow bar drops the rest");
         let add: String = text(vec![Line::from(fitted_hints(Mode::Add, 40))]);
         assert!(add.contains("Enter save") && !add.contains("Space"));
         let focus: String = text(vec![Line::from(fitted_hints(Mode::Focus, 10))]);
@@ -2867,7 +2897,9 @@ mod tests {
         let first = row(stop, 40);
         assert!(first.contains("Stop session 'web'?"), "got {first:?}");
         let narrow = row(Line::from(fitted_hints(Mode::Manager, 38)), 40);
-        assert!(narrow.contains("? help"), "got {narrow:?}");
+        assert!(narrow.contains("q quit"), "got {narrow:?}");
+        let roomy = row(Line::from(fitted_hints(Mode::Manager, 50)), 60);
+        assert!(roomy.contains("? help"), "got {roomy:?}");
     }
     #[test]
     fn notice_styles_rank_severity() {
