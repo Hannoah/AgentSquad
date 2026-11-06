@@ -21,7 +21,7 @@ use std::{
     env, fs,
     io::{self, IsTerminal, Read, Write},
     num::NonZero,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::mpsc::{self, Receiver},
     thread,
@@ -78,21 +78,27 @@ fn config_path() -> Result<PathBuf> {
         .context("Set AGENTSQUAD_CONFIG to a writable config file")?;
     Ok(base.join("AgentSquad").join("config.toml"))
 }
-fn load() -> Result<Config> {
-    let p = config_path()?;
+fn load_from(p: &Path) -> Result<Config> {
     if !p.exists() {
         return Ok(Config::default());
     }
-    let text = fs::read_to_string(&p).with_context(|| format!("Cannot read {}", p.display()))?;
+    let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
     toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))
 }
-fn save(c: &Config) -> Result<()> {
+fn load() -> Result<Config> {
     let p = config_path()?;
+    load_from(&p)
+}
+fn save_to(c: &Config, p: &Path) -> Result<()> {
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(p, toml::to_string_pretty(c)?)?;
     Ok(())
+}
+fn save(c: &Config) -> Result<()> {
+    let p = config_path()?;
+    save_to(c, &p)
 }
 fn shell() -> Vec<String> {
     if cfg!(windows) {
@@ -346,7 +352,8 @@ fn help_lines() -> Vec<&'static str> {
         "Shift+PgUp/Dn  scroll history",
         "r          restart session",
         "s          start all stopped sessions",
-        "x/Del      stop session (asks to confirm)",
+        "x          stop session (asks to confirm)",
+        "Del        remove project (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
         "Esc        terminal back to manager",
@@ -470,6 +477,7 @@ fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("s", "start all"),
             ("n/p", "select"),
             ("x", "stop"),
+            ("Del", "remove"),
             ("q", "quit"),
             ("?", "help"),
         ],
@@ -511,6 +519,7 @@ fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("x", "stop"),
             ("?", "help"),
             ("f", "filter"),
+            ("Del", "remove"),
             ("s", "start all"),
             ("a", "add"),
             ("n/p", "select"),
@@ -650,9 +659,42 @@ fn confirm_quit_lines(n: usize) -> Vec<Line<'static>> {
         Line::from(hint_spans(&[("y", "quits"), ("n / Esc", "cancels")])),
     ]
 }
+fn confirm_remove_prompt(name: &str) -> String {
+    format!("Remove project '{name}'?")
+}
+/// Remove-confirm modal body: same key-hint styling as the stop modal.
+fn confirm_remove_lines(name: &str) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            confirm_remove_prompt(name),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from("Running sessions are stopped; files are untouched."),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "removes"), ("n / Esc", "cancels")])),
+    ]
+}
 /// Sessions that quitting would discard (running or finished output).
 fn live_session_count<T>(sessions: &[Option<T>]) -> usize {
     sessions.iter().flatten().count()
+}
+/// Unregister a project and drop its session slot, stopping a live
+/// session through `Session`'s own teardown. Returns the removed project
+/// so callers can roll back when persisting fails.
+fn remove_project<T>(
+    projects: &mut Vec<Project>,
+    slots: &mut Vec<Option<T>>,
+    pi: usize,
+) -> Option<Project> {
+    if pi >= projects.len() {
+        return None;
+    }
+    if pi < slots.len() {
+        slots.remove(pi);
+    }
+    Some(projects.remove(pi))
 }
 fn empty_state_lines(has_projects: bool) -> Vec<String> {
     if has_projects {
@@ -812,7 +854,7 @@ Usage:
 
 Manager keys:
   n/p, arrows  select · Enter  start/focus · a  add · /  send a line
-  f  filter · r  restart · s  start all · x/Del  stop · 1-9  jump
+  f  filter · r  restart · s  start all · x  stop · Del  remove · 1-9  jump
   Shift+PgUp/Dn  scroll · q  quit · ?  help
 
 Terminal keys:
@@ -1316,6 +1358,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut add_cmd = LineInput::new();
     let mut add_err = String::new();
     let mut confirm_stop: Option<usize> = None;
+    let mut confirm_remove: Option<usize> = None;
     let mut confirm_quit = false;
     let mut message = (mode_hints(Mode::Manager).to_string(), Notice::Info);
     let mut dirty = true;
@@ -1703,6 +1746,25 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .border_type(BorderType::Double)
                                 .title(Line::from(Span::styled(
                                     "Stop session",
+                                    Style::default()
+                                        .fg(Color::Red)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
+                        ),
+                        popup,
+                    );
+                }
+                if let Some(pi) = confirm_remove {
+                    let name = c.projects.get(pi).map(|p| p.name.as_str()).unwrap_or("?");
+                    let popup = centered_rect(60, 30, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(confirm_remove_lines(name)).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Double)
+                                .title(Line::from(Span::styled(
+                                    "Remove project",
                                     Style::default()
                                         .fg(Color::Red)
                                         .add_modifier(ratatui::style::Modifier::BOLD),
@@ -2161,6 +2223,43 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     continue;
                 }
+                if confirm_remove.is_some() {
+                    match confirm_key(k.code) {
+                        Some(true) => {
+                            if let Some(pi) = confirm_remove.take() {
+                                if let Some(removed) =
+                                    remove_project(&mut c.projects, &mut sessions, pi)
+                                {
+                                    match save(&c) {
+                                        Ok(()) => {
+                                            order = display_order(&c.projects);
+                                            selected = selected.min(order.len().saturating_sub(1));
+                                            message = (
+                                                format!("Removed {}.", removed.name),
+                                                Notice::Warn,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            // Roll back so a failed save never loses the project.
+                                            let at = pi.min(c.projects.len());
+                                            c.projects.insert(at, removed);
+                                            if at <= sessions.len() {
+                                                sessions.insert(at, None);
+                                            }
+                                            message =
+                                                (format!("Remove failed: {e:#}"), Notice::Error);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Some(false) => {
+                            confirm_remove = None;
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
                 match k.code {
                     KeyCode::Char('q') => {
                         if live_session_count(&sessions) > 0 {
@@ -2254,8 +2353,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ),
                         };
                     }
-                    KeyCode::Char('x') | KeyCode::Delete => {
+                    KeyCode::Char('x') => {
                         confirm_stop = stop_target(&order, selected, &sessions);
+                    }
+                    KeyCode::Delete => {
+                        confirm_remove = order.get(selected).copied();
                     }
                     KeyCode::Enter => {
                         if order.is_empty() {
@@ -2450,7 +2552,8 @@ mod tests {
             "--version",
             "Manager keys",
             "Terminal keys",
-            "x/Del  stop",
+            "x  stop",
+            "Del  remove",
             "Esc  back to manager",
         ] {
             assert!(h.contains(c), "help mentions {c}");
@@ -2857,9 +2960,68 @@ mod tests {
         assert!(prompt.contains("web"), "prompt names the session");
     }
     #[test]
+    fn remove_unregisters_project() {
+        // `Delete` removes the selected project with confirmation, whether
+        // or not it holds a session.
+        let mk = |name: &str| Project {
+            name: name.into(),
+            path: PathBuf::from("x"),
+            command: vec!["sh".into()],
+            kind: Kind::Agent,
+        };
+        let mut projects = vec![mk("a"), mk("b")];
+        let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
+        assert_eq!(
+            remove_project(&mut projects, &mut slots, 1).map(|p| p.name),
+            Some("b".to_string())
+        );
+        assert_eq!(projects.len(), 1);
+        assert_eq!(slots.len(), 1);
+        assert!(remove_project(&mut projects, &mut slots, 5).is_none());
+        assert_eq!(projects.len(), 1);
+        let text: String = confirm_remove_lines("b")
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(text.contains('b'), "remove modal names the project");
+        assert!(text.contains('y') && text.contains("removes"));
+    }
+    #[test]
+    fn remove_persists_to_config_file() {
+        // A TUI removal must survive a restart: write with the real saver,
+        // read back with the real loader, and confirm the project is gone.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let file = std::env::temp_dir().join(format!(
+            "agentsquad-remove-test-{}-{}.toml",
+            std::process::id(),
+            n
+        ));
+        let mk = |name: &str| Project {
+            name: name.into(),
+            path: PathBuf::from("x"),
+            command: vec!["sh".into()],
+            kind: Kind::Agent,
+        };
+        let config = Config {
+            projects: vec![mk("a"), mk("b")],
+        };
+        save_to(&config, &file).unwrap();
+        let mut loaded = load_from(&file).unwrap();
+        assert_eq!(loaded.projects.len(), 2);
+        let mut slots: Vec<Option<u8>> = vec![None, None];
+        let removed = remove_project(&mut loaded.projects, &mut slots, 0).unwrap();
+        assert_eq!(removed.name, "a");
+        save_to(&loaded, &file).unwrap();
+        let reread = load_from(&file).unwrap();
+        assert_eq!(reread.projects.len(), 1);
+        assert_eq!(reread.projects[0].name, "b");
+        std::fs::remove_file(&file).ok();
+    }
+    #[test]
     fn stop_selects_live_session() {
-        // Shared by `x` and `Delete`: the selected project, but only while
-        // it actually holds a session.
+        // `x` stops the selected project, but only while it actually
+        // holds a session.
         let order = vec![0usize, 1, 2];
         let live: Vec<Option<u8>> = vec![None, Some(1), None];
         assert_eq!(stop_target(&order, 1, &live), Some(1));
@@ -2973,7 +3135,7 @@ mod tests {
     fn hint_text_matches_legacy_strings() {
         assert_eq!(
             mode_hints(Mode::Manager),
-            "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | q quit | ? help"
+            "Enter focus | / send | a add | f filter | r restart | s start all | n/p select | x stop | Del remove | q quit | ? help"
         );
         assert_eq!(mode_hints(Mode::Focus), "Esc manager | type to input");
         assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
