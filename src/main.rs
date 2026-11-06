@@ -139,31 +139,40 @@ fn display_order(projects: &[Project]) -> Vec<usize> {
     order
 }
 /// Validate raw add-form input into a Project without touching disk state.
+///
+/// Services may leave the path empty: they run in squad's own working
+/// directory and take their name from the served program instead of a folder.
 fn build_project(
     existing: &[Project],
     path_raw: &str,
     kind: Kind,
-    command_raw: &str,
+    parts: Vec<String>,
 ) -> Result<Project, String> {
     let trimmed = path_raw.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() && kind != Kind::Service {
         return Err("Path is empty.".into());
     }
-    let path = fs::canonicalize(trimmed).map_err(|e| format!("Bad path: {e}"))?;
+    // An omitted service path means "right here".
+    let anchor = if trimmed.is_empty() { "." } else { trimmed };
+    let path = fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?;
     if !path.is_dir() {
         return Err("Project path must be a directory.".into());
     }
-    let name = path
+    let dir_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if name.is_empty() {
+    if dir_name.is_empty() {
         return Err("Cannot use filesystem root as project.".into());
     }
+    let name = if trimmed.is_empty() {
+        program_name(&parts).unwrap_or(dir_name)
+    } else {
+        dir_name
+    };
     if existing.iter().any(|p| p.name.eq_ignore_ascii_case(&name)) {
         return Err(format!("Project name already registered: {name}"));
     }
-    let parts: Vec<String> = command_raw.split_whitespace().map(str::to_string).collect();
     let command = if parts.is_empty() { shell() } else { parts };
     Ok(Project {
         name,
@@ -171,6 +180,26 @@ fn build_project(
         command,
         kind,
     })
+}
+/// Program word of a command line for naming path-less services:
+/// `ollama.exe` serves as `ollama`, `node` stays `node`.
+fn program_name(parts: &[String]) -> Option<String> {
+    let first = parts.first()?;
+    let base = std::path::Path::new(first)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| first.clone());
+    let lower = base.to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com"] {
+        if let Some(stem) = lower.strip_suffix(ext) {
+            let stem = base[..stem.len()].to_string();
+            if !stem.is_empty() {
+                return Some(stem);
+            }
+        }
+    }
+    Some(base)
 }
 /// Filtered view: display order narrowed to projects whose name or
 /// command contains the query (case-insensitive). Empty query = all.
@@ -775,7 +804,7 @@ fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add <path> [--kind agent|service] [-- cmd]  Register project (default: shell)
+  squad add [<path>] [--kind agent|service] [-- cmd]  Register project (path optional for services)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad start <name>                                 Open manager and start project
@@ -1714,8 +1743,13 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     } else {
                         add_cmd.as_str()
                     };
+                    let path_label = if add_kind == Kind::Service {
+                        "Path (optional)"
+                    } else {
+                        "Path"
+                    };
                     let fields = [
-                        ("Path", add_path.as_str()),
+                        (path_label, add_path.as_str()),
                         ("Kind", kind_hint.to_string()),
                         ("Command", cmd_text),
                     ];
@@ -1965,7 +1999,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     &c.projects,
                                     &add_path.as_str(),
                                     add_kind,
-                                    &add_cmd.as_str(),
+                                    add_cmd
+                                        .as_str()
+                                        .split_whitespace()
+                                        .map(str::to_string)
+                                        .collect(),
                                 ) {
                                     Err(e) => add_err = e,
                                     Ok(p) => {
@@ -2264,41 +2302,30 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         None => run(c, None),
         Some("add") => {
-            let path =
-                fs::canonicalize(args.get(1).context(
-                    "Usage: squad add <path> [--kind agent|service] [-- command args...]",
-                )?)?;
-            if !path.is_dir() {
-                bail!("Project path must be a directory");
-            }
-            let name = path
-                .file_name()
-                .context("Cannot use filesystem root as project")?
-                .to_string_lossy()
-                .into_owned();
-            if c.projects
-                .iter()
-                .any(|p| p.name.eq_ignore_ascii_case(&name))
-            {
-                bail!("Project name already registered: {name}");
-            }
+            // The path may be omitted for services: `squad add --kind service -- cmd`.
+            const USAGE: &str =
+                "Usage: squad add [<path>] [--kind agent|service] [-- command args...] (path optional for services)";
+            let tail: &[String] = args.get(1..).unwrap_or(&[]);
+            let (path_raw, tail) = match tail.first().map(String::as_str) {
+                Some(flag) if flag.starts_with("--") => ("", tail),
+                Some(_) => (tail[0].as_str(), &tail[1..]),
+                None => ("", tail),
+            };
             let mut kind = Kind::default();
             let mut command: Option<Vec<String>> = None;
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
                     "--kind" => {
-                        let v = args.get(i + 1).context(
-                            "Usage: squad add <path> [--kind agent|service] [-- command args...]",
-                        )?;
+                        let v = tail.get(i + 1).context(USAGE)?;
                         kind = v.parse()?;
                         i += 2;
                     }
                     "--" => {
-                        if i + 1 >= args.len() {
-                            bail!("Use -- before command: squad add <path> -- claude");
+                        if i + 1 >= tail.len() {
+                            bail!("Use -- before command: squad add [<path>] -- claude");
                         }
-                        command = Some(args[i + 1..].to_vec());
+                        command = Some(tail[i + 1..].to_vec());
                         break;
                     }
                     other => {
@@ -2306,13 +2333,10 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            let command = command.unwrap_or_else(shell);
-            c.projects.push(Project {
-                name: name.clone(),
-                path,
-                command,
-                kind,
-            });
+            let p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
+                .map_err(anyhow::Error::msg)?;
+            let name = p.name.clone();
+            c.projects.push(p);
             save(&c)?;
             println!("Registered {name} ({})", kind.as_str());
             Ok(())
@@ -2655,17 +2679,37 @@ mod tests {
     }
     #[test]
     fn build_project_validates() {
+        let parts = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
         let dir = env::temp_dir();
         let dir_str = dir.to_str().unwrap();
-        let p = build_project(&[], dir_str, Kind::Service, "node server.js").unwrap();
+        let p = build_project(&[], dir_str, Kind::Service, parts("node server.js")).unwrap();
         assert_eq!(p.kind, Kind::Service);
         assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
         let existing = vec![p];
-        assert!(build_project(&existing, dir_str, Kind::Agent, "").is_err());
-        assert!(build_project(&[], "", Kind::Agent, "").is_err());
-        assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, "").is_err());
-        let shell_p = build_project(&[], dir_str, Kind::Agent, "   ").unwrap();
+        assert!(build_project(&existing, dir_str, Kind::Agent, parts("")).is_err());
+        assert!(build_project(&[], "", Kind::Agent, parts("")).is_err());
+        assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, parts("")).is_err());
+        let shell_p = build_project(&[], dir_str, Kind::Agent, parts("   ")).unwrap();
         assert_eq!(shell_p.command, shell());
+    }
+    #[test]
+    fn service_without_path_uses_current_dir() {
+        // Services may skip the path: they run where squad runs, and the
+        // project takes its name from the program being served.
+        let parts = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
+        let p = build_project(&[], "", Kind::Service, parts("node server.js")).unwrap();
+        assert_eq!(p.kind, Kind::Service);
+        assert_eq!(p.name, "node");
+        assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
+        assert_eq!(
+            p.path,
+            fs::canonicalize(env::current_dir().unwrap()).unwrap()
+        );
+        // An .exe program names the project without its extension.
+        let q = build_project(&[], "", Kind::Service, parts("ollama.exe serve")).unwrap();
+        assert_eq!(q.name, "ollama");
+        // Agents still require a path.
+        assert!(build_project(&[], "", Kind::Agent, parts("claude")).is_err());
     }
     #[test]
     fn filter_matches_name_and_command() {

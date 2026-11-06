@@ -52,6 +52,9 @@ squad add C:\work\my-app -- claude
 # Register a service project (runs a dev server)
 squad add C:\work\my-api --kind service -- npm run dev
 
+# Register a service without a path (runs where you are; named after the program)
+squad add --kind service -- ollama serve
+
 # Check what is registered
 squad list
 
@@ -59,8 +62,9 @@ squad list
 squad start my-app
 ```
 
-Project names default to the directory name. Names are matched
-case-insensitively by `remove` and `start`.
+Project names default to the directory name (path-less services use the
+program name instead). Names are matched case-insensitively by `remove`
+and `start`.
 
 ## The manager
 
@@ -108,7 +112,7 @@ to the session, press `Ctrl+G` then `Esc` instead (likewise, `Ctrl+G` then
 
 ```
 squad                                                              Open the manager
-squad add <path> [--kind agent|service] [-- command args...]       Register a project
+squad add [<path>] [--kind agent|service] [-- command args...]   Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
 squad start <name>                                                 Open the manager on a project and start it
@@ -120,6 +124,8 @@ Notes:
 
 - Without `-- command`, the project opens a plain shell (`cmd.exe` on Windows).
 - `--kind` defaults to `agent`. Existing config files without a kind keep working.
+- Services may omit the path: they run in the current directory and are
+  named after the program (e.g. `ollama` for `ollama serve`).
 - `squad add <path> -- claude --dangerously-skip-permissions` style args are
   passed through verbatim after `--`.
 
