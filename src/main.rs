@@ -551,13 +551,21 @@ fn scroll_selected(
         }
     }
 }
-/// Sidebar title: plain normally, `AgentSquad (shown/total)` while a
-/// filter hides projects.
+/// Sidebar title: plain normally, `AgentSquad vX.Y.Z (shown/total)`
+/// while a filter hides projects.
 fn list_title(total: usize, shown: usize) -> String {
+    let base = format!("AgentSquad v{}", env!("CARGO_PKG_VERSION"));
     if shown == total {
-        "AgentSquad".to_string()
+        base
     } else {
-        format!("AgentSquad ({shown}/{total})")
+        format!("{base} ({shown}/{total})")
+    }
+}
+/// Group color, reused for headers and the terminal title kind chip.
+fn kind_color(kind: Kind) -> Color {
+    match kind {
+        Kind::Agent => Color::Cyan,
+        Kind::Service => Color::Magenta,
     }
 }
 /// (running, total) projects of one kind. `running[i]` mirrors
@@ -824,7 +832,9 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         let (up, total) = group_counts(&c.projects, &running, k);
                         items.push(
                             ListItem::new(format!("{title} ({up}/{total})")).style(
-                                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                                Style::default()
+                                    .fg(kind_color(k))
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                         );
                         let mut any = false;
@@ -855,8 +865,10 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     .fg(Color::Cyan)
                                     .bg(Color::DarkGray)
                                     .add_modifier(ratatui::style::Modifier::BOLD)
+                            } else if status == "Running" {
+                                Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                             } else {
-                                Style::default()
+                                Style::default().add_modifier(ratatui::style::Modifier::DIM)
                             };
                             let status_span_style = if Some(pi) == sel_pi {
                                 row_style
@@ -902,18 +914,40 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             .filter(|&n| n > 0)
                             .map(|n| format!(" · ⇅{n}"))
                             .unwrap_or_default();
-                        format!(
-                            "{} [{} · {}{}]",
-                            p.name,
-                            p.kind.as_str(),
-                            if focus { "INPUT" } else { "MANAGER" },
-                            scroll_note
-                        )
+                        Line::from(vec![
+                            Span::styled(
+                                p.name.clone(),
+                                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                            Span::raw(" ["),
+                            Span::styled(
+                                p.kind.as_str(),
+                                Style::default()
+                                    .fg(kind_color(p.kind))
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!(" · {}", if focus { "INPUT" } else { "MANAGER" }),
+                                if focus {
+                                    Style::default()
+                                        .fg(Color::Green)
+                                        .add_modifier(ratatui::style::Modifier::BOLD)
+                                } else {
+                                    Style::default().fg(Color::DarkGray)
+                                },
+                            ),
+                            Span::raw(format!("{scroll_note}]")),
+                        ])
                     })
-                    .unwrap_or("No projects: squad add <path>".into());
+                    .unwrap_or_else(|| Line::from("No projects: squad add <path>"));
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
+                    .border_style(if focus {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default()
+                    })
                     .title(title);
                 let inner = block.inner(panels[1]);
                 f.render_widget(block, panels[1]);
@@ -1019,7 +1053,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
-                                .title("Help (?/Esc closes)"),
+                                .title(Line::from(Span::styled(
+                                    "Help (?/Esc closes)",
+                                    Style::default()
+                                        .fg(Color::White)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
                         ),
                         popup,
                     );
@@ -1038,7 +1077,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
-                                .title("Stop session"),
+                                .title(Line::from(Span::styled(
+                                    "Stop session",
+                                    Style::default()
+                                        .fg(Color::Red)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
                         ),
                         popup,
                     );
@@ -1056,7 +1100,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
-                                .title("Quit"),
+                                .title(Line::from(Span::styled(
+                                    "Quit",
+                                    Style::default()
+                                        .fg(Color::Red)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
                         ),
                         popup,
                     );
@@ -1133,7 +1182,12 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
-                                .title("Add project (Enter save, Esc cancel)"),
+                                .title(Line::from(Span::styled(
+                                    "Add project (Enter save, Esc cancel)",
+                                    Style::default()
+                                        .fg(Color::Blue)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
                         ),
                         popup,
                     );
@@ -2070,9 +2124,16 @@ mod tests {
     }
     #[test]
     fn list_title_shows_filter_counts() {
-        assert_eq!(list_title(5, 5), "AgentSquad");
-        assert_eq!(list_title(0, 0), "AgentSquad");
-        assert_eq!(list_title(5, 2), "AgentSquad (2/5)");
+        let base = format!("AgentSquad v{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(list_title(5, 5), base);
+        assert_eq!(list_title(0, 0), base);
+        assert_eq!(list_title(5, 2), format!("{base} (2/5)"));
+    }
+    #[test]
+    fn kind_colors_are_distinct() {
+        assert_eq!(kind_color(Kind::Agent), Color::Cyan);
+        assert_eq!(kind_color(Kind::Service), Color::Magenta);
+        assert_ne!(kind_color(Kind::Agent), kind_color(Kind::Service));
     }
     #[test]
     fn group_counts_split_by_kind() {
