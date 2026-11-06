@@ -722,6 +722,16 @@ fn sidebar_width(area_w: u16) -> u16 {
 fn fleet_summary(running: usize, total: usize) -> String {
     format!("● {running}/{total}")
 }
+/// Sidebar border: bright cyan while navigating, dimmed once typing
+/// moves into the terminal pane. Mirrors `pane_border_style` so exactly
+/// one panel looks active at a time.
+fn sidebar_border_style(focus: bool) -> Style {
+    if focus {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::Cyan)
+    }
+}
 /// Terminal pane border: bright green while typing, dimmed in manager
 /// mode so the focus state reads at a glance.
 fn pane_border_style(focus: bool) -> Style {
@@ -1130,6 +1140,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Rounded)
+                                .border_style(sidebar_border_style(focus))
                                 .title(list_title(c.projects.len(), order.len())),
                         ),
                         panels[0],
@@ -2555,6 +2566,17 @@ mod tests {
     fn fleet_summary_counts() {
         assert_eq!(fleet_summary(2, 5), "● 2/5");
         assert_eq!(fleet_summary(0, 0), "● 0/0");
+    }
+    #[test]
+    fn sidebar_border_marks_focus() {
+        assert_eq!(
+            sidebar_border_style(false),
+            Style::default().fg(Color::Cyan)
+        );
+        assert_eq!(
+            sidebar_border_style(true),
+            Style::default().fg(Color::DarkGray)
+        );
     }
     #[test]
     fn pane_border_marks_focus() {
