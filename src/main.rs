@@ -616,6 +616,10 @@ fn sidebar_width(area_w: u16) -> u16 {
 }
 /// Sidebar title: plain normally, `AgentSquad vX.Y.Z (shown/total)`
 /// while a filter hides projects.
+/// Right-hand status bar summary: live sessions over registered projects.
+fn fleet_summary(running: usize, total: usize) -> String {
+    format!("● {running}/{total}")
+}
 fn list_title(total: usize, shown: usize) -> String {
     let base = format!("AgentSquad v{}", env!("CARGO_PKG_VERSION"));
     if shown == total {
@@ -928,21 +932,21 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .as_ref()
                                 .map(|s| s.status.as_str())
                                 .unwrap_or("Stopped");
-                            let mut second = format!("  {status}");
+                            let mut detail = String::new();
                             if status == "Running" {
                                 if let Some(s) = sessions[pi].as_ref() {
                                     if let Some(started) = s.started {
-                                        second.push(' ');
-                                        second.push_str(&uptime_label(started.elapsed().as_secs()));
+                                        detail.push(' ');
+                                        detail.push_str(&uptime_label(started.elapsed().as_secs()));
                                     }
                                 }
                             }
                             if k == Kind::Service {
-                                second.push(' ');
-                                second.push_str(&p.command.join(" "));
+                                detail.push(' ');
+                                detail.push_str(&p.command.join(" "));
                             } else if let Some(tag) = agent_tag(p) {
-                                second.push(' ');
-                                second.push_str(tag);
+                                detail.push(' ');
+                                detail.push_str(tag);
                             }
                             let mark = if Some(pi) == sel_pi { ">" } else { " " };
                             let row_style = if Some(pi) == sel_pi {
@@ -960,6 +964,11 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             } else {
                                 status_style(status)
                             };
+                            let detail_style = if Some(pi) == sel_pi {
+                                row_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            };
                             let prefix = format!("{mark}{n} ");
                             let name_w = inner_w.saturating_sub(prefix.chars().count() + 2);
                             items.push(ListItem::new(Line::from(vec![
@@ -969,7 +978,8 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     status_span_style,
                                 ),
                                 Span::styled(fit(&p.name, name_w), row_style),
-                                Span::styled(fit(&second, inner_w), status_span_style),
+                                Span::styled(format!("  {status}"), status_span_style),
+                                Span::styled(fit(&detail, inner_w), detail_style),
                             ])));
                         }
                         if !any {
@@ -1136,7 +1146,28 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 } else {
                     bar.push(Span::raw(message.clone()));
                 }
-                f.render_widget(Paragraph::new(Line::from(bar)), vertical[1]);
+                let running_n = sessions
+                    .iter()
+                    .flatten()
+                    .filter(|s| s.status == "Running")
+                    .count();
+                let status_row = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(12)])
+                    .split(vertical[1]);
+                f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        fleet_summary(running_n, c.projects.len()),
+                        if running_n > 0 {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    )))
+                    .alignment(Alignment::Right),
+                    status_row[1],
+                );
                 if show_help {
                     let popup = centered_rect(60, 50, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
@@ -2284,6 +2315,11 @@ mod tests {
         assert_eq!(sidebar_width(100), 25);
         assert_eq!(sidebar_width(152), 38);
         assert_eq!(sidebar_width(300), 38);
+    }
+    #[test]
+    fn fleet_summary_counts() {
+        assert_eq!(fleet_summary(2, 5), "● 2/5");
+        assert_eq!(fleet_summary(0, 0), "● 0/0");
     }
     #[test]
     fn list_title_shows_filter_counts() {
