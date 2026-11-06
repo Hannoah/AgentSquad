@@ -297,17 +297,26 @@ fn help_lines() -> Vec<&'static str> {
         "/          send a line to session",
         "a          add project",
         "f          filter projects",
-        "Shift+PgUp/Dn scroll history",
+        "Shift+PgUp/Dn  scroll history",
         "r          restart session",
         "s          start all stopped sessions",
         "x          stop session (asks to confirm)",
         "n/p, arrows  select project",
         "1-9        jump to project",
         "Esc        terminal back to manager",
-        "Ctrl+G,Esc send Esc to terminal",
+        "Ctrl+G,Esc  send Esc to terminal",
         "q          quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
+}
+/// Split a help row into its key column and description at the first
+/// run of two or more spaces, so the key can be highlighted.
+fn split_help_line(line: &str) -> (&str, &str) {
+    if let Some(i) = line.find("  ") {
+        (line[..i].trim_end(), line[i..].trim_start())
+    } else {
+        (line, "")
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
@@ -1077,7 +1086,18 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     f.render_widget(ratatui::widgets::Clear, popup);
                     let lines: Vec<Line> = help_lines()
                         .iter()
-                        .map(|l| Line::from(l.to_string()))
+                        .map(|l| {
+                            let (key, desc) = split_help_line(l);
+                            Line::from(vec![
+                                Span::styled(
+                                    key.to_string(),
+                                    Style::default()
+                                        .fg(Color::Cyan)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ),
+                                Span::raw(format!("  {desc}")),
+                            ])
+                        })
                         .collect();
                     f.render_widget(
                         Paragraph::new(lines).block(
@@ -2152,6 +2172,15 @@ mod tests {
         let env = pty_env();
         assert!(env.contains(&("TERM", "xterm-256color")));
         assert!(env.contains(&("COLORTERM", "truecolor")));
+    }
+    #[test]
+    fn split_help_line_columns() {
+        assert_eq!(
+            split_help_line("Enter      start it"),
+            ("Enter", "start it")
+        );
+        assert_eq!(split_help_line("no-split"), ("no-split", ""));
+        assert_eq!(split_help_line("a   b  c"), ("a", "b  c"));
     }
     #[test]
     fn sidebar_width_scales() {
