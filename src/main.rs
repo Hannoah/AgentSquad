@@ -693,6 +693,31 @@ impl Session {
         self.parser.screen_mut().set_scrollback(0);
     }
 }
+/// `squad --help` text: sectioned so commands and keys scan at a glance.
+fn cli_help() -> String {
+    format!(
+        "AgentSquad v{} — manage Agent and Service terminal sessions in one TUI.
+
+Usage:
+  squad                                              Open manager
+  squad add <path> [--kind agent|service] [-- cmd]  Register project (default: shell)
+  squad list                                         List registered projects
+  squad remove <name>                                Unregister (does not delete files)
+  squad start <name>                                 Open manager and start project
+  squad --version                                    Print version
+
+Manager keys:
+  n/p, arrows  select · Enter  start/focus · a  add · /  send a line
+  f  filter · r  restart · s  start all · x  stop · 1-9  jump
+  Shift+PgUp/Dn  scroll · q  quit · ?  help
+
+Terminal keys:
+  Esc  back to manager · Ctrl+G, g  send Ctrl+G · Ctrl+G, Esc  send Esc
+
+Quitting stops managed child processes; no detached daemon.",
+        env!("CARGO_PKG_VERSION")
+    )
+}
 /// One-time notice when a session leaves Running. Returns the message
 /// the first time only; `announced` flips so repeats stay silent.
 fn exit_notice(name: &str, was_running: bool, now: &str, announced: &mut bool) -> Option<String> {
@@ -2052,7 +2077,7 @@ fn main() -> Result<()> {
         args.first().map(String::as_str),
         Some("--help" | "-h" | "help")
     ) {
-        println!("AgentSquad v{}\n\nsquad                         Open manager\nsquad add <path> [--kind agent|service] [-- cmd args] Register project (default: shell)\nsquad list                    List registered projects\nsquad remove <name>           Unregister (does not delete files)\nsquad start <name>            Open manager and start project\nsquad --version\n\nManager: n/p or arrows select, Enter starts/focuses, a adds, / sends a line, f filters, r restarts, s starts all, x stops, 1-9 jumps, Shift+PgUp scrolls, q quits, ? help.\nTerminal: Esc returns to manager; Ctrl+G then g sends Ctrl+G, Ctrl+G then Esc sends Esc.\nQuitting stops managed child processes; no detached daemon.", env!("CARGO_PKG_VERSION"));
+        println!("{}", cli_help());
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--version") {
@@ -2208,6 +2233,24 @@ mod tests {
             status_style("Stopped"),
             Style::default().fg(Color::DarkGray)
         );
+    }
+    #[test]
+    fn cli_help_covers_commands() {
+        let h = cli_help();
+        assert!(h.contains(env!("CARGO_PKG_VERSION")));
+        for c in [
+            "squad add",
+            "squad list",
+            "squad remove",
+            "squad start",
+            "--version",
+            "Manager keys",
+            "Terminal keys",
+            "x  stop",
+            "Esc  back to manager",
+        ] {
+            assert!(h.contains(c), "help mentions {c}");
+        }
     }
     #[test]
     fn help_covers_keys() {
