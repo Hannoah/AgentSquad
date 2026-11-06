@@ -579,6 +579,34 @@ fn scroll_selected(
 }
 /// Sidebar width in columns: hidden on narrow terminals, a quarter of
 /// the width (clamped) otherwise so names and commands stay readable.
+/// `squad list` rows in manager (agents-first) order, with the name
+/// and kind columns padded so they line up in a terminal.
+fn list_table(projects: &[Project]) -> Vec<String> {
+    let order = display_order(projects);
+    let name_w = order
+        .iter()
+        .map(|&i| projects[i].name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let kind_w = order
+        .iter()
+        .map(|&i| projects[i].kind.as_str().chars().count())
+        .max()
+        .unwrap_or(0);
+    order
+        .iter()
+        .map(|&i| {
+            let p = &projects[i];
+            format!(
+                "{:<name_w$}  {:<kind_w$}  {}  {}",
+                p.name,
+                p.kind.as_str(),
+                p.path.display(),
+                p.command.join(" ")
+            )
+        })
+        .collect()
+}
 fn sidebar_width(area_w: u16) -> u16 {
     if area_w < 60 {
         0
@@ -1791,16 +1819,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
-            // Same agents-first order as the manager sidebar.
-            for &pi in display_order(&c.projects).iter() {
-                let p = &c.projects[pi];
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    p.name,
-                    p.kind.as_str(),
-                    p.path.display(),
-                    p.command.join(" ")
-                );
+            for line in list_table(&c.projects) {
+                println!("{line}");
             }
             Ok(())
         }
@@ -2234,6 +2254,28 @@ mod tests {
         );
         assert_eq!(split_help_line("no-split"), ("no-split", ""));
         assert_eq!(split_help_line("a   b  c"), ("a", "b  c"));
+    }
+    #[test]
+    fn list_table_aligns_columns() {
+        let mk = |name: &str, kind: Kind, cmd: &[&str]| Project {
+            name: name.into(),
+            path: PathBuf::from("/tmp"),
+            command: cmd.iter().map(|s| s.to_string()).collect(),
+            kind,
+        };
+        // Registration order is service-first; output is agents-first.
+        let projects = vec![
+            mk("api", Kind::Service, &["node", "server.js"]),
+            mk("web", Kind::Agent, &["claude"]),
+        ];
+        assert_eq!(
+            list_table(&projects),
+            vec![
+                "web  agent    /tmp  claude".to_string(),
+                "api  service  /tmp  node server.js".to_string(),
+            ]
+        );
+        assert!(list_table(&[]).is_empty());
     }
     #[test]
     fn sidebar_width_scales() {
