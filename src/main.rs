@@ -507,6 +507,28 @@ fn confirm_stop_prompt(name: &str) -> String {
 fn confirm_quit_prompt(n: usize) -> String {
     format!("Quit and discard {n} session(s)?")
 }
+/// Stop-confirm modal body: the prompt in alarming red, key hints in
+/// the shared status-bar style.
+fn confirm_stop_lines(name: &str) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            confirm_stop_prompt(name),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "confirms"), ("n / Esc", "cancels")])),
+    ]
+}
+/// Quit-confirm modal body: same key-hint styling as the stop modal.
+fn confirm_quit_lines(n: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::from(confirm_quit_prompt(n)),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "quits"), ("n / Esc", "cancels")])),
+    ]
+}
 /// Sessions that quitting would discard (running or finished output).
 fn live_session_count<T>(sessions: &[Option<T>]) -> usize {
     sessions.iter().flatten().count()
@@ -1405,12 +1427,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let popup = centered_rect(60, 30, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
                     f.render_widget(
-                        Paragraph::new(vec![
-                            Line::from(confirm_stop_prompt(name)),
-                            Line::from(""),
-                            Line::from("y confirms, n or Esc cancels"),
-                        ])
-                        .block(
+                        Paragraph::new(confirm_stop_lines(name)).block(
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
@@ -1428,12 +1445,7 @@ fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let popup = centered_rect(60, 30, f.area());
                     f.render_widget(ratatui::widgets::Clear, popup);
                     f.render_widget(
-                        Paragraph::new(vec![
-                            Line::from(confirm_quit_prompt(live_session_count(&sessions))),
-                            Line::from(""),
-                            Line::from("y quits, n or Esc cancels"),
-                        ])
-                        .block(
+                        Paragraph::new(confirm_quit_lines(live_session_count(&sessions))).block(
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Double)
@@ -2603,6 +2615,23 @@ mod tests {
             input_window("abcdef", 'g', "hij", 5),
             ("cdef".into(), 'g', "".into())
         );
+    }
+    #[test]
+    fn confirm_modals_style_keys() {
+        let stop = confirm_stop_lines("web");
+        let stop_text: String = stop
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(stop_text.contains("web"), "stop modal names the session");
+        assert!(stop_text.contains('y') && stop_text.contains("confirms"));
+        let quit = confirm_quit_lines(2);
+        let quit_text: String = quit
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(quit_text.contains('2'), "quit modal names the count");
+        assert!(quit_text.contains('y') && quit_text.contains("quits"));
     }
     #[test]
     fn fleet_summary_counts() {
