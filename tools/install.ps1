@@ -50,7 +50,16 @@ $zip = Join-Path $tmp $Asset
 Write-Host "Downloading squad $tagLabel..."
 Invoke-WebRequest -Uri $dl -OutFile $zip -UseBasicParsing
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
+$running = Get-Process -Name "squad" -ErrorAction SilentlyContinue
+if ($running) {
+  $pids = ($running | Select-Object -ExpandProperty Id) -join ", "
+  throw "squad is running (PID $pids) and Windows cannot replace a running program. Quit every squad manager (q in each window) and run the installer again."
+}
+try {
+  Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
+} catch {
+  throw "Could not write to $InstallDir ($($_.Exception.Message)). If squad is running, quit it first and run the installer again."
+}
 Write-Host "Installed to $InstallDir"
 
 if (($env:Path -split ";") -notcontains $InstallDir) {
