@@ -73,3 +73,6 @@ Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 
 4. **품질 검증**:
    - 89개 단위 테스트 100% 통과 (87 passed, 2 ignored).
    - `cargo clippy --all-targets -- -D warnings` 및 `cargo fmt --check` 경고 0건 통과.
+
+## [2026-11-07] 기록 | 위키 정합성 점검
+`overview.md`가 모듈 분리 전(단일 `main.rs`) 상태로 남아 있어 현재 구조로 고쳤다. index 기준 버전을 v0.5.8로 갱신. `Mode` enum 통합은 `app::run()` 약 1,700줄 재작성이라 기능 배포와 분리해 보류 중이다. → [open-work.md](open-work.md)

@@ -4,7 +4,8 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 
 ## 구조
 
-- Rust 단일 파일 `src/main.rs`가 바이너리 `squad`가 된다. 빌드 설정은 `Cargo.toml`.
+- 바이너리 `squad`의 진입점은 `src/main.rs`(CLI 명령 처리, 약 110줄)이고, 나머지는 `app`(이벤트 루프), `config`, `input`, `session`, `sys`, `ui`, `updater`, `tests` 모듈로 나뉘어 있다. 빌드 설정은 `Cargo.toml`. 모듈 분리 이력은 [log.md](log.md) 참고.
+- 아직 `app::run()` 하나가 약 1,700줄이고 모드를 불리언 여러 개로 표현한다. 정리 계획은 [open-work.md](open-work.md)의 `Mode` enum 항목.
 - 주요 의존성: ratatui(화면), crossterm(입력), portable-pty(세션 PTY), vt100(터미널 에뮬레이션), serde + toml(설정), anyhow, windows-sys(프로세스 트리, 측정).
 - `portable-pty`는 0.8에 고정했다. 0.9는 콘솔이 없는 환경에서 시작 시 멈춘다(`Cargo.toml` 주석 참고).
 - 세션은 PTY로 띄우고 출력은 읽기 스레드가 채널로 보낸다(채널 크기 32, 가득 차면 읽기 스레드가 대기).
