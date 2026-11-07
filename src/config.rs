@@ -245,11 +245,7 @@ pub fn build_project(
     kind: Kind,
     parts: Vec<String>,
 ) -> Result<Project, String> {
-    let trimmed = path_raw
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim();
+    let trimmed = path_raw.trim().trim_matches('"').trim_matches('\'').trim();
     if trimmed.is_empty() && kind != Kind::Service {
         return Err("Path is empty.".into());
     }

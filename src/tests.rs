@@ -231,7 +231,9 @@ fn agent_needs_input_and_working_detection() {
     assert!(is_needs_input("Would you like to execute this tool? [y/n]"));
     assert!(is_needs_input("Permission to read /etc/hosts? (yes/no)"));
     assert!(is_needs_input("Allow tool execution?"));
-    assert!(is_needs_input("Do you want to proceed?\n ❯ 1. Yes\n   Esc to cancel"));
+    assert!(is_needs_input(
+        "Do you want to proceed?\n ❯ 1. Yes\n   Esc to cancel"
+    ));
     assert!(!is_needs_input("All tests passed with 0 errors."));
 
     assert!(is_working_text("Thinking about next refactor step..."));
@@ -283,7 +285,10 @@ fn scrollback_view() {
 fn alternate_screen_mouse_detection() {
     let mut p = vt100::Parser::new(NonZero::new(24).unwrap(), NonZero::new(80).unwrap(), 100);
     assert!(!p.screen().alternate_screen());
-    assert_eq!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+    assert_eq!(
+        p.screen().mouse_protocol_mode(),
+        vt100::MouseProtocolMode::None
+    );
 
     // Switch to alternate screen: \x1b[?1049h
     p.process(b"\x1b[?1049h");
@@ -291,8 +296,14 @@ fn alternate_screen_mouse_detection() {
 
     // Enable SGR mouse tracking: \x1b[?1000h\x1b[?1006h
     p.process(b"\x1b[?1000h\x1b[?1006h");
-    assert_ne!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
-    assert_eq!(p.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+    assert_ne!(
+        p.screen().mouse_protocol_mode(),
+        vt100::MouseProtocolMode::None
+    );
+    assert_eq!(
+        p.screen().mouse_protocol_encoding(),
+        vt100::MouseProtocolEncoding::Sgr
+    );
 }
 #[cfg(windows)]
 fn ps_stdout(script: &str) -> String {
