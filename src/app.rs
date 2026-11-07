@@ -965,7 +965,38 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             }
             Event::Mouse(m) => {
                 if let Some(lines) = wheel_lines(m.kind) {
-                    scroll_lines_selected(&mut sessions, &order, selected, lines);
+                    if let Some(s) = order
+                        .get(selected)
+                        .and_then(|&pi| sessions.get_mut(pi))
+                        .and_then(|o| o.as_mut())
+                    {
+                        let is_alt = s.parser.screen().alternate_screen();
+                        let scrollback_len = s.parser.screen().scrollback_len();
+
+                        if is_alt || (focus && scrollback_len == 0) {
+                            let mouse_mode = s.parser.screen().mouse_protocol_mode();
+                            if mouse_mode != vt100::MouseProtocolMode::None {
+                                let btn = if lines > 0 { 64 } else { 65 };
+                                let side = sidebar_width(area.width);
+                                let col = m.column.saturating_sub(side + 1).max(1);
+                                let row = m.row.max(1);
+                                let seq = format!("\x1b[<{btn};{col};{row}M");
+                                let _ = s.input(seq.as_bytes());
+                            } else {
+                                // Alternate scroll mode:
+                                // In fullscreen/alternate screen mode (like Claude Code, vim, less),
+                                // translate wheel notches into PageUp/PageDown so the viewport scrolls naturally.
+                                let seq: &[u8] = if lines > 0 {
+                                    b"\x1b[5~" // PageUp
+                                } else {
+                                    b"\x1b[6~" // PageDown
+                                };
+                                let _ = s.input(seq);
+                            }
+                        } else {
+                            s.scroll_by(lines);
+                        }
+                    }
                     dirty = true;
                 } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
                     if show_help {

@@ -277,6 +277,21 @@ fn scrollback_view() {
     p.screen_mut().set_scrollback(0);
     assert_eq!(p.screen().scrollback(), 0);
 }
+#[test]
+fn alternate_screen_mouse_detection() {
+    let mut p = vt100::Parser::new(NonZero::new(24).unwrap(), NonZero::new(80).unwrap(), 100);
+    assert!(!p.screen().alternate_screen());
+    assert_eq!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+
+    // Switch to alternate screen: \x1b[?1049h
+    p.process(b"\x1b[?1049h");
+    assert!(p.screen().alternate_screen());
+
+    // Enable SGR mouse tracking: \x1b[?1000h\x1b[?1006h
+    p.process(b"\x1b[?1000h\x1b[?1006h");
+    assert_ne!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+    assert_eq!(p.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+}
 #[cfg(windows)]
 fn ps_stdout(script: &str) -> String {
     use std::os::windows::process::CommandExt;
