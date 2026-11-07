@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.6.3 | 업데이트 중 종료 차단(squad.exe 유실 방지), 빈 `command` 설정이 패닉 대신 에러, 실행 중 세션 `r` 재시작에 확인창, 삭제는 저장 성공 후에만 세션 정리, 설정 임시 파일명에 pid 추가 | 태그 `v0.6.3` 참고 |
 | v0.6.2 | 설치 스크립트 SHA256 검증을 fail-closed로 변경, 설정 마이그레이션을 `version` 필드로 파일당 1회만 실행(의도적 `cmd.exe` 유지), `m`(Send)이 Enter(``)로 전송, CLI `add`/`remove`가 저장 직전 재읽기(`persist_add`/`persist_remove`), 셸 서비스가 `node`/`python` 스크립트를 패키지·스크립트 이름(`jarvis-cli`)으로 표시(프로세스 명령줄 읽기) | 태그 `v0.6.2` 참고 |
 | v0.6.1 | 기존 `config.toml`에 저장된 `command = ["cmd.exe"]` 항목을 로드 시 자동으로 PowerShell(`shell()`)로 마이그레이션하고, 기본 셸 Service가 `"cmd"`로 표시되던 문제 수정 | 태그 `v0.6.1` 참고 |
 | v0.6.0 | 기본 셸을 PowerShell(`pwsh.exe`/`powershell.exe -NoLogo`)로 변경, 셸 기반 Service의 실시간 포그라운드 프로세스 이름 감지(`jarvis` 등), 작업 중 `?`(`NeedsInput`) 오탐 방지(Working 우선순위 및 코드/diff 필터링), 백그라운드 주기적 업데이트 감시(15분) 및 상태바 `⬆ (U)` 배지·`squad update` CLI 추가, SHA256 fail-closed 검증, `SessionStatus` enum 도입, 터미널 `RenderCache` 및 하단 12줄 쓰로틀 스캔, 병렬 세션 시작(`start_sessions`) 및 일괄 트리 종료(`shutdown_all`) | 태그 `v0.6.0` 참고 |

@@ -1736,3 +1736,30 @@ fn command_line_reads_a_live_process() {
     let me = command_line(std::process::id()).expect("own command line");
     assert!(me.to_ascii_lowercase().contains("squad"), "got {me}");
 }
+#[test]
+fn empty_command_errors_instead_of_panicking() {
+    let p = Project {
+        name: "x".into(),
+        path: env::current_dir().unwrap(),
+        command: vec![],
+        kind: Kind::Agent,
+    };
+    let err = Session::spawn(&p, 24, 80)
+        .err()
+        .expect("must fail")
+        .to_string();
+    assert!(err.contains("empty command"), "{err}");
+}
+#[test]
+fn save_to_leaves_no_temp_file() {
+    let dir = env::temp_dir().join(format!("squad-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config.toml");
+    save_to(&Config::default(), &file).unwrap();
+    let names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(names, ["config.toml"]);
+}

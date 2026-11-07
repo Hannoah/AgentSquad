@@ -153,7 +153,8 @@ pub fn save_to(c: &Config, p: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     // Write-then-rename so a crash mid-write never leaves a torn config.
-    let tmp = p.with_extension("toml.tmp");
+    // pid in the name: two squads saving at once must not share a temp file.
+    let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
     fs::write(&tmp, toml::to_string_pretty(c)?)?;
     fs::rename(&tmp, p)?;
     Ok(())

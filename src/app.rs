@@ -82,6 +82,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut add_err = String::new();
     let mut confirm_stop: Option<usize> = None;
     let mut confirm_remove: Option<usize> = None;
+    let mut confirm_restart: Option<usize> = None;
     let mut confirm_quit = false;
     let mut confirm_start_all = false;
     let mut message = (mode_hints(Mode::Manager).to_string(), Notice::Info);
@@ -199,7 +200,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             || confirm_quit
             || confirm_start_all
             || confirm_stop.is_some()
-            || confirm_remove.is_some());
+            || confirm_remove.is_some()
+            || confirm_restart.is_some());
         if keyboard_free && !updating && !confirm_update && update_offer.is_some() {
             confirm_update = true;
             dirty = true;
@@ -691,6 +693,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 let has_modal = matches!(mode, Mode::Help | Mode::Add)
                     || confirm_stop.is_some()
                     || confirm_remove.is_some()
+                    || confirm_restart.is_some()
                     || confirm_update
                     || confirm_quit
                     || confirm_start_all;
@@ -763,6 +766,25 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 .border_type(BorderType::Rounded)
                                 .title(Line::from(Span::styled(
                                     "Remove project",
+                                    Style::default()
+                                        .fg(Color::Red)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ))),
+                        ),
+                        popup,
+                    );
+                }
+                if let Some(pi) = confirm_restart {
+                    let name = c.projects.get(pi).map(|p| p.name.as_str()).unwrap_or("?");
+                    let popup = centered_rect(60, 30, f.area());
+                    f.render_widget(ratatui::widgets::Clear, popup);
+                    f.render_widget(
+                        Paragraph::new(confirm_restart_lines(name)).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_type(BorderType::Rounded)
+                                .title(Line::from(Span::styled(
+                                    "Restart session",
                                     Style::default()
                                         .fg(Color::Red)
                                         .add_modifier(ratatui::style::Modifier::BOLD),
@@ -1075,6 +1097,11 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 confirm_remove = None;
                                 dirty = true;
                             }
+                        } else if confirm_restart.is_some() {
+                            if outside(60, 30) {
+                                confirm_restart = None;
+                                dirty = true;
+                            }
                         } else if confirm_quit {
                             if outside(60, 30) {
                                 confirm_quit = false;
@@ -1177,6 +1204,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             || confirm_start_all
                             || confirm_stop.is_some()
                             || confirm_remove.is_some()
+                            || confirm_restart.is_some()
                             || confirm_update)
                     {
                         // Right-click on sidebar: quick toggle (stop if running, start if stopped)
@@ -1560,41 +1588,53 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         continue;
                     }
+                    if confirm_restart.is_some() {
+                        match confirm_key(k.code) {
+                            Some(true) => {
+                                if let Some(pi) = confirm_restart.take() {
+                                    message = match restart_session(
+                                        &mut sessions,
+                                        &c.projects,
+                                        pi,
+                                        rows,
+                                        cols,
+                                    ) {
+                                        None => (
+                                            format!("Restarted {}", c.projects[pi].name),
+                                            Notice::Info,
+                                        ),
+                                        Some(e) => (e, Notice::Error),
+                                    };
+                                }
+                            }
+                            Some(false) => confirm_restart = None,
+                            None => {}
+                        }
+                        continue;
+                    }
                     if confirm_remove.is_some() {
                         match confirm_key(k.code) {
                             Some(true) => {
                                 if let Some(pi) = confirm_remove.take() {
-                                    if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take())
-                                    {
-                                        thread::spawn(move || drop(old));
-                                    }
-                                    if let Some(removed) =
-                                        remove_project(&mut c.projects, &mut sessions, pi)
-                                    {
-                                        match persist_remove(&removed.name) {
-                                            Ok(()) => {
-                                                // Keep an active filter across the removal.
-                                                order =
-                                                    apply_filter(&c.projects, &filter_buf.as_str());
-                                                selected =
-                                                    selected.min(order.len().saturating_sub(1));
-                                                message = (
-                                                    format!("Removed {}.", removed.name),
-                                                    Notice::Warn,
-                                                );
+                                    // Save first: a failed save leaves the project and
+                                    // its running session untouched.
+                                    let name = c.projects[pi].name.clone();
+                                    match persist_remove(&name) {
+                                        Ok(()) => {
+                                            if let Some(Some(old)) =
+                                                sessions.get_mut(pi).map(|o| o.take())
+                                            {
+                                                thread::spawn(move || drop(old));
                                             }
-                                            Err(e) => {
-                                                // Roll back so a failed save never loses the project.
-                                                let at = pi.min(c.projects.len());
-                                                c.projects.insert(at, removed);
-                                                if at <= sessions.len() {
-                                                    sessions.insert(at, None);
-                                                }
-                                                message = (
-                                                    format!("Remove failed: {e:#}"),
-                                                    Notice::Error,
-                                                );
-                                            }
+                                            remove_project(&mut c.projects, &mut sessions, pi);
+                                            // Keep an active filter across the removal.
+                                            order = apply_filter(&c.projects, &filter_buf.as_str());
+                                            selected = selected.min(order.len().saturating_sub(1));
+                                            message = (format!("Removed {name}."), Notice::Warn);
+                                        }
+                                        Err(e) => {
+                                            message =
+                                                (format!("Remove failed: {e:#}"), Notice::Error);
                                         }
                                     }
                                 }
@@ -1611,7 +1651,13 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             if k.code == KeyCode::Char('q')
                                 || k.modifiers.contains(KeyModifiers::CONTROL) =>
                         {
-                            if live_session_count(&sessions) > 0 {
+                            if updating {
+                                // Quitting mid-swap could leave no squad.exe behind.
+                                message = (
+                                    "Update in progress; quit once it finishes.".to_string(),
+                                    Notice::Warn,
+                                );
+                            } else if live_session_count(&sessions) > 0 {
                                 confirm_quit = true;
                             } else {
                                 quit_requested = true;
@@ -1691,14 +1737,24 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         KeyCode::Char('r') => {
                             if let Some(&pi) = order.get(selected) {
-                                match restart_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                    None => {
-                                        message = (
-                                            format!("Restarted {}", c.projects[pi].name),
-                                            Notice::Info,
-                                        );
+                                if slot_running(&sessions, pi) {
+                                    confirm_restart = Some(pi);
+                                } else {
+                                    match restart_session(
+                                        &mut sessions,
+                                        &c.projects,
+                                        pi,
+                                        rows,
+                                        cols,
+                                    ) {
+                                        None => {
+                                            message = (
+                                                format!("Restarted {}", c.projects[pi].name),
+                                                Notice::Info,
+                                            );
+                                        }
+                                        Some(e) => message = (e, Notice::Error),
                                     }
-                                    Some(e) => message = (e, Notice::Error),
                                 }
                             }
                         }

@@ -284,6 +284,20 @@ pub fn confirm_stop_lines(name: &str) -> Vec<Line<'static>> {
         Line::from(hint_spans(&[("y", "confirms"), ("n / Esc", "cancels")])),
     ]
 }
+/// Restart-confirm modal body (only shown for a running session).
+pub fn confirm_restart_lines(name: &str) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            format!("Restart session '{name}'?"),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from("The running session and its output are discarded."),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "restarts"), ("n / Esc", "cancels")])),
+    ]
+}
 /// Quit-confirm modal body: same key-hint styling as the stop modal.
 pub fn confirm_quit_lines(n: usize) -> Vec<Line<'static>> {
     vec![

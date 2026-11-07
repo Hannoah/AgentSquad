@@ -400,8 +400,12 @@ pub struct Session {
 }
 impl Session {
     pub fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
+        // A hand-edited config can carry `command = []`.
+        let Some(program) = p.command.first() else {
+            anyhow::bail!("Project '{}' has an empty command", p.name);
+        };
         let pair = native_pty_system().openpty(size(rows, cols))?;
-        let mut cmd = CommandBuilder::new(&p.command[0]);
+        let mut cmd = CommandBuilder::new(program);
         cmd.args(&p.command[1..]);
         cmd.cwd(&p.path);
         for (k, v) in pty_env() {
@@ -412,7 +416,7 @@ impl Session {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .with_context(|| format!("Cannot start {}", p.command[0]))?;
+            .with_context(|| format!("Cannot start {program}"))?;
         drop(pair.slave);
         // Bounded queue: at most 32 * 16 KiB of pending output per session.
         let (tx, rx) = mpsc::sync_channel(32);
@@ -710,7 +714,7 @@ pub fn restart_session(
         Err(e) => Some(format!("{e:#}")),
     }
 }
-fn slot_running(sessions: &[Option<Session>], pi: usize) -> bool {
+pub fn slot_running(sessions: &[Option<Session>], pi: usize) -> bool {
     sessions
         .get(pi)
         .and_then(|o| o.as_ref())
