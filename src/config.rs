@@ -1,0 +1,324 @@
+use crate::session::Session;
+use anyhow::{bail, Context, Result};
+use portable_pty::PtySize;
+use serde::{Deserialize, Serialize};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Agent,
+    Service,
+}
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Agent => "agent",
+            Kind::Service => "service",
+        }
+    }
+}
+impl FromStr for Kind {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "agent" => Ok(Kind::Agent),
+            "service" => Ok(Kind::Service),
+            other => bail!("Unknown kind: {other}. Use agent or service"),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Project {
+    pub name: String,
+    pub path: PathBuf,
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub kind: Kind,
+}
+#[derive(Default, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub projects: Vec<Project>,
+}
+pub fn config_path() -> Result<PathBuf> {
+    if let Some(p) = env::var_os("AGENTSQUAD_CONFIG") {
+        return Ok(p.into());
+    }
+    let base = env::var_os("LOCALAPPDATA")
+        .or_else(|| env::var_os("XDG_CONFIG_HOME"))
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
+        .context("Set AGENTSQUAD_CONFIG to a writable config file")?;
+    Ok(base.join("AgentSquad").join("config.toml"))
+}
+pub fn load_from(p: &Path) -> Result<Config> {
+    if !p.exists() {
+        return Ok(Config::default());
+    }
+    let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
+    let mut config: Config =
+        toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))?;
+    let mut seen_names: Vec<String> = Vec::new();
+    for proj in &mut config.projects {
+        proj.path = plain_path(proj.path.clone());
+        // Legacy migration: in <=0.5.4, services defaulted to directory name.
+        // If a service's name matches its directory name, migrate it to the
+        // served program name so it reads as a service rather than a folder.
+        if proj.kind == Kind::Service {
+            let dir_name = proj
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if !dir_name.is_empty() && proj.name.eq_ignore_ascii_case(&dir_name) {
+                if let Some(prog) = program_name(&proj.command) {
+                    let mut candidate = prog.clone();
+                    let mut i = 2;
+                    while seen_names
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&candidate))
+                    {
+                        candidate = format!("{prog}-{i}");
+                        i += 1;
+                    }
+                    proj.name = candidate;
+                }
+            }
+        }
+        seen_names.push(proj.name.clone());
+    }
+    Ok(config)
+}
+pub fn load() -> Result<Config> {
+    let p = config_path()?;
+    load_from(&p)
+}
+pub fn save_to(c: &Config, p: &Path) -> Result<()> {
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Write-then-rename so a crash mid-write never leaves a torn config.
+    let tmp = p.with_extension("toml.tmp");
+    fs::write(&tmp, toml::to_string_pretty(c)?)?;
+    fs::rename(&tmp, p)?;
+    Ok(())
+}
+pub fn save(c: &Config) -> Result<()> {
+    let p = config_path()?;
+    save_to(c, &p)
+}
+/// Register `p` on disk, re-reading the file first so projects added or
+/// removed by another process are not clobbered.
+pub fn persist_add(p: &Project) -> Result<()> {
+    let mut disk = load()?;
+    if !disk
+        .projects
+        .iter()
+        .any(|q| q.name.eq_ignore_ascii_case(&p.name))
+    {
+        disk.projects.push(p.clone());
+    }
+    save(&disk)
+}
+/// Unregister `name` on disk, re-reading the file first (see `persist_add`).
+pub fn persist_remove(name: &str) -> Result<()> {
+    let mut disk = load()?;
+    disk.projects.retain(|q| !q.name.eq_ignore_ascii_case(name));
+    save(&disk)
+}
+/// Drop the Windows verbatim prefix `fs::canonicalize` adds, so stored
+/// paths read `C:\x` instead of `\\?\C:\x` (many tools choke on the latter).
+pub fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => p,
+    }
+}
+/// Split a command line on whitespace, keeping "double quoted" runs whole.
+pub fn split_command(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut has = false;
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                has = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
+}
+pub fn shell() -> Vec<String> {
+    if cfg!(windows) {
+        vec!["cmd.exe".into()]
+    } else {
+        vec!["sh".into()]
+    }
+}
+/// Fold in projects registered by another process (e.g. `squad add` in a
+/// second terminal) so a later save does not clobber them. Only appends
+/// names we don't have, keeping `sessions` aligned by index.
+pub fn merge_projects(c: &mut Config, sessions: &mut Vec<Option<Session>>, disk: Config) {
+    for p in disk.projects {
+        if !c
+            .projects
+            .iter()
+            .any(|q| q.name.eq_ignore_ascii_case(&p.name))
+        {
+            c.projects.push(p);
+            sessions.push(None);
+        }
+    }
+}
+/// Environment advertised to sessions. `COLORTERM` unlocks 24-bit color
+/// for apps like Claude that downgrade without it; the parser and the
+/// renderer already pass RGB through.
+pub fn pty_env() -> [(&'static str, &'static str); 2] {
+    [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")]
+}
+pub fn size(rows: u16, cols: u16) -> PtySize {
+    PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+/// Sidebar order: all agents first, then all services. Positions in this
+/// vector are what the manager selection index refers to.
+pub fn display_order(projects: &[Project]) -> Vec<usize> {
+    let mut order = Vec::with_capacity(projects.len());
+    order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Agent));
+    order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Service));
+    order
+}
+/// Validate raw add-form input into a Project without touching disk state.
+///
+/// Find a unique project name by appending `-2`, `-3`, ... when `base` is taken.
+pub fn unique_name(base: &str, existing: &[Project]) -> String {
+    if !existing.iter().any(|p| p.name.eq_ignore_ascii_case(base)) {
+        return base.to_string();
+    }
+    let mut i = 2;
+    loop {
+        let candidate = format!("{base}-{i}");
+        if !existing
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+/// Build and validate a project from user inputs.
+///
+/// Services take their name from the program being run and can share a directory
+/// with other services (unique names like `node-2` are assigned automatically).
+/// Agents require an explicit path and default to the directory's name.
+pub fn build_project(
+    existing: &[Project],
+    path_raw: &str,
+    kind: Kind,
+    parts: Vec<String>,
+) -> Result<Project, String> {
+    let trimmed = path_raw.trim();
+    if trimmed.is_empty() && kind != Kind::Service {
+        return Err("Path is empty.".into());
+    }
+    // An omitted service path means "right here".
+    let anchor = if trimmed.is_empty() { "." } else { trimmed };
+    let path = plain_path(fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?);
+    if !path.is_dir() {
+        return Err("Project path must be a directory.".into());
+    }
+    let dir_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if dir_name.is_empty() {
+        return Err("Cannot use filesystem root as project.".into());
+    }
+    let name = if kind == Kind::Service {
+        let base = program_name(&parts).unwrap_or(dir_name);
+        unique_name(&base, existing)
+    } else {
+        if existing
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&dir_name))
+        {
+            return Err(format!("Project name already registered: {dir_name}"));
+        }
+        dir_name
+    };
+    let command = if parts.is_empty() { shell() } else { parts };
+    Ok(Project {
+        name,
+        path,
+        command,
+        kind,
+    })
+}
+/// Program word of a command line for naming path-less services:
+/// `ollama.exe` serves as `ollama`, `node` stays `node`.
+pub fn program_name(parts: &[String]) -> Option<String> {
+    let first = parts.first()?;
+    let base = std::path::Path::new(first)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| first.clone());
+    let lower = base.to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com"] {
+        if let Some(stem) = lower.strip_suffix(ext) {
+            let stem = base[..stem.len()].to_string();
+            if !stem.is_empty() {
+                return Some(stem);
+            }
+        }
+    }
+    Some(base)
+}
+/// Filtered view: display order narrowed to projects whose name or
+/// command contains the query (case-insensitive). Empty query = all.
+pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
+    let q = query.to_ascii_lowercase();
+    display_order(projects)
+        .into_iter()
+        .filter(|&i| {
+            q.is_empty()
+                || projects[i].name.to_ascii_lowercase().contains(&q)
+                || projects[i]
+                    .command
+                    .join(" ")
+                    .to_ascii_lowercase()
+                    .contains(&q)
+        })
+        .collect()
+}
+pub fn fit(s: &str, w: usize) -> String {
+    s.chars().take(w).collect()
+}

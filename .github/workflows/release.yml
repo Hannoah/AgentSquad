@@ -19,11 +19,14 @@ jobs:
       - name: Build release
         run: cargo build --release --locked
       - name: Package
-        run: Compress-Archive -Path target/release/squad.exe -DestinationPath squad-windows-x86_64.zip
+        run: |
+          Compress-Archive -Path target/release/squad.exe -DestinationPath squad-windows-x86_64.zip
+          $hash = (Get-FileHash -Path squad-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  squad-windows-x86_64.zip" | Out-File -FilePath squad-windows-x86_64.zip.sha256 -Encoding ascii
       - name: Publish to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "${{ github.ref_name }}" >$null 2>&1
           if ($LASTEXITCODE -ne 0) { gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes }
-          gh release upload "${{ github.ref_name }}" squad-windows-x86_64.zip --clobber
+          gh release upload "${{ github.ref_name }}" squad-windows-x86_64.zip squad-windows-x86_64.zip.sha256 --clobber

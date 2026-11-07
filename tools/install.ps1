@@ -26,15 +26,18 @@ if ([string]::IsNullOrWhiteSpace($Repo)) {
 }
 
 $Asset = "squad-windows-x86_64.zip"
+$shaAsset = "$Asset.sha256"
 $apiHeaders = @{}
 if (-not [string]::IsNullOrWhiteSpace($Token)) {
   $apiHeaders["Authorization"] = "Bearer $Token"
 }
+$dlSha = $null
 if ($Version -eq "latest") {
   # No API call here: the /latest/download redirect needs no
   # authentication and is not subject to API rate limits.
   $tagLabel = "latest"
   $dl = "https://github.com/$Repo/releases/latest/download/$Asset"
+  $dlSha = "https://github.com/$Repo/releases/latest/download/$shaAsset"
 } else {
   $tag = $Version
   if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
@@ -42,6 +45,7 @@ if ($Version -eq "latest") {
   $tagLabel = $rel.tag_name
   $dl = ($rel.assets | Where-Object { $_.name -eq $Asset }).browser_download_url
   if (-not $dl) { throw "Asset '$Asset' not found in release $tagLabel." }
+  $dlSha = ($rel.assets | Where-Object { $_.name -eq $shaAsset }).browser_download_url
 }
 
 $tmp = Join-Path $env:TEMP "squad-install"
@@ -49,6 +53,28 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zip = Join-Path $tmp $Asset
 Write-Host "Downloading squad $tagLabel..."
 Invoke-WebRequest -Uri $dl -OutFile $zip -UseBasicParsing
+
+# Verify SHA256 if .sha256 asset is available
+if ($dlSha) {
+  try {
+    $shaFile = Join-Path $tmp $shaAsset
+    Invoke-WebRequest -Uri $dlSha -OutFile $shaFile -UseBasicParsing -ErrorAction SilentlyContinue
+    if (Test-Path $shaFile) {
+      $expectedHash = ((Get-Content $shaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+      if ($expectedHash.Length -eq 64) {
+        $actualHash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) {
+          throw "SHA256 checksum mismatch! Expected $expectedHash, got $actualHash."
+        }
+        Write-Host "SHA256 verified: $actualHash"
+      }
+    }
+  } catch [System.Management.Automation.RuntimeException] {
+    if ($_.Exception.Message -like "*checksum mismatch*") { throw }
+  } catch {
+    if ($_.Exception.Message -like "*checksum mismatch*") { throw }
+  }
+}
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $running = Get-Process -Name "squad" -ErrorAction SilentlyContinue
 if ($running) {

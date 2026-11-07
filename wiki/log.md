@@ -51,3 +51,25 @@ Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 
    - 프로젝트 미등록 시 안내 카드를 터미널 중앙에 보기 좋게 정렬.
 8. **단위 테스트 및 품질 검증**:
    - 89개 단위 테스트(87 통과, 2 네트워크 무시) 성공, `cargo clippy --all-targets -- -D warnings` 및 `cargo fmt --check` 무결점 검증 통과. release 바이너리 빌드 및 `%LOCALAPPDATA%\AgentSquad\bin\squad.exe` 배포 완료.
+
+## [2026-11-07] 아키텍처 및 커서 안정화 | 코드베이스 모듈화 및 커서 지터/플리커링 완전 박멸
+1. **커서 깜빡임/요동(Jitter & Flicker) 근본 원인 분석 및 해결**:
+   - **원인 1 (200ms 강제 리드로우)**: `status == "Running"`인 세션이 하나라도 있으면 포커스 여부와 무관하게 200ms마다 `dirty = true`가 발생하여 초당 5회의 전체 diff redraw가 실행됨. 사용자가 터미널 포커스 상태(`focus == true`)로 타이핑하거나 출력 대기 중일 때는 스피너 애니메이션 틱을 건너뛰도록 분기(`if !focus && last_anim_tick.elapsed() >= Duration::from_millis(200)`).
+   - **원인 2 (Hide/Show 토글 루프)**: 매 프레임 직전 `cursor::Hide`를 호출하고 Ratatui `f.set_cursor_position()`이 커서를 다시 Show하면서 초당 수십 번의 Show/Hide 상태가 반복되어 커서가 난폭하게 점멸함. 수동 `cursor::Hide` 큐잉을 전면 제거하고 Ratatui 네이티브 커서 라이프사이클에 위임.
+   - **원인 3 (버퍼 분리로 인한 커서 위치 유출)**: raw `stdout`으로 `\x1b[?2026h`를 전송하고 터미널 그리드는 `BufWriter`로 출력되면서 ConPTY에 중간 커서 이동 상태가 섞여 들어감. `terminal.backend_mut()`을 통해 동기화 시퀀스를 동일 버퍼 파이프라인으로 전송.
+2. **5,300+ 라인 단일 파일 모듈화 분리**:
+   - 거대했던 `src/main.rs`를 110라인의 간결한 진입점으로 축소하고 단일 책임 원칙에 따라 8개 전문 모듈로 재구성:
+     - `src/config.rs`: 프로젝트 설정, `Kind`, `display_order`, 경로 정규화, 직렬화.
+     - `src/sys.rs`: Windows Toolhelp32 프로세스 트리 순회, 백그라운드 CPU/메모리 측정.
+     - `src/session.rs`: ConPTY 세션 관리, PTY 버퍼 읽기, `AgentPhase`, `SessionStatus`.
+     - `src/input.rs`: 키 이벤트 처리, xterm 바이트 변환, `LineInput`, Shift+Enter 포워딩.
+     - `src/ui.rs`: Ratatui 뷰 렌더링, 레이아웃, 모달, 상태 표시 배지.
+     - `src/updater.rs`: 백그라운드 릴리스 확인, certutil SHA256 계산, 바이너리 핫스왑.
+     - `src/app.rs`: 메인 이벤트 루프 및 TUI 수명주기 관리.
+     - `src/tests.rs`: 89개 단위 테스트 모음.
+3. **보안 무결성 강화 (SHA256 체크섬)**:
+   - `.github/workflows/release.yml`: 릴리스 빌드 시 `squad-windows-x86_64.zip.sha256` 자동 생성 및 에셋 업로드.
+   - `tools/install.ps1`: `Get-FileHash` 기반으로 다운로드된 zip의 SHA256 체크섬을 검증하여 압축 해제 전 변조/손상 차단.
+4. **품질 검증**:
+   - 89개 단위 테스트 100% 통과 (87 passed, 2 ignored).
+   - `cargo clippy --all-targets -- -D warnings` 및 `cargo fmt --check` 경고 0건 통과.
