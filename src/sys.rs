@@ -1,4 +1,4 @@
-use crate::config::{is_shell_program, program_name};
+use crate::config::{is_shell_program, program_name, split_command};
 use ratatui::style::{Color, Style};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -159,6 +159,11 @@ fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec
 /// service registered as plain `cmd.exe` that runs `jarvis` reads as
 /// "jarvis". None when only shells are running.
 pub fn foreground_name(root: u32, table: &ProcTable) -> Option<String> {
+    foreground_proc(root, table).map(|(_, stem)| stem)
+}
+/// `foreground_name` plus the pid it came from, so the caller can look at
+/// that process's command line.
+fn foreground_proc(root: u32, table: &ProcTable) -> Option<(u32, String)> {
     let mut seen = HashSet::from([root]);
     let mut queue = VecDeque::from([root]);
     while let Some(pid) = queue.pop_front() {
@@ -169,7 +174,7 @@ pub fn foreground_name(root: u32, table: &ProcTable) -> Option<String> {
                 .and_then(|n| program_name(std::slice::from_ref(n)))
             {
                 if !is_shell_program(&stem) {
-                    return Some(stem);
+                    return Some((pid, stem));
                 }
             }
         }
@@ -179,6 +184,126 @@ pub fn foreground_name(root: u32, table: &ProcTable) -> Option<String> {
             }
         }
     }
+    None
+}
+
+/// Programs whose own name says nothing about what they run.
+const INTERPRETERS: [&str; 7] = ["node", "python", "pythonw", "py", "deno", "bun", "ruby"];
+/// Name for an interpreter running a script: `node …\node_modules\jarvis-cli\
+/// dist\cli.js` is "jarvis-cli", `python app.py` is "app". None when `stem`
+/// is not an interpreter or no script argument is found.
+pub fn script_label(stem: &str, cmdline: &str) -> Option<String> {
+    if !INTERPRETERS.contains(&stem.to_ascii_lowercase().as_str()) {
+        return None;
+    }
+    let args = split_command(cmdline);
+    let script = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    let parts: Vec<&str> = script
+        .split(['\\', '/'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    // The folder after the last node_modules names the tool; `@scope/pkg`
+    // is named by pkg.
+    if let Some(i) = parts.iter().rposition(|p| *p == "node_modules") {
+        let at = if parts.get(i + 1).is_some_and(|p| p.starts_with('@')) {
+            i + 2
+        } else {
+            i + 1
+        };
+        if let Some(pkg) = parts.get(at) {
+            return Some(pkg.to_string());
+        }
+    }
+    let file = parts.last()?;
+    let stem = std::path::Path::new(file).file_stem()?.to_string_lossy();
+    (!stem.is_empty()).then(|| stem.into_owned())
+}
+/// Command line of process `pid`, read from its PEB. Best effort: None when
+/// the process is gone, protected, or not a 64-bit process.
+#[cfg(all(windows, target_pointer_width = "64"))]
+pub fn command_line(pid: u32) -> Option<String> {
+    use std::ffi::c_void;
+    use windows_sys::{
+        Wdk::System::Threading::NtQueryInformationProcess,
+        Win32::{
+            Foundation::{CloseHandle, FALSE},
+            System::{
+                Diagnostics::Debug::ReadProcessMemory,
+                Threading::{
+                    OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+                    PROCESS_VM_READ,
+                },
+            },
+        },
+    };
+    // SAFETY: the handle is opened and closed here, and every out-pointer
+    // references a live local buffer of the stated size. The offsets are the
+    // documented x64 layout: PEB.ProcessParameters at 0x20 and
+    // RTL_USER_PROCESS_PARAMETERS.CommandLine (a UNICODE_STRING) at 0x70.
+    unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            FALSE,
+            pid,
+        );
+        if handle.is_null() {
+            return None;
+        }
+        let read = |addr: usize, buf: *mut c_void, len: usize| {
+            ReadProcessMemory(
+                handle,
+                addr as *const c_void,
+                buf,
+                len,
+                std::ptr::null_mut(),
+            ) != 0
+        };
+        let result = (|| {
+            let mut pbi: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
+            let size = std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32;
+            let status = NtQueryInformationProcess(
+                handle,
+                0, // ProcessBasicInformation
+                &mut pbi as *mut _ as *mut c_void,
+                size,
+                std::ptr::null_mut(),
+            );
+            if status != 0 || pbi.PebBaseAddress.is_null() {
+                return None;
+            }
+            let mut params = [0u8; 8];
+            if !read(
+                pbi.PebBaseAddress as usize + 0x20,
+                params.as_mut_ptr().cast(),
+                8,
+            ) {
+                return None;
+            }
+            let mut us = [0u8; 16];
+            if !read(
+                usize::from_le_bytes(params) + 0x70,
+                us.as_mut_ptr().cast(),
+                16,
+            ) {
+                return None;
+            }
+            let bytes = u16::from_le_bytes([us[0], us[1]]) as usize;
+            let ptr = usize::from_le_bytes(us[8..16].try_into().ok()?);
+            if bytes == 0 || ptr == 0 {
+                return None;
+            }
+            let mut buf = vec![0u16; bytes / 2];
+            if !read(ptr, buf.as_mut_ptr().cast(), bytes / 2 * 2) {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&buf))
+        })();
+        CloseHandle(handle);
+        result
+    }
+}
+#[cfg(not(all(windows, target_pointer_width = "64")))]
+pub fn command_line(_pid: u32) -> Option<String> {
     None
 }
 
@@ -343,7 +468,14 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
             .collect();
         let labels = roots
             .iter()
-            .map(|&(pi, pid)| (pi, pid, foreground_name(pid, &table)))
+            .map(|&(pi, pid)| {
+                let label = foreground_proc(pid, &table).map(|(fg, stem)| {
+                    command_line(fg)
+                        .and_then(|cmd| script_label(&stem, &cmd))
+                        .unwrap_or(stem)
+                });
+                (pi, pid, label)
+            })
             .collect();
         (procs, labels)
     };

@@ -1268,7 +1268,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     }
                                     if let Some(Some(s)) = sessions.get_mut(pi) {
                                         let mut bytes = line.into_bytes();
-                                        bytes.push(b'\n');
+                                        // CR is Enter; LF reads as Shift+Enter (newline) to agents.
+                                        bytes.push(b'\r');
                                         match s.input(&bytes) {
                                             Ok(()) => {
                                                 message = (

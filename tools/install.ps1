@@ -54,27 +54,25 @@ $zip = Join-Path $tmp $Asset
 Write-Host "Downloading squad $tagLabel..."
 Invoke-WebRequest -Uri $dl -OutFile $zip -UseBasicParsing
 
-# Verify SHA256 if .sha256 asset is available
-if ($dlSha) {
-  try {
-    $shaFile = Join-Path $tmp $shaAsset
-    Invoke-WebRequest -Uri $dlSha -OutFile $shaFile -UseBasicParsing -ErrorAction SilentlyContinue
-    if (Test-Path $shaFile) {
-      $expectedHash = ((Get-Content $shaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-      if ($expectedHash.Length -eq 64) {
-        $actualHash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actualHash -ne $expectedHash) {
-          throw "SHA256 checksum mismatch! Expected $expectedHash, got $actualHash."
-        }
-        Write-Host "SHA256 verified: $actualHash"
-      }
-    }
-  } catch [System.Management.Automation.RuntimeException] {
-    if ($_.Exception.Message -like "*checksum mismatch*") { throw }
-  } catch {
-    if ($_.Exception.Message -like "*checksum mismatch*") { throw }
-  }
+# Fail closed, like `squad update`: a missing, unreadable or malformed
+# checksum means the download cannot be verified, so nothing is installed.
+$shaFile = Join-Path $tmp $shaAsset
+Remove-Item -Path $shaFile -Force -ErrorAction SilentlyContinue  # never trust a leftover from an earlier run
+if (-not $dlSha) { throw "No $shaAsset in release $tagLabel; refusing to install an unverified build." }
+try {
+  Invoke-WebRequest -Uri $dlSha -OutFile $shaFile -UseBasicParsing
+} catch {
+  throw "Cannot download $shaAsset ($($_.Exception.Message)); refusing to install an unverified build."
 }
+$expectedHash = ((Get-Content $shaFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+  throw "$shaAsset is malformed; refusing to install."
+}
+$actualHash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $expectedHash) {
+  throw "SHA256 checksum mismatch! Expected $expectedHash, got $actualHash."
+}
+Write-Host "SHA256 verified: $actualHash"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # Clean up leftover .old-* binaries from earlier updates/installs when not locked.
 Get-ChildItem -Path $InstallDir -Filter "squad.exe.old*" -ErrorAction SilentlyContinue | ForEach-Object {

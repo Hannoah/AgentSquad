@@ -16,7 +16,7 @@ use std::{
 };
 
 use app::run;
-use config::{build_project, load, save, shell, Kind};
+use config::{build_project, load, persist_add, persist_remove, shell, Kind};
 use ui::{cli_help, empty_list_hint, list_table};
 use updater::{install_update, is_newer, latest_tag_result};
 
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
         println!("squad {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let mut c = load()?;
+    let c = load()?;
     match args.first().map(String::as_str) {
         None => run(c, None),
         Some("add") => {
@@ -70,10 +70,9 @@ fn main() -> Result<()> {
             }
             let p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
-            let name = p.name.clone();
-            c.projects.push(p);
-            save(&c)?;
-            println!("Registered {name} ({})", kind.as_str());
+            // Re-reads the file so a running squad's own writes are not clobbered.
+            persist_add(&p)?;
+            println!("Registered {} ({})", p.name, kind.as_str());
             Ok(())
         }
         Some("list") => {
@@ -90,12 +89,10 @@ fn main() -> Result<()> {
         }
         Some("remove") => {
             let name = args.get(1).context("Usage: squad remove <name>")?;
-            let old = c.projects.len();
-            c.projects.retain(|p| !p.name.eq_ignore_ascii_case(name));
-            if old == c.projects.len() {
+            if !c.projects.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
                 bail!("Unknown project: {name}");
             }
-            save(&c)?;
+            persist_remove(name)?;
             println!("Unregistered {name}; project files unchanged");
             Ok(())
         }

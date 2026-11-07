@@ -49,13 +49,28 @@ pub struct Project {
     #[serde(default)]
     pub kind: Kind,
 }
-#[derive(Default, Serialize, Deserialize)]
+/// Bump when `load_from` gains a one-time migration. A file stamped with
+/// this version is left exactly as the user wrote it.
+pub const CONFIG_VERSION: u32 = 1;
+#[derive(Serialize, Deserialize)]
 pub struct Config {
+    /// Migrations already applied; a file without it predates versioning.
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub projects: Vec<Project>,
     /// Lines of scrollback kept per session (default 2000).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            version: CONFIG_VERSION,
+            projects: Vec::new(),
+            scrollback: None,
+        }
+    }
 }
 pub fn config_path() -> Result<PathBuf> {
     if let Some(p) = env::var_os("AGENTSQUAD_CONFIG") {
@@ -76,8 +91,15 @@ pub fn load_from(p: &Path) -> Result<Config> {
     let mut config: Config =
         toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))?;
     let mut seen_names: Vec<String> = Vec::new();
+    // Legacy rewrites run once per file, so a deliberate `cmd.exe` or a
+    // service named after its folder survives later loads.
+    let migrate = config.version < CONFIG_VERSION;
+    config.version = CONFIG_VERSION;
     for proj in &mut config.projects {
         proj.path = plain_path(proj.path.clone());
+        if !migrate {
+            continue;
+        }
         // Legacy migration: in <=0.5.9, the default shell on Windows was bare
         // `cmd.exe`. Upgrade stored bare `cmd.exe` defaults to PowerShell.
         if cfg!(windows)

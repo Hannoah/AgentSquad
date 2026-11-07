@@ -102,3 +102,6 @@ Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 
 5. **AV(AhnLab V3) 오탐 방지**:
    - `[profile.release]`에서 `strip = false`로 심볼 유지, 시작 직후 0ms 프로세스 스냅샷 호출을 2초 뒤로 지연.
    - 테스트 95개(93 통과, 2 네트워크 무시) 및 `clippy --all-targets -- -D warnings` 통과.
+
+## [2026-11-07] 배포 | v0.6.2
+전체 리뷰 후 수정 4건(설치 체크섬 fail-closed, 마이그레이션 1회 실행, Send ``, CLI 저장 재읽기)과 셸 서비스 라이브 이름(`jarvis-cli`) 개선. 테스트 96개 통과, clippy와 fmt 깨끗. → [releases.md](releases.md)

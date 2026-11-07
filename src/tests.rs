@@ -29,6 +29,7 @@ fn config_roundtrip() {
             kind: Kind::Agent,
         }],
         scrollback: None,
+        ..Default::default()
     };
     let decoded: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
     assert_eq!(decoded.projects[0].name, "demo");
@@ -764,6 +765,7 @@ fn persist_helpers_keep_other_writers_projects() {
         &Config {
             projects: vec![mk("a"), mk("b")],
             scrollback: None,
+            ..Default::default()
         },
         &file,
     )
@@ -1026,6 +1028,7 @@ fn remove_persists_to_config_file() {
     let config = Config {
         projects: vec![mk("a"), mk("b")],
         scrollback: None,
+        ..Default::default()
     };
     save_to(&config, &file).unwrap();
     let mut loaded = load_from(&file).unwrap();
@@ -1535,6 +1538,7 @@ fn merge_appends_missing_projects() {
     let mut c = Config {
         projects: vec![mk("a")],
         scrollback: None,
+        ..Default::default()
     };
     let mut sessions: Vec<Option<Session>> = vec![None];
     merge_projects(
@@ -1543,6 +1547,7 @@ fn merge_appends_missing_projects() {
         Config {
             projects: vec![mk("a"), mk("B")],
             scrollback: None,
+            ..Default::default()
         },
     );
     assert_eq!(c.projects.len(), 2);
@@ -1555,6 +1560,7 @@ fn merge_appends_missing_projects() {
         Config {
             projects: vec![mk("A"), mk("b")],
             scrollback: None,
+            ..Default::default()
         },
     );
     assert_eq!(c.projects.len(), 2);
@@ -1678,4 +1684,55 @@ fn mouse_wheel_sgr_and_x10_encoding() {
         mouse_wheel_seq(vt100::MouseProtocolEncoding::Default, true, 1, 1),
         vec![0x1b, b'[', b'M', 96, 33, 33]
     );
+}
+#[test]
+fn legacy_migrations_run_once() {
+    let dir = env::temp_dir().join(format!("squad-test-once-{}", std::process::id()));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("config.toml");
+    let body = r#"
+[[projects]]
+name = "keep"
+path = "work/keep"
+command = ["cmd.exe"]
+kind = "agent"
+"#;
+    // Unversioned file: migrated and stamped, so the stamp survives a save.
+    fs::write(&path, body).unwrap();
+    let old = load_from(&path).unwrap();
+    assert_eq!(old.version, CONFIG_VERSION);
+    if cfg!(windows) {
+        assert_eq!(old.projects[0].command, shell());
+    }
+    // Stamped file: a deliberate `cmd.exe` is left alone.
+    fs::write(&path, format!("version = {CONFIG_VERSION}\n{body}")).unwrap();
+    let kept = load_from(&path).unwrap();
+    assert_eq!(kept.projects[0].command, ["cmd.exe"]);
+    save_to(&kept, &path).unwrap();
+    assert_eq!(load_from(&path).unwrap().projects[0].command, ["cmd.exe"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+#[test]
+fn interpreters_are_named_by_their_script() {
+    let node = r#""C:\Program Files\nodejs\node.exe" C:\Users\me\AppData\Roaming\npm/node_modules/jarvis-cli/dist/cli.js start"#;
+    assert_eq!(script_label("node", node).as_deref(), Some("jarvis-cli"));
+    let scoped = r"node C:\x\node_modules\@acme\tool\bin.js";
+    assert_eq!(script_label("node", scoped).as_deref(), Some("tool"));
+    assert_eq!(
+        script_label("node", "node --inspect server.js").as_deref(),
+        Some("server")
+    );
+    assert_eq!(
+        script_label("python", "python -u app.py").as_deref(),
+        Some("app")
+    );
+    // Real programs keep their own name; a bare interpreter has no script.
+    assert_eq!(script_label("ollama", "ollama serve"), None);
+    assert_eq!(script_label("node", "node"), None);
+}
+#[test]
+#[cfg(all(windows, target_pointer_width = "64"))]
+fn command_line_reads_a_live_process() {
+    let me = command_line(std::process::id()).expect("own command line");
+    assert!(me.to_ascii_lowercase().contains("squad"), "got {me}");
 }
