@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.6.1 | 기존 `config.toml`에 저장된 `command = ["cmd.exe"]` 항목을 로드 시 자동으로 PowerShell(`shell()`)로 마이그레이션하고, 기본 셸 Service가 `"cmd"`로 표시되던 문제 수정 | 태그 `v0.6.1` 참고 |
 | v0.6.0 | 기본 셸을 PowerShell(`pwsh.exe`/`powershell.exe -NoLogo`)로 변경, 셸 기반 Service의 실시간 포그라운드 프로세스 이름 감지(`jarvis` 등), 작업 중 `?`(`NeedsInput`) 오탐 방지(Working 우선순위 및 코드/diff 필터링), 백그라운드 주기적 업데이트 감시(15분) 및 상태바 `⬆ (U)` 배지·`squad update` CLI 추가, SHA256 fail-closed 검증, `SessionStatus` enum 도입, 터미널 `RenderCache` 및 하단 12줄 쓰로틀 스캔, 병렬 세션 시작(`start_sessions`) 및 일괄 트리 종료(`shutdown_all`) | 태그 `v0.6.0` 참고 |
 | v0.5.9 | 모드 불리언 5개를 `Mode` enum 하나로 통합(포커스 중 상태바 칩 클릭 시 도움말이 키를 가져가도록 수정), SHA256 코드를 `as_chunks`로 바꿔 최신 clippy `-D warnings` 통과 | 태그 `v0.5.9` 참고 |
 | v0.5.6 | Agent 지능형 상태 감지(화면 텍스트 [y/n] 승인 대기, 작업 중 점스피너, 완료 체크마크), Service 타이틀 명령어 표기, 터미널 Synchronized Update(\x1b[?2026h/l)로 커서 깜빡임/튐 100% 차단, 터미널 스크롤바 인디케이터, 종료 배너 Esc/s 숨김, Caps Lock 사고 방지 전체 시작 확인 모달(S), 모달 백드롭 딤(Backdrop Dim) 및 Empty State 센터링 | 태그 `v0.5.6` 참고 |

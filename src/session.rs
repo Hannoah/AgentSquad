@@ -49,7 +49,7 @@ const FLAGS_EVERY: Duration = Duration::from_millis(100);
 /// so running servers read by their role rather than a generic folder name.
 /// Agents continue to show their registered project name.
 pub fn pane_title_name(p: &Project) -> String {
-    if p.kind == Kind::Service && !p.command.is_empty() {
+    if p.kind == Kind::Service && !p.command.is_empty() && !is_bare_shell(&p.command) {
         p.command.join(" ")
     } else {
         p.name.clone()

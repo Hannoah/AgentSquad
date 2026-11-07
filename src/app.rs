@@ -280,7 +280,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     }
                                 }
                             }
-                            if k == Kind::Service {
+                            if k == Kind::Service && !is_bare_shell(&p.command) {
                                 detail.push(' ');
                                 detail.push_str(&p.command.join(" "));
                             } else if let Some(tag) = agent_tag(p) {

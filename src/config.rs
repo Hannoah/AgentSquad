@@ -78,15 +78,31 @@ pub fn load_from(p: &Path) -> Result<Config> {
     let mut seen_names: Vec<String> = Vec::new();
     for proj in &mut config.projects {
         proj.path = plain_path(proj.path.clone());
+        // Legacy migration: in <=0.5.9, the default shell on Windows was bare
+        // `cmd.exe`. Upgrade stored bare `cmd.exe` defaults to PowerShell.
+        if cfg!(windows)
+            && proj.command.len() == 1
+            && proj.command[0].eq_ignore_ascii_case("cmd.exe")
+        {
+            proj.command = shell();
+        }
         // Legacy migration: in <=0.5.4, services defaulted to directory name.
         // If a service's name matches its directory name, migrate it to the
         // served program name so it reads as a service rather than a folder.
+        // Conversely, if a bare-shell service was previously renamed to "cmd",
+        // restore its directory name until a foreground process runs inside it.
         if proj.kind == Kind::Service {
             let dir_name = proj
                 .path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            if !dir_name.is_empty()
+                && is_bare_shell(&proj.command)
+                && proj.name.eq_ignore_ascii_case("cmd")
+            {
+                proj.name = dir_name.clone();
+            }
             if !dir_name.is_empty() && proj.name.eq_ignore_ascii_case(&dir_name) {
                 if let Some(prog) = program_name(&proj.command) {
                     let mut candidate = prog.clone();

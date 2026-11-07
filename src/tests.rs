@@ -707,12 +707,23 @@ fn load_from_normalizes_stored_verbatim_paths() {
 [[projects]]
 name = "legacy"
 path = "\\\\?\\C:\\work\\app"
-command = ["claude"]
+command = ["cmd.exe"]
 kind = "agent"
+
+[[projects]]
+name = "cmd"
+path = "C:\\Users\\kornah"
+command = ["cmd.exe"]
+kind = "service"
 "#;
     fs::write(&path, toml_content).unwrap();
     let loaded = load_from(&path).unwrap();
     assert_eq!(loaded.projects[0].path, PathBuf::from(r"C:\work\app"));
+    if cfg!(windows) {
+        assert_eq!(loaded.projects[0].command, shell());
+        assert_eq!(loaded.projects[1].command, shell());
+        assert_eq!(loaded.projects[1].name, "kornah");
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 #[test]
