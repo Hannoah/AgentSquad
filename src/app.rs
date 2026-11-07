@@ -19,7 +19,6 @@ use ratatui::{
     Terminal,
 };
 use std::{
-    env,
     io::{self, IsTerminal, Write},
     sync::mpsc,
     thread,
@@ -50,6 +49,9 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         bail!("squad needs an interactive terminal");
     }
     enable_raw_mode()?;
+    if let Some(lines) = c.scrollback {
+        set_scrollback_limit(lines);
+    }
     let _guard = ScreenGuard;
     execute!(
         io::stdout(),
@@ -99,10 +101,10 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         }
     });
     let sample_every = Duration::from_secs(2);
-    // Start "overdue" so the first numbers appear immediately.
-    let mut last_sample = Instant::now()
-        .checked_sub(sample_every)
-        .unwrap_or_else(Instant::now);
+    // Defer the first process-table snapshot by one sample interval so AV
+    // behavioral monitors (e.g. AhnLab V3 MDP) do not see CreateToolhelp32Snapshot
+    // and OpenProcess calls at the exact millisecond the binary launches.
+    let mut last_sample = Instant::now();
     let mut sampling = false;
     // Self-update: the check runs on a worker so it can never delay startup.
     let (upd_tx, upd_rx) = mpsc::channel::<UpdateMsg>();
@@ -111,18 +113,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut updating = false;
     if update_check_enabled() {
         let tx = upd_tx.clone();
-        thread::spawn(move || {
-            // Defer background file cleanup and update probe past startup so
-            // AV behavioral monitors (e.g. AhnLab V3 MDP) never see immediate
-            // child process creation when launching from a shell.
-            thread::sleep(Duration::from_secs(6));
-            cleanup_old_binaries();
-            if let Some(tag) =
-                latest_tag_cached().filter(|t| is_newer(env!("CARGO_PKG_VERSION"), t))
-            {
-                let _ = tx.send(UpdateMsg::Available(tag));
-            }
-        });
+        thread::spawn(move || watch_for_updates(tx));
     }
     let mut tick: u64 = 0;
     let mut last_anim_tick = Instant::now();
@@ -134,7 +125,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         if mode != Mode::Focus && last_anim_tick.elapsed() >= Duration::from_millis(200) {
             last_anim_tick = Instant::now();
             tick = tick.wrapping_add(1);
-            if sessions.iter().flatten().any(|s| s.status == "Running") {
+            if sessions.iter().flatten().any(|s| s.status.is_running()) {
                 dirty = true;
             }
         }
@@ -157,13 +148,18 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     s.apply_usage(pid, cpu_time, mem, m.at, cores);
                 }
             }
+            for (pi, pid, label) in m.labels {
+                if let Some(Some(s)) = sessions.get_mut(pi) {
+                    s.apply_label(pid, label);
+                }
+            }
             dirty = true;
         }
         if !sampling && last_sample.elapsed() >= sample_every {
             let mut roots = Vec::new();
             for (pi, slot) in sessions.iter_mut().enumerate() {
                 if let Some(s) = slot {
-                    match s.child.process_id().filter(|_| s.status == "Running") {
+                    match s.child.process_id().filter(|_| s.status.is_running()) {
                         Some(pid) => roots.push((pi, pid)),
                         None => s.clear_usage(),
                     }
@@ -210,15 +206,16 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         }
         for (pi, slot) in sessions.iter_mut().enumerate() {
             if let Some(s) = slot {
-                let was_running = s.status == "Running";
+                let was_running = s.status.is_running();
                 dirty |= s.update();
+                let label = s.status.label();
                 if let Some(note) = exit_notice(
                     &c.projects[pi].name,
                     was_running,
-                    &s.status,
+                    &label,
                     &mut s.announced_exit,
                 ) {
-                    message = (note, exit_notice_kind(&s.status));
+                    message = (note, exit_notice_kind(&label));
                     // Typing into a dead terminal does nothing: hand the keyboard
                     // back to the manager so Enter can restart it.
                     if mode == Mode::Focus && order.get(selected) == Some(&pi) {
@@ -252,7 +249,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let mut n = 0;
                     let running: Vec<bool> = sessions
                         .iter()
-                        .map(|o| o.as_ref().map(|s| s.status == "Running").unwrap_or(false))
+                        .map(|o| o.as_ref().map(|s| s.status.is_running()).unwrap_or(false))
                         .collect();
                     for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
                         let (up, total) = group_counts(&c.projects, &running, k);
@@ -263,10 +260,13 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             any = true;
                             n += 1;
                             let p = &c.projects[pi];
-                            let status = sessions[pi]
+                            let status_text = sessions[pi]
                                 .as_ref()
-                                .map(|s| s.status.as_str())
-                                .unwrap_or("Stopped");
+                                .map(|s| s.status.label())
+                                .unwrap_or(std::borrow::Cow::Borrowed("Stopped"));
+                            let status: &str = &status_text;
+                            let fg = sessions[pi].as_ref().and_then(|s| s.fg_name.as_deref());
+                            let shown_name = live_name(p, fg);
                             let mut detail = String::new();
                             if status == "Running" {
                                 if let Some(s) = sessions[pi].as_ref() {
@@ -352,7 +352,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 inner_w,
                                 prefix.chars().count(),
                                 status_full.chars().count(),
-                                p.name.chars().count(),
+                                shown_name.chars().count(),
                             );
                             if Some(pi) == sel_pi {
                                 sel_row = Some(items.len());
@@ -363,7 +363,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 Span::styled(fit(&status_full, status_w), status_span_style),
                                 Span::raw(" "),
                                 Span::styled(
-                                    fit(&p.name, name_w),
+                                    fit(shown_name, name_w),
                                     row_name_style(Some(pi) == sel_pi, status, p.kind),
                                 ),
                                 Span::styled(fit(&detail, detail_w), detail_style),
@@ -396,10 +396,15 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     );
                 }
                 let sel_pi = order.get(selected).copied();
-                let (sel_status, sel_uptime): (&str, Option<u64>) = sel_pi
+                let (sel_status_text, sel_uptime): (std::borrow::Cow<'static, str>, Option<u64>) =
+                    sel_pi
+                        .and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref()))
+                        .map(|s| (s.status.label(), s.started.map(|t| t.elapsed().as_secs())))
+                        .unwrap_or((std::borrow::Cow::Borrowed("Stopped"), None));
+                let sel_status: &str = &sel_status_text;
+                let sel_fg = sel_pi
                     .and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref()))
-                    .map(|s| (s.status.as_str(), s.started.map(|t| t.elapsed().as_secs())))
-                    .unwrap_or(("Stopped", None));
+                    .and_then(|s| s.fg_name.as_deref());
                 let usage_note = sel_pi
                     .and_then(|pi| sessions.get(pi))
                     .and_then(|o| o.as_ref())
@@ -435,7 +440,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             pane_status_display(sel_status, sel_uptime, tick, p.kind, sel_phase);
                         Line::from(vec![
                             Span::styled(
-                                pane_title_name(p),
+                                live_pane_title(p, sel_fg),
                                 Style::default().add_modifier(ratatui::style::Modifier::BOLD),
                             ),
                             Span::raw(" ["),
@@ -470,65 +475,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 f.render_widget(block, panels[1]);
                 if let Some(s) = sel_pi.and_then(|pi| sessions.get(pi).and_then(|o| o.as_ref())) {
                     let screen = s.parser.screen();
-                    let mut lines = Vec::with_capacity(inner.height as usize);
-                    for row in 0..inner.height {
-                        let mut spans = Vec::with_capacity(8);
-                        let mut current_text = String::with_capacity(inner.width as usize);
-                        let mut current_style: Option<Style> = None;
-                        for col in 0..inner.width {
-                            if let Some(cell) = screen.cell(row, col) {
-                                if cell.is_wide_continuation() {
-                                    continue;
-                                }
-                                let mut style = Style::default()
-                                    .fg(color(cell.fgcolor()))
-                                    .bg(color(cell.bgcolor()));
-                                if cell.bold() {
-                                    style = style.add_modifier(ratatui::style::Modifier::BOLD);
-                                }
-                                if cell.dim() {
-                                    style = style.add_modifier(ratatui::style::Modifier::DIM);
-                                }
-                                if cell.italic() {
-                                    style = style.add_modifier(ratatui::style::Modifier::ITALIC);
-                                }
-                                if cell.underline() {
-                                    style =
-                                        style.add_modifier(ratatui::style::Modifier::UNDERLINED);
-                                }
-                                if cell.inverse() {
-                                    style = style.add_modifier(ratatui::style::Modifier::REVERSED);
-                                }
-                                let ch = if cell.has_contents() {
-                                    cell.contents()
-                                } else {
-                                    " "
-                                };
-                                if current_style == Some(style) {
-                                    current_text.push_str(ch);
-                                } else {
-                                    if let Some(prev_style) = current_style {
-                                        spans.push(Span::styled(
-                                            std::mem::replace(
-                                                &mut current_text,
-                                                String::with_capacity(32),
-                                            ),
-                                            prev_style,
-                                        ));
-                                    }
-                                    current_style = Some(style);
-                                    current_text.push_str(ch);
-                                }
-                            }
-                        }
-                        if let Some(prev_style) = current_style {
-                            if !current_text.is_empty() {
-                                spans.push(Span::styled(current_text, prev_style));
-                            }
-                        }
-                        lines.push(Line::from(spans));
-                    }
-                    f.render_widget(Paragraph::new(lines), inner);
+                    s.paint(f.buffer_mut(), inner);
                     let scrollback_len = screen.scrollback_len();
                     if scrollback_len > 0 {
                         let mut scrollbar_state = ScrollbarState::new(scrollback_len)
@@ -542,8 +489,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     // A finished session leaves its last output on screen; say so
                     // and say how to bring it back, right where the eyes are.
-                    if s.status != "Running" && !s.dismissed_exit && inner.height > 0 {
-                        let bg = if needs_attention(&s.status) {
+                    if !s.status.is_running() && !s.dismissed_exit && inner.height > 0 {
+                        let bg = if s.status.needs_attention() {
                             Color::Red
                         } else {
                             Color::DarkGray
@@ -609,12 +556,12 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 let running_n = sessions
                     .iter()
                     .flatten()
-                    .filter(|s| s.status == "Running")
+                    .filter(|s| s.status.is_running())
                     .count();
                 let failed_n = sessions
                     .iter()
                     .flatten()
-                    .filter(|s| needs_attention(&s.status))
+                    .filter(|s| s.status.needs_attention())
                     .count();
                 let waiting_n = c
                     .projects
@@ -644,12 +591,23 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 } else {
                     sys_text.chars().count() as u16 + 3
                 };
+                // A found update stays visible even while the prompt waits for the
+                // keyboard (e.g. you are typing into a session): `U` opens it.
+                let upd_text = update_offer
+                    .as_ref()
+                    .filter(|_| !confirm_update && !updating)
+                    .map(|t| format!(" ⬆ {t} (U)"))
+                    .unwrap_or_default();
+                let upd_w = upd_text.chars().count() as u16;
                 let status_row = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
                         Constraint::Min(1),
                         Constraint::Length(
-                            summary_width(running_n, c.projects.len(), failed_n) + wait_w + sys_w,
+                            summary_width(running_n, c.projects.len(), failed_n)
+                                + wait_w
+                                + sys_w
+                                + upd_w,
                         ),
                     ])
                     .split(vertical[1]);
@@ -715,6 +673,14 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         format!(" ✖ {failed_n}"),
                         Style::default()
                             .fg(Color::Red)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                }
+                if !upd_text.is_empty() {
+                    right.push(Span::styled(
+                        upd_text,
+                        Style::default()
+                            .fg(Color::Yellow)
                             .add_modifier(ratatui::style::Modifier::BOLD),
                     ));
                 }
@@ -849,7 +815,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             sessions
                                 .get(pi)
                                 .and_then(|o| o.as_ref())
-                                .is_none_or(|s| s.status != "Running")
+                                .is_none_or(|s| !s.status.is_running())
                         })
                         .count();
                     let popup = centered_rect(60, 30, f.area());
@@ -968,11 +934,17 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             }
             dirty = false;
         }
-        // Adaptive poll: 10 ms while sessions are active so echo feels instant;
-        // 50 ms when completely idle to keep background CPU at 0%.
-        let any_running = sessions.iter().flatten().any(|s| s.status == "Running");
-        let poll_dur = if any_running || sampling || updating {
+        // Adaptive poll: 10 ms while output or typing is recent so echo feels
+        // instant; 40 ms when sessions are quiet, and keys still wake it
+        // immediately. Quieter polling keeps idle CPU low with many sessions.
+        let recently_active = sessions
+            .iter()
+            .flatten()
+            .any(|s| s.is_active(Duration::from_millis(1500)));
+        let poll_dur = if recently_active || sampling || updating || dirty {
             Duration::from_millis(10)
+        } else if sessions.iter().flatten().any(|s| s.status.is_running()) {
+            Duration::from_millis(40)
         } else {
             Duration::from_millis(50)
         };
@@ -1055,15 +1027,19 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             if is_alt || (mode == Mode::Focus && scrollback_len == 0) {
                                 let mouse_mode = s.parser.screen().mouse_protocol_mode();
                                 if mouse_mode != vt100::MouseProtocolMode::None {
-                                    let btn = if lines > 0 { 64 } else { 65 };
-                                    let col = m
-                                        .column
-                                        .saturating_sub(pane_rect.x + 1)
-                                        .clamp(1, cols.max(1));
+                                    // Terminal coordinates are 1-based; the pane's
+                                    // border takes one column and one row.
+                                    let col =
+                                        m.column.saturating_sub(pane_rect.x).clamp(1, cols.max(1));
                                     let row =
-                                        m.row.saturating_sub(pane_rect.y + 1).clamp(1, rows.max(1));
-                                    let seq = format!("\x1b[<{btn};{col};{row}M");
-                                    let _ = s.input(seq.as_bytes());
+                                        m.row.saturating_sub(pane_rect.y).clamp(1, rows.max(1));
+                                    let seq = mouse_wheel_seq(
+                                        s.parser.screen().mouse_protocol_encoding(),
+                                        lines > 0,
+                                        col,
+                                        row,
+                                    );
+                                    let _ = s.input(&seq);
                                 } else {
                                     // Alternate scroll mode:
                                     // In fullscreen/alternate screen mode (like Claude Code, vim, less),
@@ -1081,41 +1057,36 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         dirty = true;
                     } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                        // Click landed outside a centered popup of w% x h%.
+                        let outside = |w: u16, h: u16| {
+                            !centered_rect(w, h, area.into())
+                                .contains(ratatui::layout::Position::new(m.column, m.row))
+                        };
                         if mode == Mode::Help {
                             mode = Mode::Manager;
                             dirty = true;
                         } else if confirm_stop.is_some() {
-                            let popup = centered_rect(60, 30, area.into());
-                            let clicked = ratatui::layout::Position::new(m.column, m.row);
-                            if !popup.contains(clicked) {
+                            if outside(60, 30) {
                                 confirm_stop = None;
                                 dirty = true;
                             }
                         } else if confirm_remove.is_some() {
-                            let popup = centered_rect(60, 30, area.into());
-                            let clicked = ratatui::layout::Position::new(m.column, m.row);
-                            if !popup.contains(clicked) {
+                            if outside(60, 30) {
                                 confirm_remove = None;
                                 dirty = true;
                             }
                         } else if confirm_quit {
-                            let popup = centered_rect(60, 30, area.into());
-                            let clicked = ratatui::layout::Position::new(m.column, m.row);
-                            if !popup.contains(clicked) {
+                            if outside(60, 30) {
                                 confirm_quit = false;
                                 dirty = true;
                             }
                         } else if confirm_start_all {
-                            let popup = centered_rect(60, 30, area.into());
-                            let clicked = ratatui::layout::Position::new(m.column, m.row);
-                            if !popup.contains(clicked) {
+                            if outside(60, 30) {
                                 confirm_start_all = false;
                                 dirty = true;
                             }
                         } else if confirm_update {
-                            let popup = centered_rect(60, 40, area.into());
-                            let clicked = ratatui::layout::Position::new(m.column, m.row);
-                            if !popup.contains(clicked) {
+                            if outside(60, 40) {
                                 confirm_update = false;
                                 dirty = true;
                             }
@@ -1132,11 +1103,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     0 => add_field = 0,
                                     1 => {
                                         add_field = 1;
-                                        add_kind = if add_kind == Kind::Agent {
-                                            Kind::Service
-                                        } else {
-                                            Kind::Agent
-                                        };
+                                        add_kind = add_kind.toggled();
                                     }
                                     2 => add_field = 2,
                                     _ => {}
@@ -1154,7 +1121,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     let live = sessions
                                         .get(pi)
                                         .and_then(|o| o.as_ref())
-                                        .is_some_and(|s| s.status == "Running");
+                                        .is_some_and(|s| s.status.is_running());
                                     if live {
                                         mode = Mode::Focus;
                                     } else {
@@ -1183,7 +1150,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 let live = sessions
                                     .get(pi)
                                     .and_then(|o| o.as_ref())
-                                    .is_some_and(|s| s.status == "Running");
+                                    .is_some_and(|s| s.status.is_running());
                                 if live {
                                     mode = Mode::Focus;
                                 } else {
@@ -1221,7 +1188,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 let live = sessions
                                     .get(pi)
                                     .and_then(|o| o.as_ref())
-                                    .is_some_and(|s| s.status == "Running");
+                                    .is_some_and(|s| s.status.is_running());
                                 if live {
                                     confirm_stop = Some(pi);
                                 } else {
@@ -1286,7 +1253,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     let alive = sessions
                                         .get(pi)
                                         .and_then(|o| o.as_ref())
-                                        .map(|s| s.status == "Running")
+                                        .map(|s| s.status.is_running())
                                         .unwrap_or(false);
                                     if !alive {
                                         if let Some(e) = start_session(
@@ -1451,11 +1418,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             KeyCode::Left => match add_field {
                                 0 => add_path.move_left(),
                                 1 => {
-                                    add_kind = if add_kind == Kind::Agent {
-                                        Kind::Service
-                                    } else {
-                                        Kind::Agent
-                                    };
+                                    add_kind = add_kind.toggled();
                                 }
                                 2 => add_cmd.move_left(),
                                 _ => {}
@@ -1463,11 +1426,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             KeyCode::Right => match add_field {
                                 0 => add_path.move_right(),
                                 1 => {
-                                    add_kind = if add_kind == Kind::Agent {
-                                        Kind::Service
-                                    } else {
-                                        Kind::Agent
-                                    };
+                                    add_kind = add_kind.toggled();
                                 }
                                 2 => add_cmd.move_right(),
                                 _ => {}
@@ -1483,11 +1442,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 _ => {}
                             },
                             KeyCode::Char(' ') if add_field == 1 => {
-                                add_kind = if add_kind == Kind::Agent {
-                                    Kind::Service
-                                } else {
-                                    Kind::Agent
-                                };
+                                add_kind = add_kind.toggled();
                             }
                             KeyCode::Char(ch)
                                 if !k.modifiers.contains(KeyModifiers::CONTROL)
@@ -1556,23 +1511,10 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     if confirm_start_all {
                         match confirm_key(k.code) {
                             Some(true) => {
-                                let mut started_n = 0;
-                                let mut failed: Option<String> = None;
-                                for &pi in order.iter() {
-                                    let running = sessions
-                                        .get(pi)
-                                        .and_then(|o| o.as_ref())
-                                        .map(|s| s.status == "Running")
-                                        .unwrap_or(false);
-                                    if running {
-                                        continue;
-                                    }
-                                    match start_session(&mut sessions, &c.projects, pi, rows, cols)
-                                    {
-                                        None => started_n += 1,
-                                        Some(e) => failed = Some(e),
-                                    }
-                                }
+                                // Spawned in parallel: one slow start no longer
+                                // stalls the others (or the keyboard).
+                                let (started_n, failed) =
+                                    start_sessions(&mut sessions, &c.projects, &order, rows, cols);
                                 message = match failed {
                                     Some(e) => {
                                         (format!("Started {started_n}; error: {e}"), Notice::Error)
@@ -1691,6 +1633,11 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             send_buf.clear();
                         }
                         KeyCode::Char('?') => mode = Mode::Help,
+                        // Open the update prompt on demand; it also pops up by
+                        // itself whenever the manager has the keyboard.
+                        KeyCode::Char('U') if update_offer.is_some() && !updating => {
+                            confirm_update = true;
+                        }
                         KeyCode::Char('a') => {
                             mode = Mode::Add;
                             add_field = 0;
@@ -1718,7 +1665,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         KeyCode::Esc => {
                             if let Some(&pi) = order.get(selected) {
                                 if let Some(Some(s)) = sessions.get_mut(pi) {
-                                    if s.status != "Running" {
+                                    if !s.status.is_running() {
                                         s.dismissed_exit = true;
                                     }
                                 }
@@ -1761,7 +1708,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     sessions
                                         .get(pi)
                                         .and_then(|o| o.as_ref())
-                                        .is_none_or(|s| s.status != "Running")
+                                        .is_none_or(|s| !s.status.is_running())
                                 })
                                 .count();
                             if stopped_count == 0 {
@@ -1777,7 +1724,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             let is_running = target
                                 .and_then(|pi| sessions.get(pi))
                                 .and_then(|o| o.as_ref())
-                                .is_some_and(|s| s.status == "Running");
+                                .is_some_and(|s| s.status.is_running());
                             if is_running {
                                 confirm_stop = target;
                             } else if let Some(pi) = target {
@@ -1817,6 +1764,6 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             break;
         }
     }
-    drop(sessions);
+    shutdown_all(&mut sessions);
     Ok(())
 }

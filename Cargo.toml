@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.5.9"
+version = "0.6.0"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
@@ -34,4 +34,6 @@ windows-sys = { version = "0.61", features = [
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true
+# Keep symbols unstripped: stripped unsigned binaries trigger false positives
+# in heuristic AV scanners (e.g. AhnLab V3).
+strip = false

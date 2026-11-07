@@ -3,12 +3,18 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::mpsc::Sender,
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub const REPO: &str = "Hannoah/AgentSquad";
 pub const ASSET: &str = "squad-windows-x86_64.zip";
-const CHECK_COOLDOWN_SECS: u64 = 3600; // 1 hour between network update checks
+/// How long a successful update check is reused (and how often the
+/// background watcher looks again while squad stays open).
+const CHECK_COOLDOWN_SECS: u64 = 900;
+/// How long a failed check (offline, blocked) is remembered.
+const FAIL_COOLDOWN_SECS: u64 = 600;
 
 /// "v0.5.4" or "0.5.4" as (major, minor, patch); anything else is None.
 pub fn parse_version(s: &str) -> Option<(u64, u64, u64)> {
@@ -60,44 +66,88 @@ fn now_epoch_secs() -> u64 {
 }
 /// Cached wrapper around `latest_tag()` so repeated launches do not spawn
 /// `curl.exe` on every startup (avoiding AV behavioral false positives).
+/// A failed check is cached briefly too, so an offline machine does not
+/// retry on every launch.
 pub fn latest_tag_cached() -> Option<String> {
     let now = now_epoch_secs();
-    if let Some(cache_file) = update_cache_path() {
-        if let Ok(content) = fs::read_to_string(&cache_file) {
-            let mut parts = content.split_whitespace();
-            if let (Some(ts_str), Some(tag)) = (parts.next(), parts.next()) {
-                if let Ok(ts) = ts_str.parse::<u64>() {
-                    if now.saturating_sub(ts) < CHECK_COOLDOWN_SECS && parse_version(tag).is_some()
-                    {
-                        return Some(tag.to_string());
-                    }
-                }
-            }
-        }
+    let cache_file = update_cache_path();
+    if let Some(hit) = cache_file
+        .as_ref()
+        .and_then(|f| fs::read_to_string(f).ok())
+        .and_then(|content| parse_cache(&content, now))
+    {
+        return hit;
     }
-    let tag = latest_tag()?;
-    if let Some(cache_file) = update_cache_path() {
+    let found = latest_tag_result().ok();
+    if let Some(cache_file) = cache_file {
         if let Some(parent) = cache_file.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = fs::write(&cache_file, format!("{now} {tag}\n"));
+        let _ = fs::write(
+            &cache_file,
+            format!("{now} {}\n", found.as_deref().unwrap_or("-")),
+        );
     }
-    Some(tag)
+    found
+}
+/// Read an `update-check.cache` entry: `Some(Some(tag))` is a fresh hit,
+/// `Some(None)` a recent failed check ("-"), `None` a miss or stale entry.
+pub fn parse_cache(content: &str, now: u64) -> Option<Option<String>> {
+    let mut parts = content.split_whitespace();
+    let ts: u64 = parts.next()?.parse().ok()?;
+    let tag = parts.next()?;
+    let age = now.saturating_sub(ts);
+    if tag == "-" {
+        return (age < FAIL_COOLDOWN_SECS).then_some(None);
+    }
+    (age < CHECK_COOLDOWN_SECS && parse_version(tag).is_some()).then(|| Some(tag.to_string()))
 }
 /// Newest release tag. `releases/latest` redirects to `releases/tag/<tag>`,
 /// so the final URL is enough: no API call, no rate limit, no JSON.
 pub fn latest_tag() -> Option<String> {
+    latest_tag_result().ok()
+}
+/// Like `latest_tag`, but says why a check failed (for `squad update`).
+pub fn latest_tag_result() -> Result<String> {
     let out = quiet(system_tool("curl.exe"))
         .args(["-sL", "-m", "10", "-o", "NUL", "-w", "%{url_effective}"])
         .arg(format!("https://github.com/{REPO}/releases/latest"))
         .output()
-        .ok()?;
+        .context("Cannot run curl.exe")?;
     if !out.status.success() {
-        return None;
+        bail!("Cannot reach GitHub (curl {})", out.status);
     }
-    let url = String::from_utf8(out.stdout).ok()?;
-    let tag = url.trim().rsplit_once("/tag/")?.1;
-    parse_version(tag).map(|_| tag.to_string())
+    let url = String::from_utf8(out.stdout).context("Unreadable GitHub reply")?;
+    let tag = url
+        .trim()
+        .rsplit_once("/tag/")
+        .map(|(_, t)| t)
+        .context("GitHub reports no release")?;
+    parse_version(tag).with_context(|| format!("Unrecognized release tag '{tag}'"))?;
+    Ok(tag.to_string())
+}
+/// Background watcher: checks shortly after launch, then again every
+/// cooldown while squad stays open, so a release published during a long
+/// session is still noticed. Each new tag is announced once.
+pub fn watch_for_updates(tx: Sender<UpdateMsg>) {
+    // Defer background file cleanup and the first probe past startup so
+    // AV behavioral monitors (e.g. AhnLab V3 MDP) never see immediate
+    // child process creation when launching from a shell.
+    thread::sleep(Duration::from_secs(6));
+    cleanup_old_binaries();
+    let mut offered: Option<String> = None;
+    loop {
+        if let Some(tag) = latest_tag_cached()
+            .filter(|t| is_newer(env!("CARGO_PKG_VERSION"), t))
+            .filter(|t| offered.as_deref() != Some(t))
+        {
+            offered = Some(tag.clone());
+            if tx.send(UpdateMsg::Available(tag)).is_err() {
+                return;
+            }
+        }
+        thread::sleep(Duration::from_secs(CHECK_COOLDOWN_SECS + 5));
+    }
 }
 /// Replace `current` with `new`. Windows lets a running exe be renamed but
 /// not overwritten, so move it aside first and put it back if the copy fails.
@@ -145,6 +195,8 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
         bail!("Download failed");
     }
 
+    // Fail closed: a missing, malformed or unreadable checksum means the
+    // download cannot be verified, so it is never installed.
     let sha_asset = format!("{ASSET}.sha256");
     let sha_file = work.join(&sha_asset);
     let sha_downloaded = quiet(system_tool("curl.exe"))
@@ -157,23 +209,16 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-
-    if sha_downloaded && sha_file.exists() {
-        if let Ok(expected_raw) = fs::read_to_string(&sha_file) {
-            let expected = expected_raw
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase();
-            if expected.len() == 64 {
-                if let Some(actual) = compute_sha256(&zip) {
-                    if actual != expected {
-                        bail!("SHA256 checksum mismatch: expected {expected}, got {actual}");
-                    }
-                }
-            }
-        }
+    if !sha_downloaded {
+        bail!("Checksum file unavailable; refusing to install an unverified build");
+    }
+    let expected = fs::read_to_string(&sha_file)
+        .ok()
+        .and_then(|raw| parse_sha256(&raw))
+        .context("Checksum file is malformed; refusing to install")?;
+    let actual = compute_sha256(&zip).context("Cannot hash the download")?;
+    if actual != expected {
+        bail!("SHA256 checksum mismatch: expected {expected}, got {actual}");
     }
     let ok = quiet(system_tool("tar.exe"))
         .arg("-xf")
@@ -211,6 +256,11 @@ pub enum UpdateMsg {
     Available(String),
     Installed(String),
     Failed(String),
+}
+/// The 64-hex-digit SHA-256 at the start of a `.sha256` file, lowercased.
+pub fn parse_sha256(raw: &str) -> Option<String> {
+    let first = raw.split_whitespace().next()?.to_ascii_lowercase();
+    (first.len() == 64 && first.chars().all(|c| c.is_ascii_hexdigit())).then_some(first)
 }
 /// Computes SHA256 hex string of a file in pure Rust (no external `certutil.exe` subprocess).
 pub fn compute_sha256(file: &Path) -> Option<String> {

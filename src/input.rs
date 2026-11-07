@@ -68,6 +68,8 @@ impl LineInput {
         (before, at, after)
     }
 }
+/// Visible slice of a single-line input: shows the tail end once the
+/// text outgrows `width` so the block cursor never scrolls off screen.
 pub fn input_window(before: &str, at: char, after: &str, width: usize) -> (String, char, String) {
     let b: Vec<char> = before.chars().collect();
     let a: Vec<char> = after.chars().collect();
@@ -91,6 +93,7 @@ pub fn input_window(before: &str, at: char, after: &str, width: usize) -> (Strin
         full[rel + start + 1..end].iter().collect(),
     )
 }
+/// Status-bar input row: prompt + editable text with a block cursor + hint.
 pub fn input_line(
     prompt: String,
     input: &LineInput,
@@ -137,6 +140,8 @@ pub fn update_key(code: KeyCode) -> Option<bool> {
         _ => None,
     }
 }
+/// Map a left click to the sidebar's position in `order`, if it landed on
+/// a project row (borders, headers and "(none)" placeholders miss).
 pub fn sidebar_click(
     side: ratatui::layout::Rect,
     offset: usize,
@@ -156,6 +161,7 @@ pub fn sidebar_click(
         .copied()
         .flatten()
 }
+/// Mouse wheel notch to scrolled lines: up moves into history.
 pub fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
     match kind {
         MouseEventKind::ScrollUp => Some(3),
@@ -163,8 +169,28 @@ pub fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
         _ => None,
     }
 }
-/// First command word for agent rows, so agents with the same status
-/// stay distinguishable. Skipped when it is just the default shell.
+/// Mouse wheel report for a program that asked for mouse events. `col` and
+/// `row` are 1-based pane coordinates. SGR is used when the program asked
+/// for it; otherwise the classic X10 form, which cannot address past 223.
+pub fn mouse_wheel_seq(
+    encoding: vt100::MouseProtocolEncoding,
+    up: bool,
+    col: u16,
+    row: u16,
+) -> Vec<u8> {
+    let btn: u8 = if up { 64 } else { 65 };
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => format!("\x1b[<{btn};{col};{row}M").into_bytes(),
+        _ => vec![
+            0x1b,
+            b'[',
+            b'M',
+            32 + btn,
+            (32 + col.min(223)) as u8,
+            (32 + row.min(223)) as u8,
+        ],
+    }
+}
 /// CSI cursor key: modified keys always use the `CSI 1 ; param` form,
 /// unmodified keys honor application-cursor mode.
 pub fn arrow_bytes(letter: u8, app_cursor: bool, shift: bool, ctrl: bool) -> Vec<u8> {

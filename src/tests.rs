@@ -28,6 +28,7 @@ fn config_roundtrip() {
             command: shell(),
             kind: Kind::Agent,
         }],
+        scrollback: None,
     };
     let decoded: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
     assert_eq!(decoded.projects[0].name, "demo");
@@ -634,7 +635,7 @@ fn session_sampling_tracks_a_live_tree() {
     s.apply_usage(pid + 1, 1, 1, Instant::now(), 4);
     assert_eq!(s.usage, before);
     // A finished session stops reporting.
-    s.status = "Exited (0)".into();
+    s.status = SessionStatus::Exited(0);
     s.clear_usage();
     assert!(s.usage.is_none());
 }
@@ -751,6 +752,7 @@ fn persist_helpers_keep_other_writers_projects() {
     save_to(
         &Config {
             projects: vec![mk("a"), mk("b")],
+            scrollback: None,
         },
         &file,
     )
@@ -1012,6 +1014,7 @@ fn remove_persists_to_config_file() {
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
+        scrollback: None,
     };
     save_to(&config, &file).unwrap();
     let mut loaded = load_from(&file).unwrap();
@@ -1520,6 +1523,7 @@ fn merge_appends_missing_projects() {
     };
     let mut c = Config {
         projects: vec![mk("a")],
+        scrollback: None,
     };
     let mut sessions: Vec<Option<Session>> = vec![None];
     merge_projects(
@@ -1527,6 +1531,7 @@ fn merge_appends_missing_projects() {
         &mut sessions,
         Config {
             projects: vec![mk("a"), mk("B")],
+            scrollback: None,
         },
     );
     assert_eq!(c.projects.len(), 2);
@@ -1538,8 +1543,128 @@ fn merge_appends_missing_projects() {
         &mut sessions,
         Config {
             projects: vec![mk("A"), mk("b")],
+            scrollback: None,
         },
     );
     assert_eq!(c.projects.len(), 2);
     assert_eq!(sessions.len(), 2);
+}
+
+#[test]
+fn shell_defaults_to_powershell_on_windows() {
+    let sh = shell();
+    assert!(!sh.is_empty());
+    if cfg!(windows) {
+        let lower = sh[0].to_ascii_lowercase();
+        assert!(
+            lower == "pwsh.exe" || lower == "powershell.exe",
+            "expected PowerShell default on Windows, got {sh:?}"
+        );
+        assert!(is_bare_shell(&sh));
+    }
+    assert!(is_shell_program("cmd.exe"));
+    assert!(is_shell_program("powershell.exe"));
+    assert!(is_shell_program("pwsh"));
+    assert!(!is_shell_program("jarvis.exe"));
+    assert!(!is_shell_program("claude"));
+}
+
+#[test]
+fn service_naming_looks_through_shells_and_live_foreground() {
+    let parts = |s: &str| -> Vec<String> { split_command(s) };
+    // `cmd /c jarvis --serve` extracts `jarvis` instead of `cmd`.
+    assert_eq!(
+        program_name(&parts("cmd.exe /c jarvis --serve")).as_deref(),
+        Some("jarvis")
+    );
+    assert_eq!(
+        program_name(&parts("powershell.exe -NoLogo -Command \"jarvis start\"")).as_deref(),
+        Some("jarvis")
+    );
+    // A bare shell has no program name, so a service falls back to directory name
+    // until a foreground process is launched inside it.
+    assert_eq!(program_name(&parts("cmd.exe")), None);
+    assert_eq!(program_name(&parts("powershell.exe -NoLogo")), None);
+
+    let p = Project {
+        name: "my-dir".into(),
+        path: PathBuf::from("C:/work/my-dir"),
+        command: vec!["powershell.exe".into(), "-NoLogo".into()],
+        kind: Kind::Service,
+    };
+    assert_eq!(live_name(&p, None), "my-dir");
+    assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
+    assert_eq!(live_pane_title(&p, Some("jarvis")), "jarvis");
+
+    // Foreground process tree lookup skips shells/conhost and picks the real app.
+    let mut table = ProcTable::default();
+    table.children.insert(100, vec![101, 102]);
+    table.children.insert(102, vec![103]);
+    table.names.insert(100, "powershell.exe".into());
+    table.names.insert(101, "conhost.exe".into());
+    table.names.insert(102, "cmd.exe".into());
+    table.names.insert(103, "jarvis.exe".into());
+    assert_eq!(foreground_name(100, &table).as_deref(), Some("jarvis"));
+}
+
+#[test]
+fn needs_input_and_working_ignore_false_positives() {
+    // Active spinner / interrupt hint suppresses false `?` even when question text is on screen.
+    let busy_screen = "Do you want to refactor this file?\n✶ Thinking… (esc to interrupt)";
+    assert!(!is_needs_input(busy_screen));
+    assert!(is_working_text(busy_screen));
+
+    let cancel_timer = "Allow tool execution?\n⠋ Running command (esc to cancel, 4s)";
+    assert!(!is_needs_input(cancel_timer));
+    assert!(is_working_text(cancel_timer));
+
+    // Ordinary prose with a question phrase but no choice menu or `[y/n]` does not trigger `?`.
+    assert!(!is_needs_input(
+        "Here is the summary:\nDo you want to see more details later."
+    ));
+    // Source code / diff output containing prompt literals must not trigger `?`.
+    assert!(!is_needs_input(
+        "180: \"[y/n]\",\n+ assert!(is_needs_input(\"Allow tool? [y/n]\"));"
+    ));
+    // Mid-sentence verbs do not trigger Working.
+    assert!(!is_working_text(
+        "Finished reading 12 files and writing output."
+    ));
+}
+
+#[test]
+fn update_cache_and_sha256_parsing() {
+    // Fresh tag hit within 900s cooldown:
+    assert_eq!(
+        parse_cache("1000 v0.5.9\n", 1500),
+        Some(Some("v0.5.9".to_string()))
+    );
+    // Expired after 900s:
+    assert_eq!(parse_cache("1000 v0.5.9\n", 2000), None);
+    // Recent failure marker `-` is cached within 600s:
+    assert_eq!(parse_cache("1000 -\n", 1300), Some(None));
+    assert_eq!(parse_cache("1000 -\n", 1700), None);
+
+    let good_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  squad-windows-x86_64.zip\n";
+    assert_eq!(
+        parse_sha256(good_sha).as_deref(),
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    );
+    assert_eq!(parse_sha256("not-a-valid-hash"), None);
+}
+
+#[test]
+fn mouse_wheel_sgr_and_x10_encoding() {
+    assert_eq!(
+        mouse_wheel_seq(vt100::MouseProtocolEncoding::Sgr, true, 1, 1),
+        b"\x1b[<64;1;1M"
+    );
+    assert_eq!(
+        mouse_wheel_seq(vt100::MouseProtocolEncoding::Sgr, false, 10, 5),
+        b"\x1b[<65;10;5M"
+    );
+    assert_eq!(
+        mouse_wheel_seq(vt100::MouseProtocolEncoding::Default, true, 1, 1),
+        vec![0x1b, b'[', b'M', 96, 33, 33]
+    );
 }

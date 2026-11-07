@@ -82,3 +82,23 @@ Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 
 
 ## [2026-11-07] 수정 | CI clippy 실패
 최신 stable clippy의 `chunks_exact_to_as_chunks`가 0.5.8 SHA256 코드에서 `-D warnings`로 걸려 `as_chunks`로 교체. SHA256 테스트 통과.
+
+## [2026-11-07] 배포 | v0.6.0 (기능 개선, 성능 최적화, AV 오탐 방지)
+1. **기본 셸 PowerShell 전환 및 셸 Service 실시간 이름 표시**:
+   - Windows 기본 셸을 `cmd.exe`에서 PowerShell(`pwsh.exe -NoLogo` 또는 `powershell.exe -NoLogo`)로 변경(`shell()`).
+   - 기본 셸로 열린 Service 안에서 실행된 실제 포그라운드 프로그램(`jarvis` 등)을 프로세스 트리에서 찾아 사이드바와 패널 제목에 실시간 표시(`foreground_name`, `live_name`, `live_pane_title`).
+2. **작업 중 `?`(`NeedsInput`) 오탐 제거**:
+   - `Session::phase()`에서 `Working`(스피너 텍스트, 최근 스트리밍 출력, CPU > 5%)이 항상 `NeedsInput`보다 우선하도록 수정.
+   - `is_needs_input`에서 작업 중 힌트(`to interrupt`, `(esc to cancel, ...)`) 시 즉시 제외하고, 줄 번호·diff·주석·따옴표 코드 리터럴(`"[y/n]"`) 필터링 및 선택지 줄(`is_choice_line`) 동반 조건 강화.
+3. **백그라운드 주기적 업데이트 감시 및 수동 업데이트**:
+   - 쿨다운을 15분(900초)으로 단축하고 실행 중 주기적으로 새 릴리스를 감시(`watch_for_updates`), 실패 시에도 10분 쿨다운 캐시 기록.
+   - 새 버전 발견 시 상태바 우측에 `⬆ vX.Y.Z (U)` 배지를 상시 표시하고 `U` 키로 즉시 업데이트 모달 호출, CLI에 `squad update [--check]` 추가.
+   - SHA256 체크섬 검증을 fail-closed로 강화(`parse_sha256`).
+4. **런타임 성능 및 구조 최적화**:
+   - `SessionStatus` enum(`Running`, `Exited(u32)`, `Error(String)`) 도입.
+   - 터미널 화면 `RenderCache` 도입(`Session::paint`), 상태 감지 시 하단 12줄만 스캔 및 100ms 쓰로틀링, PTY 읽기 버퍼 16KB 및 기본 스크롤백 2,000줄 확대.
+   - 전체 시작(`start_sessions`) 병렬화 및 앱 종료(`shutdown_all`) 시 단일 스냅샷 일괄 트리 종료(`kill_trees`).
+   - SGR 마우스 휠 좌표 오프셋 수정(`mouse_wheel_seq`).
+5. **AV(AhnLab V3) 오탐 방지**:
+   - `[profile.release]`에서 `strip = false`로 심볼 유지, 시작 직후 0ms 프로세스 스냅샷 호출을 2초 뒤로 지연.
+   - 테스트 95개(93 통과, 2 네트워크 무시) 및 `clippy --all-targets -- -D warnings` 통과.

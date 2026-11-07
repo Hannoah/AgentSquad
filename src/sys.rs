@@ -1,5 +1,9 @@
+use crate::config::{is_shell_program, program_name};
 use ratatui::style::{Color, Style};
-use std::time::Instant;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::Instant,
+};
 
 /// CPU and memory of one session's process tree.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,9 +87,17 @@ impl SysUsage {
         }
     }
 }
+
+/// One process-table snapshot: who is whose child, and what each runs.
+/// Taken once per round so several session trees share a single walk.
+#[derive(Default)]
+pub struct ProcTable {
+    pub children: HashMap<u32, Vec<u32>>,
+    pub names: HashMap<u32, String>,
+}
+
 #[cfg(windows)]
-fn snapshot_children() -> std::collections::HashMap<u32, Vec<u32>> {
-    use std::collections::HashMap;
+fn snapshot_table() -> ProcTable {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, INVALID_HANDLE_VALUE},
         System::Diagnostics::ToolHelp::{
@@ -93,11 +105,11 @@ fn snapshot_children() -> std::collections::HashMap<u32, Vec<u32>> {
             TH32CS_SNAPPROCESS,
         },
     };
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut table = ProcTable::default();
     // SAFETY: process snapshot of our own machine; the handle is closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
-        return children;
+        return table;
     }
     // SAFETY: dwSize is initialized; the API fills the remaining fields.
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
@@ -105,24 +117,30 @@ fn snapshot_children() -> std::collections::HashMap<u32, Vec<u32>> {
     // SAFETY: `entry` stays a valid buffer for the whole walk.
     let mut more = unsafe { Process32FirstW(snapshot, &mut entry) };
     while more != FALSE {
-        children
+        table
+            .children
             .entry(entry.th32ParentProcessID)
             .or_default()
             .push(entry.th32ProcessID);
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        table.names.insert(
+            entry.th32ProcessID,
+            String::from_utf16_lossy(&entry.szExeFile[..len]),
+        );
         // SAFETY: same valid buffer as above.
         more = unsafe { Process32NextW(snapshot, &mut entry) };
     }
     unsafe { CloseHandle(snapshot) };
-    children
+    table
 }
 
-#[cfg(windows)]
-fn descendant_pids_from_map(
-    root: u32,
-    children: &std::collections::HashMap<u32, Vec<u32>>,
-) -> Vec<u32> {
+fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec<u32> {
     let mut ordered = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = HashSet::new();
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
         if !visited.insert(pid) {
@@ -136,11 +154,37 @@ fn descendant_pids_from_map(
     ordered
 }
 
-/// Short uptime label for a running session: "7s", "12m", "3h".
+/// What the user actually launched inside a shell session: the shallowest
+/// descendant of `root` that is not itself a shell or console host. A
+/// service registered as plain `cmd.exe` that runs `jarvis` reads as
+/// "jarvis". None when only shells are running.
+pub fn foreground_name(root: u32, table: &ProcTable) -> Option<String> {
+    let mut seen = HashSet::from([root]);
+    let mut queue = VecDeque::from([root]);
+    while let Some(pid) = queue.pop_front() {
+        if pid != root {
+            if let Some(stem) = table
+                .names
+                .get(&pid)
+                .and_then(|n| program_name(std::slice::from_ref(n)))
+            {
+                if !is_shell_program(&stem) {
+                    return Some(stem);
+                }
+            }
+        }
+        for &kid in table.children.get(&pid).into_iter().flatten() {
+            if seen.insert(kid) {
+                queue.push_back(kid);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(windows)]
 pub fn descendant_pids(root: u32) -> Vec<u32> {
-    let children = snapshot_children();
-    descendant_pids_from_map(root, &children)
+    descendant_pids_from_map(root, &snapshot_table().children)
 }
 
 #[cfg(not(windows))]
@@ -155,22 +199,35 @@ pub fn descendant_pids(_root: u32) -> Vec<u32> {
 /// grandchildren die too. Missing or denied PIDs are skipped silently.
 #[cfg(windows)]
 pub fn kill_tree_by_pid(root: u32) {
+    kill_trees(&[root]);
+}
+
+/// Kill several process trees using one process-table snapshot, so closing
+/// N sessions costs one walk instead of N.
+#[cfg(windows)]
+pub fn kill_trees(roots: &[u32]) {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE},
         System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE},
     };
-    let mut pids = descendant_pids(root);
-    pids.reverse();
-    for pid in pids {
-        // SAFETY: terminating processes inside our own session tree; a null
-        // handle only means the PID is already gone or out of reach.
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-            if handle.is_null() {
-                continue;
+    if roots.is_empty() {
+        return;
+    }
+    let table = snapshot_table();
+    for &root in roots {
+        let mut pids = descendant_pids_from_map(root, &table.children);
+        pids.reverse();
+        for pid in pids {
+            // SAFETY: terminating processes inside our own session tree; a null
+            // handle only means the PID is already gone or out of reach.
+            unsafe {
+                let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+                if handle.is_null() {
+                    continue;
+                }
+                TerminateProcess(handle, 1);
+                CloseHandle(handle);
             }
-            TerminateProcess(handle, 1);
-            CloseHandle(handle);
         }
     }
 }
@@ -178,15 +235,11 @@ pub fn kill_tree_by_pid(root: u32) {
 /// tree rooted at `root`. None when the platform has no probe.
 #[cfg(windows)]
 pub fn tree_usage(root: u32) -> Option<(u64, u64)> {
-    let children = snapshot_children();
-    tree_usage_with_map(root, &children)
+    tree_usage_with_map(root, &snapshot_table().children)
 }
 
 #[cfg(windows)]
-fn tree_usage_with_map(
-    root: u32,
-    children: &std::collections::HashMap<u32, Vec<u32>>,
-) -> Option<(u64, u64)> {
+fn tree_usage_with_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Option<(u64, u64)> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, FILETIME},
         System::{
@@ -270,31 +323,42 @@ pub struct Measurement {
     pub at: Instant,
     pub sys: Option<(CpuTimes, MemInfo)>,
     pub procs: Vec<(usize, u32, u64, u64)>,
+    /// (project index, root pid, foreground program) per measured session.
+    pub labels: Vec<(usize, u32, Option<String>)>,
 }
 /// Probe the machine and the given session roots. Walking the process
 /// table can take tens of milliseconds, which is why this never runs on
 /// the thread that draws and reads keys.
 pub fn measure(roots: &[(usize, u32)]) -> Measurement {
     #[cfg(windows)]
-    let procs = if roots.is_empty() {
-        Vec::new()
+    let (procs, labels) = if roots.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
-        let children = snapshot_children();
-        roots
+        let table = snapshot_table();
+        let procs = roots
             .iter()
             .filter_map(|&(pi, pid)| {
-                tree_usage_with_map(pid, &children).map(|(cpu, mem)| (pi, pid, cpu, mem))
+                tree_usage_with_map(pid, &table.children).map(|(cpu, mem)| (pi, pid, cpu, mem))
             })
-            .collect()
+            .collect();
+        let labels = roots
+            .iter()
+            .map(|&(pi, pid)| (pi, pid, foreground_name(pid, &table)))
+            .collect();
+        (procs, labels)
     };
     #[cfg(not(windows))]
-    let procs = roots
-        .iter()
-        .filter_map(|&(pi, pid)| tree_usage(pid).map(|(cpu, mem)| (pi, pid, cpu, mem)))
-        .collect();
+    let (procs, labels) = (
+        roots
+            .iter()
+            .filter_map(|&(pi, pid)| tree_usage(pid).map(|(cpu, mem)| (pi, pid, cpu, mem)))
+            .collect(),
+        Vec::new(),
+    );
     Measurement {
         at: Instant::now(),
         sys: system_snapshot(),
         procs,
+        labels,
     }
 }

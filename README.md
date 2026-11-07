@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.5.9
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.6.0
 ```
 
 To install elsewhere:
@@ -46,13 +46,15 @@ powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -InstallDir C:\tool
 
 ## Updates
 
-On launch, `squad` checks GitHub for a newer release in the background (it
-never delays startup). When one exists, the manager asks whether to update:
+On launch (and every 15 minutes while open), `squad` checks GitHub for a newer release in the background (it
+never delays startup). You can also run `squad update` (or `squad update --check`) at any time from your shell.
+When a newer release exists, the manager asks whether to update:
 
 - `y` downloads and installs it; `n` or `Esc` skips until the next launch.
   `Enter` deliberately does not accept, so a prompt that appears as you
   press it cannot start a download.
-- The prompt waits while you are typing into a session or another input.
+- The prompt waits while you are typing into a session or another input;
+  the status bar shows `⬆ vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
 - Running sessions keep running. Restart `squad` to switch to the new build.
 - Offline or blocked networks simply show no prompt. Set
   `AGENTSQUAD_NO_UPDATE_CHECK=1` to turn the check off.
@@ -122,6 +124,7 @@ case-insensitively by `remove` and `start`.
 | `r` | Restart the selected session |
 | `d` / `Delete` | Remove the selected project (asks to confirm; a running session is stopped, files untouched) |
 | `S` | Start all stopped sessions |
+| `U` | Open the update prompt when a new release has been detected |
 | `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
 | `Ctrl+Q` | Back to the manager (from inside a terminal; clicking the project list works too) |
@@ -144,13 +147,14 @@ squad add [<path>] [--kind agent|service] [-- command args...]   Register a proj
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
 squad start <name>                                                 Open the manager on a project and start it
+squad update [--check]                                             Install the newest release (--check only looks)
 squad --version
 squad --help
 ```
 
 Notes:
 
-- Without `-- command`, the project opens a plain shell (`cmd.exe` on Windows).
+- Without `-- command`, the project opens a plain PowerShell session (`pwsh.exe` if installed, otherwise `powershell.exe`).
 - `--kind` defaults to `agent`. Existing config files without a kind keep working.
 - Services may omit the path: they run in the current directory and are
   named after the program (e.g. `ollama` for `ollama serve`).

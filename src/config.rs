@@ -22,6 +22,13 @@ impl Kind {
             Kind::Service => "service",
         }
     }
+    /// The other kind, for the add form's kind toggle.
+    pub fn toggled(self) -> Kind {
+        match self {
+            Kind::Agent => Kind::Service,
+            Kind::Service => Kind::Agent,
+        }
+    }
 }
 impl FromStr for Kind {
     type Err = anyhow::Error;
@@ -46,6 +53,9 @@ pub struct Project {
 pub struct Config {
     #[serde(default)]
     pub projects: Vec<Project>,
+    /// Lines of scrollback kept per session (default 2000).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback: Option<usize>,
 }
 pub fn config_path() -> Result<PathBuf> {
     if let Some(p) = env::var_os("AGENTSQUAD_CONFIG") {
@@ -171,12 +181,52 @@ pub fn split_command(s: &str) -> Vec<String> {
     }
     out
 }
+/// Default command for a project without one: PowerShell on Windows
+/// (PowerShell 7 `pwsh.exe` when installed, otherwise the built-in
+/// `powershell.exe`). The resolved command is stored in the config, so it
+/// never changes underneath an existing project.
 pub fn shell() -> Vec<String> {
     if cfg!(windows) {
-        vec!["cmd.exe".into()]
+        let exe = if on_path("pwsh.exe") {
+            "pwsh.exe"
+        } else {
+            "powershell.exe"
+        };
+        vec![exe.into(), "-NoLogo".into()]
     } else {
         vec!["sh".into()]
     }
+}
+fn on_path(name: &str) -> bool {
+    env::var_os("PATH")
+        .is_some_and(|paths| env::split_paths(&paths).any(|d| d.join(name).is_file()))
+}
+/// True for interactive shells and console hosts (`cmd`, `powershell`,
+/// `pwsh`, `bash`, ...), by program name with path and extension ignored.
+pub fn is_shell_program(prog: &str) -> bool {
+    const SHELLS: [&str; 14] = [
+        "cmd",
+        "powershell",
+        "pwsh",
+        "conhost",
+        "openconsole",
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "nu",
+        "wsl",
+        "wslhost",
+        "windowsterminal",
+        "wt",
+    ];
+    let lower = program_stem(prog).to_ascii_lowercase();
+    SHELLS.contains(&lower.as_str())
+}
+/// A project whose command is just a shell (no program of its own), so
+/// what it runs is decided at the prompt.
+pub fn is_bare_shell(command: &[String]) -> bool {
+    command.first().is_some_and(|p| is_shell_program(p)) && program_name(command).is_none()
 }
 /// Fold in projects registered by another process (e.g. `squad add` in a
 /// second terminal) so a later save does not clobber them. Only appends
@@ -215,8 +265,6 @@ pub fn display_order(projects: &[Project]) -> Vec<usize> {
     order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Service));
     order
 }
-/// Validate raw add-form input into a Project without touching disk state.
-///
 /// Find a unique project name by appending `-2`, `-3`, ... when `base` is taken.
 pub fn unique_name(base: &str, existing: &[Project]) -> String {
     if !existing.iter().any(|p| p.name.eq_ignore_ascii_case(base)) {
@@ -234,7 +282,7 @@ pub fn unique_name(base: &str, existing: &[Project]) -> String {
         i += 1;
     }
 }
-/// Build and validate a project from user inputs.
+/// Build and validate a project from user inputs, without touching disk state.
 ///
 /// Services take their name from the program being run and can share a directory
 /// with other services (unique names like `node-2` are assigned automatically).
@@ -282,25 +330,50 @@ pub fn build_project(
         kind,
     })
 }
-/// Program word of a command line for naming path-less services:
-/// `ollama.exe` serves as `ollama`, `node` stays `node`.
-pub fn program_name(parts: &[String]) -> Option<String> {
-    let first = parts.first()?;
-    let base = std::path::Path::new(first)
+/// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.
+fn program_stem(prog: &str) -> String {
+    let base = std::path::Path::new(prog)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| first.clone());
+        .unwrap_or_else(|| prog.to_string());
     let lower = base.to_ascii_lowercase();
     for ext in [".exe", ".cmd", ".bat", ".com"] {
         if let Some(stem) = lower.strip_suffix(ext) {
             let stem = base[..stem.len()].to_string();
             if !stem.is_empty() {
-                return Some(stem);
+                return stem;
             }
         }
     }
-    Some(base)
+    base
+}
+/// The command a shell is told to run: what follows `/c`, `/k`, `-c` or
+/// `-Command`. None when the shell is started bare.
+fn shell_inner_command(args: &[String]) -> Option<Vec<String>> {
+    let at = args.iter().position(|a| {
+        matches!(
+            a.to_ascii_lowercase().as_str(),
+            "/c" | "/k" | "/r" | "-c" | "-command"
+        )
+    })?;
+    let rest = &args[at + 1..];
+    let inner = match rest {
+        [] => return None,
+        [one] => split_command(one),
+        many => many.to_vec(),
+    };
+    (!inner.is_empty()).then_some(inner)
+}
+/// Program word of a command line for naming path-less services:
+/// `ollama.exe` serves as `ollama`, `node` stays `node`. A shell is looked
+/// through (`cmd /c jarvis` is `jarvis`); a bare shell has no program name.
+pub fn program_name(parts: &[String]) -> Option<String> {
+    let first = parts.first()?;
+    if is_shell_program(first) {
+        return program_name(&shell_inner_command(&parts[1..])?);
+    }
+    Some(program_stem(first))
 }
 /// Filtered view: display order narrowed to projects whose name or
 /// command contains the query (case-insensitive). Empty query = all.

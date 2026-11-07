@@ -1,4 +1,4 @@
-use crate::config::{display_order, shell, Kind, Project};
+use crate::config::{display_order, is_bare_shell, Kind, Project};
 use crate::session::Session;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -32,6 +32,7 @@ pub fn status_glyph(status: &str, tick: u64) -> char {
         '●'
     }
 }
+/// Short uptime label for a running session: "7s", "12m", "3h".
 pub fn uptime_label(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
@@ -57,11 +58,6 @@ pub fn status_style(status: &str) -> Style {
         Style::default().fg(Color::DarkGray)
     }
 }
-/// Main title label for the terminal pane.
-///
-/// For services, show the command being served (e.g. `npm run dev` or `cmd.exe`)
-/// so running servers read by their role rather than a generic folder name.
-/// Agents continue to show their registered project name.
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
@@ -76,6 +72,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "r          restart session",
         "d/Del      remove project (asks to confirm)",
         "S          start all stopped sessions",
+        "U          install the update squad found",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
         "Ctrl+Q     terminal back to manager (Esc goes to the session)",
         "q, Ctrl+C  quit (confirms when sessions exist)",
@@ -100,9 +97,6 @@ pub enum Mode {
     Add,
     Help,
 }
-/// Status-bar input row: prompt + editable text with a block cursor + hint.
-/// Visible slice of a single-line input: shows the tail end once the
-/// text outgrows `width` so the block cursor never scrolls off screen.
 /// Severity of the one-line status bar message, so errors and exit
 /// notices read differently from idle hints and confirmations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -342,7 +336,6 @@ pub fn dim_area(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) 
         }
     }
 }
-/// Sessions that quitting would discard (running or finished output).
 pub fn empty_state_lines(has_projects: bool) -> Vec<String> {
     if has_projects {
         vec![
@@ -407,8 +400,6 @@ pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layou
         h,
     )
 }
-/// Map a left click to the sidebar's position in `order`, if it landed on
-/// a project row (borders, headers and "(none)" placeholders miss).
 pub fn cli_help() -> String {
     format!(
         "AgentSquad v{} — manage Agent and Service terminal sessions in one TUI.
@@ -419,6 +410,7 @@ Usage:
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad start <name>                                 Open manager and start project
+  squad update [--check]                             Install the newest release (--check only looks)
   squad --version                                    Print version
 
 Manager keys:
@@ -434,8 +426,6 @@ Quitting stops managed child processes; no detached daemon.",
         env!("CARGO_PKG_VERSION")
     )
 }
-/// One-time notice when a session leaves Running. Returns the message
-/// the first time only; `announced` flips so repeats stay silent.
 /// Severity of a session-exit notice: errors alarm, crashes warn,
 /// clean exits stay quiet like any other confirmation.
 pub fn exit_notice_kind(status: &str) -> Notice {
@@ -447,6 +437,8 @@ pub fn exit_notice_kind(status: &str) -> Notice {
         Notice::Info
     }
 }
+/// One-time notice when a session leaves Running. Returns the message
+/// the first time only; `announced` flips so repeats stay silent.
 pub fn exit_notice(
     name: &str,
     was_running: bool,
@@ -675,12 +667,74 @@ pub fn group_counts(projects: &[Project], running: &[bool], kind: Kind) -> (usiz
     }
     (up, total)
 }
-/// Mouse wheel notch to scrolled lines: up moves into history.
+/// First command word for agent rows, so agents with the same status
+/// stay distinguishable. Skipped when it is just the default shell.
 pub fn agent_tag(p: &Project) -> Option<&str> {
-    if p.command == shell() {
+    if is_bare_shell(&p.command) {
         return None;
     }
     p.command.first().map(String::as_str)
+}
+/// The terminal screen as styled lines, `width` x `height` cells, with
+/// adjacent cells of one style merged into a single span.
+pub fn screen_lines(screen: &vt100::Screen, width: u16, height: u16) -> Vec<Line<'static>> {
+    use ratatui::style::Modifier;
+    let mut lines = Vec::with_capacity(height as usize);
+    for row in 0..height {
+        let mut spans = Vec::with_capacity(8);
+        let mut current_text = String::with_capacity(width as usize);
+        let mut current_style: Option<Style> = None;
+        for col in 0..width {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let mut style = Style::default()
+                .fg(color(cell.fgcolor()))
+                .bg(color(cell.bgcolor()));
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.dim() {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if cell.inverse() {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            let ch = if cell.has_contents() {
+                cell.contents()
+            } else {
+                " "
+            };
+            if current_style == Some(style) {
+                current_text.push_str(ch);
+            } else {
+                if let Some(prev_style) = current_style {
+                    spans.push(Span::styled(
+                        std::mem::replace(&mut current_text, String::with_capacity(32)),
+                        prev_style,
+                    ));
+                }
+                current_style = Some(style);
+                current_text.push_str(ch);
+            }
+        }
+        if let Some(prev_style) = current_style {
+            if !current_text.is_empty() {
+                spans.push(Span::styled(current_text, prev_style));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 pub fn color(c: vt100::Color) -> Color {
     match c {
