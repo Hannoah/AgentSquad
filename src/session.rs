@@ -54,15 +54,13 @@ impl AgentPhase {
 }
 
 pub fn is_needs_input(screen_text: &str) -> bool {
-    let recent_lines: Vec<&str> = screen_text
+    for line in screen_text
         .lines()
+        .rev()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .collect();
-    if recent_lines.is_empty() {
-        return false;
-    }
-    for &line in recent_lines.iter().rev().take(4) {
+        .take(5)
+    {
         let lower = line.to_ascii_lowercase();
         if lower.contains("[y/n]")
             || lower.contains("(y/n)")
@@ -79,6 +77,10 @@ pub fn is_needs_input(screen_text: &str) -> bool {
             || lower.contains("are you sure")
             || lower.contains("allow tool")
             || lower.contains("allow execution")
+            || lower.contains("allow once")
+            || lower.contains("allow always")
+            || lower.contains("don't ask again")
+            || lower.contains("esc to cancel")
             || lower.contains("proceed?")
             || lower.contains("approve?")
             || lower.contains("confirm?")
@@ -94,20 +96,29 @@ pub fn is_needs_input(screen_text: &str) -> bool {
 }
 
 pub fn is_working_text(screen_text: &str) -> bool {
-    let recent_lines: Vec<&str> = screen_text
+    for line in screen_text
         .lines()
+        .rev()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .collect();
-    for &line in recent_lines.iter().rev().take(3) {
+        .take(4)
+    {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("thinking")
+        if lower.contains("esc to interrupt")
+            || lower.contains("ctrl+c to interrupt")
+            || lower.contains("thinking")
             || lower.contains("running tool")
             || lower.contains("executing")
             || lower.contains("searching")
             || lower.contains("generating")
             || lower.contains("compiling")
             || lower.contains("building")
+            || lower.contains("reading")
+            || lower.contains("writing")
+            || lower.contains("editing")
+            || lower.contains("analyzing")
+            || lower.contains("pondering")
+            || lower.contains("synthesizing")
         {
             return true;
         }
@@ -208,25 +219,9 @@ pub struct Session {
     pub last_input: Option<Instant>,
     pub had_activity: bool,
     pub dismissed_exit: bool,
+    pub cached_needs_input: bool,
+    pub cached_working_text: bool,
 }
-/*
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
-    writer: Box<dyn Write + Send>,
-    rx: Receiver<Vec<u8>>,
-    parser: vt100::Parser,
-    status: String,
-    scroll: usize,
-    started: Option<Instant>,
-    announced_exit: bool,
-    usage: Option<Usage>,
-    cpu_prev: u64,
-    sampled: Option<Instant>,
-    last_output: Option<Instant>,
-    last_input: Option<Instant>,
-    had_activity: bool,
-    dismissed_exit: bool,
-}*/
 impl Session {
     pub fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
         let pair = native_pty_system().openpty(size(rows, cols))?;
@@ -279,20 +274,32 @@ impl Session {
             last_input: None,
             had_activity: false,
             dismissed_exit: false,
+            cached_needs_input: false,
+            cached_working_text: false,
         })
+    }
+    pub fn refresh_screen_flags(&mut self) {
+        let screen_text = self.parser.screen().contents();
+        self.cached_needs_input = is_needs_input(&screen_text);
+        self.cached_working_text = is_working_text(&screen_text);
     }
     pub fn update(&mut self) -> bool {
         let mut changed = false;
+        let mut received_output = false;
         for _ in 0..32 {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     self.parser.process(&bytes);
                     self.last_output = Some(Instant::now());
                     self.had_activity = true;
+                    received_output = true;
                     changed = true;
                 }
                 Err(_) => break,
             }
+        }
+        if received_output {
+            self.refresh_screen_flags();
         }
         if self.status == "Running" {
             match self.child.try_wait() {
@@ -315,6 +322,7 @@ impl Session {
             NonZero::new(rows.max(1)).unwrap(),
             NonZero::new(cols.max(1)).unwrap(),
         );
+        self.refresh_screen_flags();
         Ok(())
     }
     pub fn input(&mut self, bytes: &[u8]) -> Result<()> {
@@ -328,11 +336,10 @@ impl Session {
         if self.status != "Running" {
             return AgentPhase::Idle;
         }
-        let screen_text = self.parser.screen().contents();
         let user_just_typed = self
             .last_input
             .is_some_and(|t| t.elapsed().as_millis() < 800);
-        if !user_just_typed && is_needs_input(&screen_text) {
+        if !user_just_typed && self.cached_needs_input {
             return AgentPhase::NeedsInput;
         }
         let cpu_active = self.usage.is_some_and(|u| u.cpu > 5.0);
@@ -342,8 +349,7 @@ impl Session {
         let recent_input = self
             .last_input
             .is_some_and(|t| t.elapsed().as_millis() < 2500);
-        let explicit_working = is_working_text(&screen_text);
-        if explicit_working || recent_output || recent_input || cpu_active {
+        if self.cached_working_text || recent_output || recent_input || cpu_active {
             return AgentPhase::Working;
         }
         if self.had_activity && self.last_input.is_some() {
@@ -393,7 +399,12 @@ pub fn scroll_lines_selected(
 ) {
     if let Some(&pi) = order.get(selected) {
         if let Some(Some(s)) = sessions.get_mut(pi) {
-            s.scroll_by(lines);
+            if s.parser.screen().alternate_screen() {
+                let seq: &[u8] = if lines > 0 { b"\x1b[5~" } else { b"\x1b[6~" };
+                let _ = s.input(seq);
+            } else {
+                s.scroll_by(lines);
+            }
         }
     }
 }

@@ -231,11 +231,13 @@ fn agent_needs_input_and_working_detection() {
     assert!(is_needs_input("Would you like to execute this tool? [y/n]"));
     assert!(is_needs_input("Permission to read /etc/hosts? (yes/no)"));
     assert!(is_needs_input("Allow tool execution?"));
+    assert!(is_needs_input("Do you want to proceed?\n ❯ 1. Yes\n   Esc to cancel"));
     assert!(!is_needs_input("All tests passed with 0 errors."));
 
     assert!(is_working_text("Thinking about next refactor step..."));
     assert!(is_working_text("Executing command in background"));
     assert!(is_working_text("Searching codebase for usages"));
+    assert!(is_working_text("✶ Clauding… (esc to interrupt)"));
     assert!(!is_working_text("Finished compilation successfully."));
 }
 #[test]
@@ -443,6 +445,10 @@ fn build_project_validates() {
     assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, parts("")).is_err());
     let shell_p = build_project(&[], dir_str, Kind::Agent, parts("   ")).unwrap();
     assert_eq!(shell_p.command, shell());
+    // Quoted path (e.g. from Windows "Copy as path") is accepted cleanly:
+    let quoted_dir = format!("\"{dir_str}\"");
+    let qp = build_project(&[], &quoted_dir, Kind::Agent, parts("")).unwrap();
+    assert_eq!(qp.path, shell_p.path);
 }
 #[test]
 fn services_allow_multiple_in_same_directory() {

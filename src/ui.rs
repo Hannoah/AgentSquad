@@ -486,7 +486,12 @@ pub fn scroll_selected(
 ) {
     if let Some(&pi) = order.get(selected) {
         if let Some(Some(s)) = sessions.get_mut(pi) {
-            s.scroll_by((page_rows.max(1) as isize) * pages);
+            if s.parser.screen().alternate_screen() {
+                let seq: &[u8] = if pages > 0 { b"\x1b[5~" } else { b"\x1b[6~" };
+                let _ = s.input(seq);
+            } else {
+                s.scroll_by((page_rows.max(1) as isize) * pages);
+            }
         }
     }
 }

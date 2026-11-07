@@ -474,8 +474,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     let screen = s.parser.screen();
                     let mut lines = Vec::with_capacity(inner.height as usize);
                     for row in 0..inner.height {
-                        let mut spans = Vec::new();
-                        let mut current_text = String::new();
+                        let mut spans = Vec::with_capacity(8);
+                        let mut current_text = String::with_capacity(inner.width as usize);
                         let mut current_style: Option<Style> = None;
                         for col in 0..inner.width {
                             if let Some(cell) = screen.cell(row, col) {
@@ -511,7 +511,10 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 } else {
                                     if let Some(prev_style) = current_style {
                                         spans.push(Span::styled(
-                                            std::mem::take(&mut current_text),
+                                            std::mem::replace(
+                                                &mut current_text,
+                                                String::with_capacity(32),
+                                            ),
                                             prev_style,
                                         ));
                                     }
@@ -616,6 +619,23 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .flatten()
                     .filter(|s| needs_attention(&s.status))
                     .count();
+                let waiting_n = c
+                    .projects
+                    .iter()
+                    .enumerate()
+                    .filter(|&(pi, p)| {
+                        p.kind == Kind::Agent
+                            && sessions
+                                .get(pi)
+                                .and_then(|o| o.as_ref())
+                                .is_some_and(|s| s.phase() == AgentPhase::NeedsInput)
+                    })
+                    .count();
+                let wait_w = if waiting_n > 0 {
+                    format!(" ? {waiting_n}").chars().count() as u16
+                } else {
+                    0
+                };
                 // Machine load is shown only when the bar has room for it.
                 let sys_text = if area.width >= 70 && sys.total > 0 {
                     sys.summary()
@@ -632,7 +652,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .constraints([
                         Constraint::Min(1),
                         Constraint::Length(
-                            summary_width(running_n, c.projects.len(), failed_n) + sys_w,
+                            summary_width(running_n, c.projects.len(), failed_n) + wait_w + sys_w,
                         ),
                     ])
                     .split(vertical[1]);
@@ -685,6 +705,14 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         Style::default().fg(Color::DarkGray)
                     },
                 ));
+                if waiting_n > 0 {
+                    right.push(Span::styled(
+                        format!(" ? {waiting_n}"),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                }
                 if failed_n > 0 {
                     right.push(Span::styled(
                         format!(" ✖ {failed_n}"),
@@ -944,181 +972,217 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             }
             dirty = false;
         }
-        // Short poll so child echo appears within ~10 ms of a keypress.
-        // A long poll here is what made typing feel laggy.
-        if !event::poll(Duration::from_millis(10))? {
+        // Adaptive poll: 10 ms while sessions are active so echo feels instant;
+        // 50 ms when completely idle to keep background CPU at 0%.
+        let any_running = sessions.iter().flatten().any(|s| s.status == "Running");
+        let poll_dur = if any_running || sampling || updating {
+            Duration::from_millis(10)
+        } else {
+            Duration::from_millis(50)
+        };
+        if !event::poll(poll_dur)? {
             continue;
         }
-        match event::read()? {
-            Event::Resize(_, _) => {
-                let a = terminal.size()?;
-                let side = sidebar_width(a.width);
-                for s in sessions.iter_mut().flatten() {
-                    if let Err(e) = s.resize(
-                        a.height.saturating_sub(3).max(1),
-                        a.width.saturating_sub(side).saturating_sub(2).max(1),
-                    ) {
-                        message = (e.to_string(), Notice::Error);
-                    }
-                }
-                dirty = true;
+        let mut quit_requested = false;
+        for batch_idx in 0..16 {
+            if batch_idx > 0 && !event::poll(Duration::ZERO)? {
+                break;
             }
-            Event::Mouse(m) => {
-                if let Some(lines) = wheel_lines(m.kind) {
-                    if let Some(s) = order
-                        .get(selected)
-                        .and_then(|&pi| sessions.get_mut(pi))
-                        .and_then(|o| o.as_mut())
-                    {
-                        let is_alt = s.parser.screen().alternate_screen();
-                        let scrollback_len = s.parser.screen().scrollback_len();
-
-                        if is_alt || (focus && scrollback_len == 0) {
-                            let mouse_mode = s.parser.screen().mouse_protocol_mode();
-                            if mouse_mode != vt100::MouseProtocolMode::None {
-                                let btn = if lines > 0 { 64 } else { 65 };
-                                let side = sidebar_width(area.width);
-                                let col = m.column.saturating_sub(side + 1).max(1);
-                                let row = m.row.max(1);
-                                let seq = format!("\x1b[<{btn};{col};{row}M");
-                                let _ = s.input(seq.as_bytes());
-                            } else {
-                                // Alternate scroll mode:
-                                // In fullscreen/alternate screen mode (like Claude Code, vim, less),
-                                // translate wheel notches into PageUp/PageDown so the viewport scrolls naturally.
-                                let seq: &[u8] = if lines > 0 {
-                                    b"\x1b[5~" // PageUp
-                                } else {
-                                    b"\x1b[6~" // PageDown
-                                };
-                                let _ = s.input(seq);
-                            }
-                        } else {
-                            s.scroll_by(lines);
+            match event::read()? {
+                Event::Resize(_, _) => {
+                    let a = terminal.size()?;
+                    let side = sidebar_width(a.width);
+                    for s in sessions.iter_mut().flatten() {
+                        if let Err(e) = s.resize(
+                            a.height.saturating_sub(3).max(1),
+                            a.width.saturating_sub(side).saturating_sub(2).max(1),
+                        ) {
+                            message = (e.to_string(), Notice::Error);
                         }
                     }
                     dirty = true;
-                } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
-                    if show_help {
-                        show_help = false;
-                        dirty = true;
-                    } else if let Some(pi) = confirm_stop {
-                        let popup = centered_rect(60, 30, area.into());
-                        let clicked = ratatui::layout::Position::new(m.column, m.row);
-                        if popup.contains(clicked) {
-                            if let Some(slot) = sessions.get_mut(pi) {
-                                if let Some(old) = slot.take() {
-                                    thread::spawn(move || drop(old));
+                }
+                Event::Paste(data) => {
+                    dirty = true;
+                    if focus {
+                        if let Some(&pi) = order.get(selected) {
+                            if let Some(Some(s)) = sessions.get_mut(pi) {
+                                s.scroll_live();
+                                if let Err(e) = s.input(data.as_bytes()) {
+                                    message = (e.to_string(), Notice::Error);
+                                    focus = false;
                                 }
                             }
-                            message = (
-                                "Session stopped. Enter restarts it.".to_string(),
-                                Notice::Warn,
-                            );
                         }
-                        confirm_stop = None;
-                        dirty = true;
-                    } else if let Some(pi) = confirm_remove {
-                        let popup = centered_rect(60, 30, area.into());
-                        let clicked = ratatui::layout::Position::new(m.column, m.row);
-                        if popup.contains(clicked) {
-                            if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take()) {
-                                thread::spawn(move || drop(old));
+                    } else if sending {
+                        for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                            send_buf.insert(ch);
+                        }
+                    } else if filtering {
+                        for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                            filter_buf.insert(ch);
+                        }
+                        order = apply_filter(&c.projects, &filter_buf.as_str());
+                        selected = 0;
+                    } else if adding {
+                        for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                            match add_field {
+                                0 => add_path.insert(ch),
+                                2 => add_cmd.insert(ch),
+                                _ => {}
                             }
-                            if let Some(removed) =
-                                remove_project(&mut c.projects, &mut sessions, pi)
-                            {
-                                match persist_remove(&removed.name) {
-                                    Ok(()) => {
-                                        order = apply_filter(&c.projects, &filter_buf.as_str());
-                                        selected = selected.min(order.len().saturating_sub(1));
-                                        message =
-                                            (format!("Removed {}.", removed.name), Notice::Warn);
+                        }
+                        add_err.clear();
+                    }
+                }
+                Event::Mouse(m) => {
+                    if let Some(lines) = wheel_lines(m.kind) {
+                        let over_sidebar = !focus
+                            && side_rect.width > 0
+                            && side_rect.contains(ratatui::layout::Position::new(m.column, m.row));
+                        if over_sidebar {
+                            if !order.is_empty() {
+                                if lines > 0 {
+                                    selected = (selected + order.len() - 1) % order.len();
+                                } else {
+                                    selected = (selected + 1) % order.len();
+                                }
+                            }
+                        } else if let Some(s) = order
+                            .get(selected)
+                            .and_then(|&pi| sessions.get_mut(pi))
+                            .and_then(|o| o.as_mut())
+                        {
+                            let is_alt = s.parser.screen().alternate_screen();
+                            let scrollback_len = s.parser.screen().scrollback_len();
+
+                            if is_alt || (focus && scrollback_len == 0) {
+                                let mouse_mode = s.parser.screen().mouse_protocol_mode();
+                                if mouse_mode != vt100::MouseProtocolMode::None {
+                                    let btn = if lines > 0 { 64 } else { 65 };
+                                    let col = m
+                                        .column
+                                        .saturating_sub(pane_rect.x + 1)
+                                        .clamp(1, cols.max(1));
+                                    let row =
+                                        m.row.saturating_sub(pane_rect.y + 1).clamp(1, rows.max(1));
+                                    let seq = format!("\x1b[<{btn};{col};{row}M");
+                                    let _ = s.input(seq.as_bytes());
+                                } else {
+                                    // Alternate scroll mode:
+                                    // In fullscreen/alternate screen mode (like Claude Code, vim, less),
+                                    // translate wheel notches into PageUp/PageDown so the viewport scrolls naturally.
+                                    let seq: &[u8] = if lines > 0 {
+                                        b"\x1b[5~" // PageUp
+                                    } else {
+                                        b"\x1b[6~" // PageDown
+                                    };
+                                    let _ = s.input(seq);
+                                }
+                            } else {
+                                s.scroll_by(lines);
+                            }
+                        }
+                        dirty = true;
+                    } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                        if show_help {
+                            show_help = false;
+                            dirty = true;
+                        } else if confirm_stop.is_some() {
+                            let popup = centered_rect(60, 30, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                confirm_stop = None;
+                                dirty = true;
+                            }
+                        } else if confirm_remove.is_some() {
+                            let popup = centered_rect(60, 30, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                confirm_remove = None;
+                                dirty = true;
+                            }
+                        } else if confirm_quit {
+                            let popup = centered_rect(60, 30, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                confirm_quit = false;
+                                dirty = true;
+                            }
+                        } else if confirm_start_all {
+                            let popup = centered_rect(60, 30, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                confirm_start_all = false;
+                                dirty = true;
+                            }
+                        } else if confirm_update {
+                            let popup = centered_rect(60, 40, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                confirm_update = false;
+                                dirty = true;
+                            }
+                        } else if adding {
+                            let popup = centered_rect(70, 40, area.into());
+                            let clicked = ratatui::layout::Position::new(m.column, m.row);
+                            if !popup.contains(clicked) {
+                                if add_path.is_empty() && add_cmd.is_empty() {
+                                    adding = false;
+                                }
+                            } else {
+                                let rel_y = m.row.saturating_sub(popup.y + 1);
+                                match rel_y {
+                                    0 => add_field = 0,
+                                    1 => {
+                                        add_field = 1;
+                                        add_kind = if add_kind == Kind::Agent {
+                                            Kind::Service
+                                        } else {
+                                            Kind::Agent
+                                        };
                                     }
-                                    Err(e) => {
-                                        let at = pi.min(c.projects.len());
-                                        c.projects.insert(at, removed);
-                                        if at <= sessions.len() {
-                                            sessions.insert(at, None);
+                                    2 => add_field = 2,
+                                    _ => {}
+                                }
+                            }
+                            dirty = true;
+                        } else if sending || filtering {
+                            // In text input bar, keep input focus
+                        } else if let Some(i) =
+                            sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
+                        {
+                            if selected == i {
+                                // Re-clicking selected project: start if stopped, focus if running
+                                if let Some(&pi) = order.get(selected) {
+                                    let live = sessions
+                                        .get(pi)
+                                        .and_then(|o| o.as_ref())
+                                        .is_some_and(|s| s.status == "Running");
+                                    if live {
+                                        focus = true;
+                                    } else {
+                                        match start_session(
+                                            &mut sessions,
+                                            &c.projects,
+                                            pi,
+                                            rows,
+                                            cols,
+                                        ) {
+                                            None => focus = true,
+                                            Some(e) => message = (e, Notice::Error),
                                         }
-                                        message = (format!("Cannot save: {e:#}"), Notice::Error);
                                     }
                                 }
+                            } else {
+                                selected = i;
+                                focus = false;
                             }
-                        }
-                        confirm_remove = None;
-                        dirty = true;
-                    } else if confirm_quit {
-                        let popup = centered_rect(60, 30, area.into());
-                        let clicked = ratatui::layout::Position::new(m.column, m.row);
-                        if popup.contains(clicked) {
-                            break;
-                        } else {
-                            confirm_quit = false;
-                        }
-                        dirty = true;
-                    } else if confirm_start_all {
-                        let popup = centered_rect(60, 30, area.into());
-                        let clicked = ratatui::layout::Position::new(m.column, m.row);
-                        if popup.contains(clicked) {
-                            let mut started_n = 0;
-                            let mut failed: Option<String> = None;
-                            for &pi in order.iter() {
-                                let running = sessions
-                                    .get(pi)
-                                    .and_then(|o| o.as_ref())
-                                    .map(|s| s.status == "Running")
-                                    .unwrap_or(false);
-                                if running {
-                                    continue;
-                                }
-                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                    None => started_n += 1,
-                                    Some(e) => failed = Some(e),
-                                }
-                            }
-                            message = match failed {
-                                Some(e) => {
-                                    (format!("Started {started_n}; error: {e}"), Notice::Error)
-                                }
-                                None if started_n == 0 => {
-                                    ("All sessions already running.".to_string(), Notice::Info)
-                                }
-                                None => (
-                                    format!("Started {}.", plural_sessions(started_n)),
-                                    Notice::Info,
-                                ),
-                            };
-                        }
-                        confirm_start_all = false;
-                        dirty = true;
-                    } else if confirm_update {
-                        let popup = centered_rect(60, 40, area.into());
-                        let clicked = ratatui::layout::Position::new(m.column, m.row);
-                        if popup.contains(clicked) {
-                            if let Some(tag) = update_offer.take() {
-                                updating = true;
-                                message = (format!("Updating to {tag}..."), Notice::Warn);
-                                let tx = upd_tx.clone();
-                                thread::spawn(move || match install_update(&tag) {
-                                    Ok(()) => {
-                                        let _ = tx.send(UpdateMsg::Installed(tag));
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(UpdateMsg::Failed(e.to_string()));
-                                    }
-                                });
-                            }
-                        }
-                        confirm_update = false;
-                        dirty = true;
-                    } else if adding || sending || filtering {
-                        // In text input modals, keep input focus
-                    } else if let Some(i) =
-                        sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
-                    {
-                        if selected == i {
-                            // Re-clicking selected project: start if stopped, focus if running
+                            dirty = true;
+                        } else if pane_rect
+                            .contains(ratatui::layout::Position::new(m.column, m.row))
+                        {
+                            // Clicking terminal pane: start if stopped, focus if running
                             if let Some(&pi) = order.get(selected) {
                                 let live = sessions
                                     .get(pi)
@@ -1134,573 +1198,526 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     }
                                 }
                             }
-                        } else {
-                            selected = i;
-                            focus = false;
+                            dirty = true;
+                        } else if m.row >= area.height.saturating_sub(1) && m.column < 12 {
+                            // Clicking the status-bar mode chip toggles help
+                            show_help = !show_help;
+                            dirty = true;
                         }
-                        dirty = true;
-                    } else if pane_rect.contains(ratatui::layout::Position::new(m.column, m.row)) {
-                        // Clicking terminal pane: start if stopped, focus if running
-                        if let Some(&pi) = order.get(selected) {
-                            let live = sessions
-                                .get(pi)
-                                .and_then(|o| o.as_ref())
-                                .is_some_and(|s| s.status == "Running");
-                            if live {
-                                focus = true;
-                            } else {
-                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                    None => focus = true,
-                                    Some(e) => message = (e, Notice::Error),
-                                }
-                            }
-                        }
-                        dirty = true;
-                    } else if m.row >= area.height.saturating_sub(1) && m.column < 12 {
-                        // Clicking the status-bar mode chip toggles help
-                        show_help = !show_help;
-                        dirty = true;
-                    }
-                } else if m.kind == MouseEventKind::Down(MouseButton::Right)
-                    && !(adding
-                        || show_help
-                        || sending
-                        || filtering
-                        || confirm_quit
-                        || confirm_stop.is_some()
-                        || confirm_remove.is_some()
-                        || confirm_update)
-                {
-                    // Right-click on sidebar: quick toggle (stop if running, start if stopped)
-                    if let Some(i) =
-                        sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
+                    } else if m.kind == MouseEventKind::Down(MouseButton::Right)
+                        && !(adding
+                            || show_help
+                            || sending
+                            || filtering
+                            || confirm_quit
+                            || confirm_start_all
+                            || confirm_stop.is_some()
+                            || confirm_remove.is_some()
+                            || confirm_update)
                     {
-                        selected = i;
-                        if let Some(&pi) = order.get(selected) {
-                            let live = sessions
-                                .get(pi)
-                                .and_then(|o| o.as_ref())
-                                .is_some_and(|s| s.status == "Running");
-                            if live {
-                                confirm_stop = Some(pi);
-                            } else {
-                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                    None => focus = true,
-                                    Some(e) => message = (e, Notice::Error),
-                                }
-                            }
-                        }
-                        dirty = true;
-                    }
-                }
-            }
-            Event::Key(k) if k.kind != KeyEventKind::Release => {
-                dirty = true;
-                if focus {
-                    if focus_exit_key(k.code, k.modifiers) {
-                        focus = false;
-                        continue;
-                    }
-                    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
-                    match k.code {
-                        KeyCode::PageUp if shift => {
-                            scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
-                            continue;
-                        }
-                        KeyCode::PageDown if shift => {
-                            scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
-                            continue;
-                        }
-                        KeyCode::End if shift => {
-                            scroll_live_selected(&mut sessions, &order, selected);
-                            continue;
-                        }
-                        _ => {}
-                    }
-                    if let Some(&pi) = order.get(selected) {
-                        if let Some(Some(s)) = sessions.get_mut(pi) {
-                            s.scroll_live();
-                            let bytes = key_bytes(k, s.parser.screen().application_cursor());
-                            if let Err(e) = s.input(&bytes) {
-                                message = (e.to_string(), Notice::Error);
-                                focus = false;
-                            }
-                        }
-                    }
-                    continue;
-                }
-                if sending {
-                    match k.code {
-                        KeyCode::Esc => {
-                            sending = false;
-                            send_buf.clear();
-                        }
-                        KeyCode::Enter => {
-                            let line = send_buf.take();
-                            sending = false;
-                            if line.is_empty() {
-                                message = ("Empty. Nothing sent.".to_string(), Notice::Info);
-                            } else if let Some(&pi) = order.get(selected) {
-                                let alive = sessions
+                        // Right-click on sidebar: quick toggle (stop if running, start if stopped)
+                        if let Some(i) =
+                            sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
+                        {
+                            selected = i;
+                            if let Some(&pi) = order.get(selected) {
+                                let live = sessions
                                     .get(pi)
                                     .and_then(|o| o.as_ref())
-                                    .map(|s| s.status == "Running")
-                                    .unwrap_or(false);
-                                if !alive {
-                                    if let Some(e) =
-                                        start_session(&mut sessions, &c.projects, pi, rows, cols)
+                                    .is_some_and(|s| s.status == "Running");
+                                if live {
+                                    confirm_stop = Some(pi);
+                                } else {
+                                    match start_session(&mut sessions, &c.projects, pi, rows, cols)
                                     {
-                                        message = (e, Notice::Error);
+                                        None => focus = true,
+                                        Some(e) => message = (e, Notice::Error),
                                     }
                                 }
-                                if let Some(Some(s)) = sessions.get_mut(pi) {
-                                    let mut bytes = line.into_bytes();
-                                    bytes.push(b'\n');
-                                    match s.input(&bytes) {
-                                        Ok(()) => {
-                                            message = (
-                                                format!("Sent to {}", c.projects[pi].name),
-                                                Notice::Info,
-                                            )
+                            }
+                            dirty = true;
+                        }
+                    }
+                }
+                Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    dirty = true;
+                    if focus {
+                        if focus_exit_key(k.code, k.modifiers) {
+                            focus = false;
+                            continue;
+                        }
+                        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+                        match k.code {
+                            KeyCode::PageUp if shift => {
+                                scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
+                                continue;
+                            }
+                            KeyCode::PageDown if shift => {
+                                scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
+                                continue;
+                            }
+                            KeyCode::End if shift => {
+                                scroll_live_selected(&mut sessions, &order, selected);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        if let Some(&pi) = order.get(selected) {
+                            if let Some(Some(s)) = sessions.get_mut(pi) {
+                                s.scroll_live();
+                                let bytes = key_bytes(k, s.parser.screen().application_cursor());
+                                if let Err(e) = s.input(&bytes) {
+                                    message = (e.to_string(), Notice::Error);
+                                    focus = false;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if sending {
+                        match k.code {
+                            KeyCode::Esc => {
+                                sending = false;
+                                send_buf.clear();
+                            }
+                            KeyCode::Enter => {
+                                let line = send_buf.take();
+                                sending = false;
+                                if line.is_empty() {
+                                    message = ("Empty. Nothing sent.".to_string(), Notice::Info);
+                                } else if let Some(&pi) = order.get(selected) {
+                                    let alive = sessions
+                                        .get(pi)
+                                        .and_then(|o| o.as_ref())
+                                        .map(|s| s.status == "Running")
+                                        .unwrap_or(false);
+                                    if !alive {
+                                        if let Some(e) = start_session(
+                                            &mut sessions,
+                                            &c.projects,
+                                            pi,
+                                            rows,
+                                            cols,
+                                        ) {
+                                            message = (e, Notice::Error);
                                         }
-                                        Err(e) => message = (e.to_string(), Notice::Error),
+                                    }
+                                    if let Some(Some(s)) = sessions.get_mut(pi) {
+                                        let mut bytes = line.into_bytes();
+                                        bytes.push(b'\n');
+                                        match s.input(&bytes) {
+                                            Ok(()) => {
+                                                message = (
+                                                    format!("Sent to {}", c.projects[pi].name),
+                                                    Notice::Info,
+                                                )
+                                            }
+                                            Err(e) => message = (e.to_string(), Notice::Error),
+                                        }
                                     }
                                 }
                             }
+                            KeyCode::Backspace => {
+                                send_buf.backspace();
+                            }
+                            KeyCode::Delete => {
+                                send_buf.delete();
+                            }
+                            KeyCode::Left => send_buf.move_left(),
+                            KeyCode::Right => send_buf.move_right(),
+                            KeyCode::Home => send_buf.move_home(),
+                            KeyCode::End => send_buf.move_end(),
+                            KeyCode::Char(ch)
+                                if !k.modifiers.contains(KeyModifiers::CONTROL)
+                                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                send_buf.insert(ch)
+                            }
+                            _ => {}
                         }
-                        KeyCode::Backspace => {
-                            send_buf.backspace();
-                        }
-                        KeyCode::Delete => {
-                            send_buf.delete();
-                        }
-                        KeyCode::Left => send_buf.move_left(),
-                        KeyCode::Right => send_buf.move_right(),
-                        KeyCode::Home => send_buf.move_home(),
-                        KeyCode::End => send_buf.move_end(),
-                        KeyCode::Char(ch)
-                            if !k.modifiers.contains(KeyModifiers::CONTROL)
-                                && !k.modifiers.contains(KeyModifiers::ALT) =>
-                        {
-                            send_buf.insert(ch)
-                        }
-                        _ => {}
+                        continue;
                     }
-                    continue;
-                }
-                if filtering {
-                    match k.code {
-                        KeyCode::Esc => {
-                            filtering = false;
-                            filter_buf.clear();
-                            order = display_order(&c.projects);
-                            selected = 0;
+                    if filtering {
+                        match k.code {
+                            KeyCode::Esc => {
+                                filtering = false;
+                                filter_buf.clear();
+                                order = display_order(&c.projects);
+                                selected = 0;
+                            }
+                            KeyCode::Enter => filtering = false,
+                            KeyCode::Backspace => {
+                                filter_buf.backspace();
+                                order = apply_filter(&c.projects, &filter_buf.as_str());
+                                selected = 0;
+                            }
+                            KeyCode::Delete => {
+                                filter_buf.delete();
+                                order = apply_filter(&c.projects, &filter_buf.as_str());
+                                selected = 0;
+                            }
+                            KeyCode::Left => filter_buf.move_left(),
+                            KeyCode::Right => filter_buf.move_right(),
+                            KeyCode::Home => filter_buf.move_home(),
+                            KeyCode::End => filter_buf.move_end(),
+                            KeyCode::Char(ch)
+                                if !k.modifiers.contains(KeyModifiers::CONTROL)
+                                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                filter_buf.insert(ch);
+                                order = apply_filter(&c.projects, &filter_buf.as_str());
+                                selected = 0;
+                            }
+                            _ => {}
                         }
-                        KeyCode::Enter => filtering = false,
-                        KeyCode::Backspace => {
-                            filter_buf.backspace();
-                            order = apply_filter(&c.projects, &filter_buf.as_str());
-                            selected = 0;
-                        }
-                        KeyCode::Delete => {
-                            filter_buf.delete();
-                            order = apply_filter(&c.projects, &filter_buf.as_str());
-                            selected = 0;
-                        }
-                        KeyCode::Left => filter_buf.move_left(),
-                        KeyCode::Right => filter_buf.move_right(),
-                        KeyCode::Home => filter_buf.move_home(),
-                        KeyCode::End => filter_buf.move_end(),
-                        KeyCode::Char(ch)
-                            if !k.modifiers.contains(KeyModifiers::CONTROL)
-                                && !k.modifiers.contains(KeyModifiers::ALT) =>
-                        {
-                            filter_buf.insert(ch);
-                            order = apply_filter(&c.projects, &filter_buf.as_str());
-                            selected = 0;
-                        }
-                        _ => {}
+                        continue;
                     }
-                    continue;
-                }
-                if adding {
-                    match k.code {
-                        KeyCode::Esc => adding = false,
-                        KeyCode::Enter => {
-                            add_err.clear();
-                            // A new project must be visible, so drop any filter.
-                            filter_buf.clear();
-                            match load() {
-                                Err(e) => add_err = format!("Config reload failed: {e:#}"),
-                                Ok(disk) => {
-                                    merge_projects(&mut c, &mut sessions, disk);
-                                    order = display_order(&c.projects);
+                    if adding {
+                        match k.code {
+                            KeyCode::Esc => adding = false,
+                            KeyCode::Enter => {
+                                add_err.clear();
+                                // A new project must be visible, so drop any filter.
+                                filter_buf.clear();
+                                match load() {
+                                    Err(e) => add_err = format!("Config reload failed: {e:#}"),
+                                    Ok(disk) => {
+                                        merge_projects(&mut c, &mut sessions, disk);
+                                        order = display_order(&c.projects);
+                                    }
+                                }
+                                if add_err.is_empty() {
+                                    match build_project(
+                                        &c.projects,
+                                        &add_path.as_str(),
+                                        add_kind,
+                                        split_command(&add_cmd.as_str()),
+                                    ) {
+                                        Err(e) => add_err = e,
+                                        Ok(p) => {
+                                            let name = p.name.clone();
+                                            let kind_label = p.kind.as_str();
+                                            c.projects.push(p);
+                                            sessions.push(None);
+                                            match persist_add(&c.projects[c.projects.len() - 1]) {
+                                                Err(e) => {
+                                                    c.projects.pop();
+                                                    sessions.pop();
+                                                    order = display_order(&c.projects);
+                                                    selected = 0;
+                                                    add_err = format!("Save failed: {e:#}");
+                                                }
+                                                Ok(()) => {
+                                                    order = display_order(&c.projects);
+                                                    selected = order
+                                                        .iter()
+                                                        .position(|&x| x == c.projects.len() - 1)
+                                                        .unwrap_or(0);
+                                                    adding = false;
+                                                    message = (
+                                                        format!("Registered {name} ({kind_label})"),
+                                                        Notice::Info,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                            if add_err.is_empty() {
-                                match build_project(
-                                    &c.projects,
-                                    &add_path.as_str(),
-                                    add_kind,
-                                    split_command(&add_cmd.as_str()),
-                                ) {
-                                    Err(e) => add_err = e,
-                                    Ok(p) => {
-                                        let name = p.name.clone();
-                                        let kind_label = p.kind.as_str();
-                                        c.projects.push(p);
-                                        sessions.push(None);
-                                        match persist_add(&c.projects[c.projects.len() - 1]) {
-                                            Err(e) => {
-                                                c.projects.pop();
-                                                sessions.pop();
-                                                order = display_order(&c.projects);
-                                                selected = 0;
-                                                add_err = format!("Save failed: {e:#}");
-                                            }
+                            KeyCode::Tab => add_field = (add_field + 1) % 3,
+                            KeyCode::BackTab | KeyCode::Up => add_field = (add_field + 2) % 3,
+                            KeyCode::Down => add_field = (add_field + 1) % 3,
+                            KeyCode::Backspace => {
+                                match add_field {
+                                    0 => {
+                                        add_path.backspace();
+                                    }
+                                    2 => {
+                                        add_cmd.backspace();
+                                    }
+                                    _ => {}
+                                }
+                                add_err.clear();
+                            }
+                            KeyCode::Delete => {
+                                match add_field {
+                                    0 => {
+                                        add_path.delete();
+                                    }
+                                    2 => {
+                                        add_cmd.delete();
+                                    }
+                                    _ => {}
+                                }
+                                add_err.clear();
+                            }
+                            KeyCode::Left => match add_field {
+                                0 => add_path.move_left(),
+                                1 => {
+                                    add_kind = if add_kind == Kind::Agent {
+                                        Kind::Service
+                                    } else {
+                                        Kind::Agent
+                                    };
+                                }
+                                2 => add_cmd.move_left(),
+                                _ => {}
+                            },
+                            KeyCode::Right => match add_field {
+                                0 => add_path.move_right(),
+                                1 => {
+                                    add_kind = if add_kind == Kind::Agent {
+                                        Kind::Service
+                                    } else {
+                                        Kind::Agent
+                                    };
+                                }
+                                2 => add_cmd.move_right(),
+                                _ => {}
+                            },
+                            KeyCode::Home => match add_field {
+                                0 => add_path.move_home(),
+                                2 => add_cmd.move_home(),
+                                _ => {}
+                            },
+                            KeyCode::End => match add_field {
+                                0 => add_path.move_end(),
+                                2 => add_cmd.move_end(),
+                                _ => {}
+                            },
+                            KeyCode::Char(' ') if add_field == 1 => {
+                                add_kind = if add_kind == Kind::Agent {
+                                    Kind::Service
+                                } else {
+                                    Kind::Agent
+                                };
+                            }
+                            KeyCode::Char(ch)
+                                if !k.modifiers.contains(KeyModifiers::CONTROL)
+                                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                match add_field {
+                                    0 => add_path.insert(ch),
+                                    2 => add_cmd.insert(ch),
+                                    _ => {}
+                                }
+                                add_err.clear();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if show_help {
+                        match k.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => show_help = false,
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if confirm_update {
+                        match update_key(k.code) {
+                            Some(true) => {
+                                confirm_update = false;
+                                if let Some(tag) = update_offer.take() {
+                                    updating = true;
+                                    message = (format!("Updating to {tag}..."), Notice::Info);
+                                    let tx = upd_tx.clone();
+                                    thread::spawn(move || {
+                                        let m = match install_update(&tag) {
+                                            Ok(()) => UpdateMsg::Installed(tag),
+                                            Err(e) => UpdateMsg::Failed(format!("{e:#}")),
+                                        };
+                                        let _ = tx.send(m);
+                                    });
+                                }
+                            }
+                            Some(false) => {
+                                confirm_update = false;
+                                update_offer = None;
+                                message = (
+                                    "Update skipped; squad asks again next launch.".to_string(),
+                                    Notice::Info,
+                                );
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    if confirm_quit {
+                        match confirm_key(k.code) {
+                            Some(true) => {
+                                quit_requested = true;
+                                break;
+                            }
+                            Some(false) => confirm_quit = false,
+                            None => {}
+                        }
+                        continue;
+                    }
+                    if confirm_start_all {
+                        match confirm_key(k.code) {
+                            Some(true) => {
+                                let mut started_n = 0;
+                                let mut failed: Option<String> = None;
+                                for &pi in order.iter() {
+                                    let running = sessions
+                                        .get(pi)
+                                        .and_then(|o| o.as_ref())
+                                        .map(|s| s.status == "Running")
+                                        .unwrap_or(false);
+                                    if running {
+                                        continue;
+                                    }
+                                    match start_session(&mut sessions, &c.projects, pi, rows, cols)
+                                    {
+                                        None => started_n += 1,
+                                        Some(e) => failed = Some(e),
+                                    }
+                                }
+                                message = match failed {
+                                    Some(e) => {
+                                        (format!("Started {started_n}; error: {e}"), Notice::Error)
+                                    }
+                                    None if started_n == 0 => {
+                                        ("All sessions already running.".to_string(), Notice::Info)
+                                    }
+                                    None => (
+                                        format!("Started {}.", plural_sessions(started_n)),
+                                        Notice::Info,
+                                    ),
+                                };
+                                confirm_start_all = false;
+                            }
+                            Some(false) => {
+                                confirm_start_all = false;
+                                message = ("Cancelled.".to_string(), Notice::Info);
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    if confirm_stop.is_some() {
+                        match confirm_key(k.code) {
+                            Some(true) => {
+                                if let Some(pi) = confirm_stop.take() {
+                                    if let Some(slot) = sessions.get_mut(pi) {
+                                        if let Some(old) = slot.take() {
+                                            thread::spawn(move || drop(old));
+                                        }
+                                    }
+                                    message = (
+                                        "Session stopped. Enter restarts it.".to_string(),
+                                        Notice::Warn,
+                                    );
+                                }
+                            }
+                            Some(false) => {
+                                confirm_stop = None;
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    if confirm_remove.is_some() {
+                        match confirm_key(k.code) {
+                            Some(true) => {
+                                if let Some(pi) = confirm_remove.take() {
+                                    if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take())
+                                    {
+                                        thread::spawn(move || drop(old));
+                                    }
+                                    if let Some(removed) =
+                                        remove_project(&mut c.projects, &mut sessions, pi)
+                                    {
+                                        match persist_remove(&removed.name) {
                                             Ok(()) => {
-                                                order = display_order(&c.projects);
-                                                selected = order
-                                                    .iter()
-                                                    .position(|&x| x == c.projects.len() - 1)
-                                                    .unwrap_or(0);
-                                                adding = false;
+                                                // Keep an active filter across the removal.
+                                                order =
+                                                    apply_filter(&c.projects, &filter_buf.as_str());
+                                                selected =
+                                                    selected.min(order.len().saturating_sub(1));
                                                 message = (
-                                                    format!("Registered {name} ({kind_label})"),
-                                                    Notice::Info,
+                                                    format!("Removed {}.", removed.name),
+                                                    Notice::Warn,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                // Roll back so a failed save never loses the project.
+                                                let at = pi.min(c.projects.len());
+                                                c.projects.insert(at, removed);
+                                                if at <= sessions.len() {
+                                                    sessions.insert(at, None);
+                                                }
+                                                message = (
+                                                    format!("Remove failed: {e:#}"),
+                                                    Notice::Error,
                                                 );
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                        KeyCode::Tab => add_field = (add_field + 1) % 3,
-                        KeyCode::Up => add_field = (add_field + 2) % 3,
-                        KeyCode::Down => add_field = (add_field + 1) % 3,
-                        KeyCode::Backspace => {
-                            match add_field {
-                                0 => {
-                                    add_path.backspace();
-                                }
-                                2 => {
-                                    add_cmd.backspace();
-                                }
-                                _ => {}
+                            Some(false) => {
+                                confirm_remove = None;
                             }
-                            add_err.clear();
+                            None => {}
                         }
-                        KeyCode::Delete => {
-                            match add_field {
-                                0 => {
-                                    add_path.delete();
-                                }
-                                2 => {
-                                    add_cmd.delete();
-                                }
-                                _ => {}
-                            }
-                            add_err.clear();
-                        }
-                        KeyCode::Left => match add_field {
-                            0 => add_path.move_left(),
-                            2 => add_cmd.move_left(),
-                            _ => {}
-                        },
-                        KeyCode::Right => match add_field {
-                            0 => add_path.move_right(),
-                            2 => add_cmd.move_right(),
-                            _ => {}
-                        },
-                        KeyCode::Home => match add_field {
-                            0 => add_path.move_home(),
-                            2 => add_cmd.move_home(),
-                            _ => {}
-                        },
-                        KeyCode::End => match add_field {
-                            0 => add_path.move_end(),
-                            2 => add_cmd.move_end(),
-                            _ => {}
-                        },
-                        KeyCode::Char(' ') if add_field == 1 => {
-                            add_kind = if add_kind == Kind::Agent {
-                                Kind::Service
-                            } else {
-                                Kind::Agent
-                            };
-                        }
-                        KeyCode::Char(ch)
-                            if !k.modifiers.contains(KeyModifiers::CONTROL)
-                                && !k.modifiers.contains(KeyModifiers::ALT) =>
-                        {
-                            match add_field {
-                                0 => add_path.insert(ch),
-                                2 => add_cmd.insert(ch),
-                                _ => {}
-                            }
-                            add_err.clear();
-                        }
-                        _ => {}
+                        continue;
                     }
-                    continue;
-                }
-                if show_help {
                     match k.code {
-                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => show_help = false,
-                        _ => {}
-                    }
-                    continue;
-                }
-                if confirm_update {
-                    match update_key(k.code) {
-                        Some(true) => {
-                            confirm_update = false;
-                            if let Some(tag) = update_offer.take() {
-                                updating = true;
-                                message = (format!("Updating to {tag}..."), Notice::Info);
-                                let tx = upd_tx.clone();
-                                thread::spawn(move || {
-                                    let m = match install_update(&tag) {
-                                        Ok(()) => UpdateMsg::Installed(tag),
-                                        Err(e) => UpdateMsg::Failed(format!("{e:#}")),
-                                    };
-                                    let _ = tx.send(m);
-                                });
+                        KeyCode::Char('q') | KeyCode::Char('c')
+                            if k.code == KeyCode::Char('q')
+                                || k.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            if live_session_count(&sessions) > 0 {
+                                confirm_quit = true;
+                            } else {
+                                quit_requested = true;
+                                break;
                             }
                         }
-                        Some(false) => {
-                            confirm_update = false;
-                            update_offer = None;
-                            message = (
-                                "Update skipped; squad asks again next launch.".to_string(),
-                                Notice::Info,
-                            );
+                        // `n`/`p` stay bound for muscle memory; `j`/`k` and arrows are documented.
+                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n')
+                            if !order.is_empty() =>
+                        {
+                            selected = (selected + 1) % order.len()
                         }
-                        None => {}
-                    }
-                    continue;
-                }
-                if confirm_quit {
-                    match confirm_key(k.code) {
-                        Some(true) => break,
-                        Some(false) => confirm_quit = false,
-                        None => {}
-                    }
-                    continue;
-                }
-                if confirm_start_all {
-                    match confirm_key(k.code) {
-                        Some(true) => {
-                            let mut started_n = 0;
-                            let mut failed: Option<String> = None;
-                            for &pi in order.iter() {
-                                let running = sessions
-                                    .get(pi)
-                                    .and_then(|o| o.as_ref())
-                                    .map(|s| s.status == "Running")
-                                    .unwrap_or(false);
-                                if running {
-                                    continue;
-                                }
-                                match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                    None => started_n += 1,
-                                    Some(e) => failed = Some(e),
-                                }
-                            }
-                            message = match failed {
-                                Some(e) => {
-                                    (format!("Started {started_n}; error: {e}"), Notice::Error)
-                                }
-                                None if started_n == 0 => {
-                                    ("All sessions already running.".to_string(), Notice::Info)
-                                }
-                                None => (
-                                    format!("Started {}.", plural_sessions(started_n)),
-                                    Notice::Info,
-                                ),
-                            };
-                            confirm_start_all = false;
+                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p')
+                            if !order.is_empty() =>
+                        {
+                            selected = (selected + order.len() - 1) % order.len()
                         }
-                        Some(false) => {
-                            confirm_start_all = false;
-                            message = ("Cancelled.".to_string(), Notice::Info);
+                        KeyCode::Char('m') if !order.is_empty() => {
+                            sending = true;
+                            send_buf.clear();
                         }
-                        None => {}
-                    }
-                    continue;
-                }
-                if confirm_stop.is_some() {
-                    match confirm_key(k.code) {
-                        Some(true) => {
-                            if let Some(pi) = confirm_stop.take() {
-                                if let Some(slot) = sessions.get_mut(pi) {
-                                    if let Some(old) = slot.take() {
-                                        thread::spawn(move || drop(old));
-                                    }
-                                }
-                                message = (
-                                    "Session stopped. Enter restarts it.".to_string(),
-                                    Notice::Warn,
-                                );
+                        KeyCode::Char('?') => show_help = true,
+                        KeyCode::Char('a') => {
+                            adding = true;
+                            show_help = false;
+                            add_field = 0;
+                            add_path.clear();
+                            add_kind = Kind::Agent;
+                            add_cmd.clear();
+                            add_err.clear();
+                        }
+                        KeyCode::Char(c) if c.is_ascii_digit() => {
+                            if let Some(i) = jump_to(order.len(), c) {
+                                selected = i;
                             }
                         }
-                        Some(false) => {
-                            confirm_stop = None;
+                        // Reopening keeps the current text so a filter can be refined,
+                        // and works even when it matched nothing.
+                        KeyCode::Char('/') if !c.projects.is_empty() => {
+                            filtering = true;
                         }
-                        None => {}
-                    }
-                    continue;
-                }
-                if confirm_remove.is_some() {
-                    match confirm_key(k.code) {
-                        Some(true) => {
-                            if let Some(pi) = confirm_remove.take() {
-                                if let Some(Some(old)) = sessions.get_mut(pi).map(|o| o.take()) {
-                                    thread::spawn(move || drop(old));
-                                }
-                                if let Some(removed) =
-                                    remove_project(&mut c.projects, &mut sessions, pi)
-                                {
-                                    match persist_remove(&removed.name) {
-                                        Ok(()) => {
-                                            // Keep an active filter across the removal.
-                                            order = apply_filter(&c.projects, &filter_buf.as_str());
-                                            selected = selected.min(order.len().saturating_sub(1));
-                                            message = (
-                                                format!("Removed {}.", removed.name),
-                                                Notice::Warn,
-                                            );
-                                        }
-                                        Err(e) => {
-                                            // Roll back so a failed save never loses the project.
-                                            let at = pi.min(c.projects.len());
-                                            c.projects.insert(at, removed);
-                                            if at <= sessions.len() {
-                                                sessions.insert(at, None);
-                                            }
-                                            message =
-                                                (format!("Remove failed: {e:#}"), Notice::Error);
-                                        }
-                                    }
-                                }
-                            }
+                        // Esc in the manager drops a kept filter, or dismisses exit banner.
+                        KeyCode::Esc if !filter_buf.is_empty() => {
+                            filter_buf.clear();
+                            order = display_order(&c.projects);
+                            selected = 0;
                         }
-                        Some(false) => {
-                            confirm_remove = None;
-                        }
-                        None => {}
-                    }
-                    continue;
-                }
-                match k.code {
-                    KeyCode::Char('q') | KeyCode::Char('c')
-                        if k.code == KeyCode::Char('q')
-                            || k.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        if live_session_count(&sessions) > 0 {
-                            confirm_quit = true;
-                        } else {
-                            break;
-                        }
-                    }
-                    // `n`/`p` stay bound for muscle memory; `j`/`k` and arrows are documented.
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n')
-                        if !order.is_empty() =>
-                    {
-                        selected = (selected + 1) % order.len()
-                    }
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') if !order.is_empty() => {
-                        selected = (selected + order.len() - 1) % order.len()
-                    }
-                    KeyCode::Char('m') if !order.is_empty() => {
-                        sending = true;
-                        send_buf.clear();
-                    }
-                    KeyCode::Char('?') => show_help = true,
-                    KeyCode::Char('a') => {
-                        adding = true;
-                        show_help = false;
-                        add_field = 0;
-                        add_path.clear();
-                        add_kind = Kind::Agent;
-                        add_cmd.clear();
-                        add_err.clear();
-                    }
-                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                        if let Some(i) = jump_to(order.len(), c) {
-                            selected = i;
-                        }
-                    }
-                    // Reopening keeps the current text so a filter can be refined,
-                    // and works even when it matched nothing.
-                    KeyCode::Char('/') if !c.projects.is_empty() => {
-                        filtering = true;
-                    }
-                    // Esc in the manager drops a kept filter, or dismisses exit banner.
-                    KeyCode::Esc if !filter_buf.is_empty() => {
-                        filter_buf.clear();
-                        order = display_order(&c.projects);
-                        selected = 0;
-                    }
-                    KeyCode::Esc => {
-                        if let Some(&pi) = order.get(selected) {
-                            if let Some(Some(s)) = sessions.get_mut(pi) {
-                                if s.status != "Running" {
-                                    s.dismissed_exit = true;
-                                }
-                            }
-                        }
-                    }
-                    KeyCode::Home if !order.is_empty() => selected = 0,
-                    KeyCode::End if !order.is_empty() => selected = order.len() - 1,
-                    KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                        scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
-                    }
-                    KeyCode::PageDown if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                        scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
-                    }
-                    KeyCode::End if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                        scroll_live_selected(&mut sessions, &order, selected);
-                    }
-                    KeyCode::PageUp if !order.is_empty() => {
-                        scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
-                    }
-                    KeyCode::PageDown if !order.is_empty() => {
-                        scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
-                    }
-                    KeyCode::Char('r') => {
-                        if let Some(&pi) = order.get(selected) {
-                            match restart_session(&mut sessions, &c.projects, pi, rows, cols) {
-                                None => {
-                                    message = (
-                                        format!("Restarted {}", c.projects[pi].name),
-                                        Notice::Info,
-                                    );
-                                }
-                                Some(e) => message = (e, Notice::Error),
-                            }
-                        }
-                    }
-                    KeyCode::Char('S') if !order.is_empty() => {
-                        let stopped_count = order
-                            .iter()
-                            .filter(|&&pi| {
-                                sessions
-                                    .get(pi)
-                                    .and_then(|o| o.as_ref())
-                                    .is_none_or(|s| s.status != "Running")
-                            })
-                            .count();
-                        if stopped_count == 0 {
-                            message = ("All sessions already running.".to_string(), Notice::Info);
-                        } else {
-                            confirm_start_all = true;
-                        }
-                    }
-                    // `x` stays bound to stop for muscle memory; `s` is the documented key.
-                    KeyCode::Char('s') | KeyCode::Char('x') => {
-                        confirm_stop = stop_target(&order, selected, &sessions);
-                        if confirm_stop.is_none() {
+                        KeyCode::Esc => {
                             if let Some(&pi) = order.get(selected) {
                                 if let Some(Some(s)) = sessions.get_mut(pi) {
                                     if s.status != "Running" {
@@ -1709,33 +1726,98 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 }
                             }
                         }
-                    }
-                    KeyCode::Delete | KeyCode::Char('d') => {
-                        confirm_remove = order.get(selected).copied();
-                    }
-                    KeyCode::Enter => {
-                        if order.is_empty() {
-                            adding = true;
-                            show_help = false;
-                            add_field = 0;
-                            add_path.clear();
-                            add_kind = Kind::Agent;
-                            add_cmd.clear();
-                            add_err.clear();
-                        } else if let Some(&pi) = order.get(selected) {
-                            if let Some(e) =
-                                start_session(&mut sessions, &c.projects, pi, rows, cols)
-                            {
-                                message = (e, Notice::Error);
-                                continue;
-                            }
-                            focus = true;
+                        KeyCode::Home if !order.is_empty() => selected = 0,
+                        KeyCode::End if !order.is_empty() => selected = order.len() - 1,
+                        KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
                         }
+                        KeyCode::PageDown if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
+                        }
+                        KeyCode::End if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            scroll_live_selected(&mut sessions, &order, selected);
+                        }
+                        KeyCode::PageUp if !order.is_empty() => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, 1);
+                        }
+                        KeyCode::PageDown if !order.is_empty() => {
+                            scroll_selected(&mut sessions, &order, selected, rows as usize, -1);
+                        }
+                        KeyCode::Char('r') => {
+                            if let Some(&pi) = order.get(selected) {
+                                match restart_session(&mut sessions, &c.projects, pi, rows, cols) {
+                                    None => {
+                                        message = (
+                                            format!("Restarted {}", c.projects[pi].name),
+                                            Notice::Info,
+                                        );
+                                    }
+                                    Some(e) => message = (e, Notice::Error),
+                                }
+                            }
+                        }
+                        KeyCode::Char('S') if !order.is_empty() => {
+                            let stopped_count = order
+                                .iter()
+                                .filter(|&&pi| {
+                                    sessions
+                                        .get(pi)
+                                        .and_then(|o| o.as_ref())
+                                        .is_none_or(|s| s.status != "Running")
+                                })
+                                .count();
+                            if stopped_count == 0 {
+                                message =
+                                    ("All sessions already running.".to_string(), Notice::Info);
+                            } else {
+                                confirm_start_all = true;
+                            }
+                        }
+                        // `x` stays bound to stop for muscle memory; `s` is the documented key.
+                        KeyCode::Char('s') | KeyCode::Char('x') => {
+                            let target = stop_target(&order, selected, &sessions);
+                            let is_running = target
+                                .and_then(|pi| sessions.get(pi))
+                                .and_then(|o| o.as_ref())
+                                .is_some_and(|s| s.status == "Running");
+                            if is_running {
+                                confirm_stop = target;
+                            } else if let Some(pi) = target {
+                                if let Some(Some(s)) = sessions.get_mut(pi) {
+                                    s.dismissed_exit = true;
+                                }
+                            }
+                        }
+                        KeyCode::Delete | KeyCode::Char('d') => {
+                            confirm_remove = order.get(selected).copied();
+                        }
+                        KeyCode::Enter => {
+                            if order.is_empty() {
+                                adding = true;
+                                show_help = false;
+                                add_field = 0;
+                                add_path.clear();
+                                add_kind = Kind::Agent;
+                                add_cmd.clear();
+                                add_err.clear();
+                            } else if let Some(&pi) = order.get(selected) {
+                                if let Some(e) =
+                                    start_session(&mut sessions, &c.projects, pi, rows, cols)
+                                {
+                                    message = (e, Notice::Error);
+                                    continue;
+                                }
+                                focus = true;
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                _ => {}
             }
-            _ => {}
+        }
+        if quit_requested {
+            break;
         }
     }
     drop(sessions);

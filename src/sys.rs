@@ -83,8 +83,8 @@ impl SysUsage {
         }
     }
 }
-/// Short uptime label for a running session: "7s", "12m", "3h".
-pub fn descendant_pids(root: u32) -> Vec<u32> {
+#[cfg(windows)]
+fn snapshot_children() -> std::collections::HashMap<u32, Vec<u32>> {
     use std::collections::HashMap;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, INVALID_HANDLE_VALUE},
@@ -93,13 +93,12 @@ pub fn descendant_pids(root: u32) -> Vec<u32> {
             TH32CS_SNAPPROCESS,
         },
     };
-    let mut ordered = Vec::new();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     // SAFETY: process snapshot of our own machine; the handle is closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
-        return ordered;
+        return children;
     }
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     // SAFETY: dwSize is initialized; the API fills the remaining fields.
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
@@ -114,14 +113,39 @@ pub fn descendant_pids(root: u32) -> Vec<u32> {
         more = unsafe { Process32NextW(snapshot, &mut entry) };
     }
     unsafe { CloseHandle(snapshot) };
+    children
+}
+
+#[cfg(windows)]
+fn descendant_pids_from_map(
+    root: u32,
+    children: &std::collections::HashMap<u32, Vec<u32>>,
+) -> Vec<u32> {
+    let mut ordered = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
         ordered.push(pid);
-        if let Some(kids) = children.remove(&pid) {
-            stack.extend(kids);
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids.iter().copied());
         }
     }
     ordered
+}
+
+/// Short uptime label for a running session: "7s", "12m", "3h".
+#[cfg(windows)]
+pub fn descendant_pids(root: u32) -> Vec<u32> {
+    let children = snapshot_children();
+    descendant_pids_from_map(root, &children)
+}
+
+#[cfg(not(windows))]
+pub fn descendant_pids(_root: u32) -> Vec<u32> {
+    Vec::new()
 }
 
 /// Best-effort kill of a whole process tree by PID, leaves first.
@@ -154,6 +178,15 @@ pub fn kill_tree_by_pid(root: u32) {
 /// tree rooted at `root`. None when the platform has no probe.
 #[cfg(windows)]
 pub fn tree_usage(root: u32) -> Option<(u64, u64)> {
+    let children = snapshot_children();
+    tree_usage_with_map(root, &children)
+}
+
+#[cfg(windows)]
+fn tree_usage_with_map(
+    root: u32,
+    children: &std::collections::HashMap<u32, Vec<u32>>,
+) -> Option<(u64, u64)> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, FILETIME},
         System::{
@@ -163,7 +196,7 @@ pub fn tree_usage(root: u32) -> Option<(u64, u64)> {
     };
     let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
     let (mut cpu, mut mem) = (0u64, 0u64);
-    for pid in descendant_pids(root) {
+    for pid in descendant_pids_from_map(root, children) {
         // SAFETY: read-only queries on a handle we open and close here; a
         // null handle only means the process is gone or out of reach.
         unsafe {
@@ -242,12 +275,26 @@ pub struct Measurement {
 /// table can take tens of milliseconds, which is why this never runs on
 /// the thread that draws and reads keys.
 pub fn measure(roots: &[(usize, u32)]) -> Measurement {
+    #[cfg(windows)]
+    let procs = if roots.is_empty() {
+        Vec::new()
+    } else {
+        let children = snapshot_children();
+        roots
+            .iter()
+            .filter_map(|&(pi, pid)| {
+                tree_usage_with_map(pid, &children).map(|(cpu, mem)| (pi, pid, cpu, mem))
+            })
+            .collect()
+    };
+    #[cfg(not(windows))]
+    let procs = roots
+        .iter()
+        .filter_map(|&(pi, pid)| tree_usage(pid).map(|(cpu, mem)| (pi, pid, cpu, mem)))
+        .collect();
     Measurement {
         at: Instant::now(),
         sys: system_snapshot(),
-        procs: roots
-            .iter()
-            .filter_map(|&(pi, pid)| tree_usage(pid).map(|(cpu, mem)| (pi, pid, cpu, mem)))
-            .collect(),
+        procs,
     }
 }
