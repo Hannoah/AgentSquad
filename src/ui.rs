@@ -103,21 +103,6 @@ pub enum Mode {
 /// Status-bar input row: prompt + editable text with a block cursor + hint.
 /// Visible slice of a single-line input: shows the tail end once the
 /// text outgrows `width` so the block cursor never scrolls off screen.
-pub fn mode_of(focus: bool, sending: bool, filtering: bool, adding: bool, show_help: bool) -> Mode {
-    if show_help {
-        Mode::Help
-    } else if adding {
-        Mode::Add
-    } else if filtering {
-        Mode::Filter
-    } else if sending {
-        Mode::Send
-    } else if focus {
-        Mode::Focus
-    } else {
-        Mode::Manager
-    }
-}
 /// Severity of the one-line status bar message, so errors and exit
 /// notices read differently from idle hints and confirmations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

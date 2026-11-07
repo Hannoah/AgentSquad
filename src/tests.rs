@@ -109,13 +109,6 @@ fn help_covers_keys() {
 }
 #[test]
 fn mode_chip_and_hints() {
-    assert_eq!(mode_of(false, false, false, false, false), Mode::Manager);
-    assert_eq!(mode_of(true, false, false, false, false), Mode::Focus);
-    assert_eq!(mode_of(false, true, false, false, false), Mode::Send);
-    assert_eq!(mode_of(false, false, true, false, false), Mode::Filter);
-    assert_eq!(mode_of(false, false, false, true, false), Mode::Add);
-    assert_eq!(mode_of(false, false, false, false, true), Mode::Help);
-    assert_eq!(mode_of(true, true, true, true, true), Mode::Help);
     assert!(mode_hints(Mode::Manager).contains("Enter"));
     assert!(mode_hints(Mode::Send).contains("Esc"));
     let chips: Vec<&str> = [

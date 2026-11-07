@@ -25,7 +25,7 @@
 
 - [x] `main.rs` 모듈화: 5,300줄 단일 파일을 `app`, `config`, `input`, `session`, `sys`, `ui`, `updater`, `tests`로 분리 완료. `main.rs`를 110줄 진입점으로 축소.
 - [x] `SessionStatus` enum 도입(`Running`, `Exited(Option<u32>)`, `Error(String)`, `Stopped`) 및 상태 모델 타입화.
-- [ ] `Mode` enum 하나로 모드 통합(불리언 여러 개 제거).
+- [x] `Mode` enum 하나로 모드 통합: `focus`/`sending`/`filtering`/`adding`/`show_help` 5개 불리언을 `mode: Mode`로 교체. 확인 팝업(`confirm_*`)은 데이터를 들고 있어 별도 유지. `app::run()` 분할은 아직.
 
 ## 배포
 

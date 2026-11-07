@@ -70,13 +70,9 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     let mut side_rect = ratatui::layout::Rect::default();
     let mut row_targets: Vec<Option<usize>> = Vec::new();
     let mut pane_rect = ratatui::layout::Rect::default();
-    let mut focus = false;
-    let mut sending = false;
+    let mut mode = Mode::Manager;
     let mut send_buf = LineInput::new();
-    let mut show_help = false;
-    let mut filtering = false;
     let mut filter_buf = LineInput::new();
-    let mut adding = false;
     let mut add_field: usize = 0;
     let mut add_path = LineInput::new();
     let mut add_kind = Kind::Agent;
@@ -135,7 +131,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         let sidebar = sidebar_width(area.width);
         let rows = area.height.saturating_sub(3).max(1);
         let cols = area.width.saturating_sub(sidebar).saturating_sub(2).max(1);
-        if !focus && last_anim_tick.elapsed() >= Duration::from_millis(200) {
+        if mode != Mode::Focus && last_anim_tick.elapsed() >= Duration::from_millis(200) {
             last_anim_tick = Instant::now();
             tick = tick.wrapping_add(1);
             if sessions.iter().flatten().any(|s| s.status == "Running") {
@@ -146,7 +142,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
             first = false;
             if let Some(&pi) = order.get(selected) {
                 match start_session(&mut sessions, &c.projects, pi, rows, cols) {
-                    None => focus = true,
+                    None => mode = Mode::Focus,
                     Some(e) => message = (e, Notice::Error),
                 }
             }
@@ -203,11 +199,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
         }
         // Ask only when nothing else owns the keyboard, so a prompt never
         // swallows keystrokes meant for a session or another input.
-        let keyboard_free = !(focus
-            || sending
-            || filtering
-            || adding
-            || show_help
+        let keyboard_free = !(mode != Mode::Manager
             || confirm_quit
             || confirm_start_all
             || confirm_stop.is_some()
@@ -229,8 +221,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     message = (note, exit_notice_kind(&s.status));
                     // Typing into a dead terminal does nothing: hand the keyboard
                     // back to the manager so Enter can restart it.
-                    if focus && order.get(selected) == Some(&pi) {
-                        focus = false;
+                    if mode == Mode::Focus && order.get(selected) == Some(&pi) {
+                        mode = Mode::Manager;
                     }
                 }
             }
@@ -397,7 +389,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_type(BorderType::Rounded)
-                                .border_style(sidebar_border_style(focus))
+                                .border_style(sidebar_border_style(mode == Mode::Focus))
                                 .title(list_title(c.projects.len(), order.len())),
                         ),
                         panels[0],
@@ -425,12 +417,12 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             .map(|n| format!(" · ⇅{n}"))
                             .unwrap_or_default();
                         let focus_label = if panels[1].width >= 60 {
-                            if focus {
+                            if mode == Mode::Focus {
                                 " · INPUT (Ctrl+Q to exit)"
                             } else {
                                 " · PREVIEW (Enter to type)"
                             }
-                        } else if focus {
+                        } else if mode == Mode::Focus {
                             " · INPUT"
                         } else {
                             " · MANAGER"
@@ -457,7 +449,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             Span::styled(disp_status, disp_style),
                             Span::styled(
                                 focus_label,
-                                if focus {
+                                if mode == Mode::Focus {
                                     Style::default()
                                         .fg(Color::Green)
                                         .add_modifier(ratatui::style::Modifier::BOLD)
@@ -472,7 +464,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(pane_border_style(focus))
+                    .border_style(pane_border_style(mode == Mode::Focus))
                     .title(title);
                 let inner = block.inner(panels[1]);
                 f.render_widget(block, panels[1]);
@@ -579,7 +571,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             ),
                         );
                     }
-                    if focus && s.scroll == 0 && !screen.hide_cursor() {
+                    if mode == Mode::Focus && s.scroll == 0 && !screen.hide_cursor() {
                         let (r, c) = screen.cursor_position();
                         if r < inner.height && c < inner.width {
                             f.set_cursor_position((inner.x + c, inner.y + r));
@@ -606,7 +598,6 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     }
                     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
                 }
-                let mode = mode_of(focus, sending, filtering, adding, show_help);
                 let (chip_text, chip_style) = mode_chip(mode);
                 let mut bar = vec![
                     Span::styled(
@@ -664,16 +655,16 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     .split(vertical[1]);
                 let input_w =
                     (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
-                if focus {
+                if mode == Mode::Focus {
                     bar.extend(fitted_hints(Mode::Focus, input_w));
-                } else if filtering {
+                } else if mode == Mode::Filter {
                     bar.extend(input_line(
                         "Filter: ".to_string(),
                         &filter_buf,
                         format!(" ({} matches, Enter keeps, Esc clears)", order.len()),
                         input_w,
                     ));
-                } else if sending {
+                } else if mode == Mode::Send {
                     let name = sel_pi
                         .and_then(|pi| c.projects.get(pi))
                         .map(|p| p.name.as_str())
@@ -684,9 +675,9 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         " (Enter sends, Esc cancels)".to_string(),
                         input_w,
                     ));
-                } else if adding {
+                } else if mode == Mode::Add {
                     bar.extend(fitted_hints(Mode::Add, input_w));
-                } else if show_help && message.0 == mode_hints(Mode::Manager) {
+                } else if mode == Mode::Help && message.0 == mode_hints(Mode::Manager) {
                     bar.extend(fitted_hints(Mode::Help, input_w));
                 } else if message.0 == mode_hints(Mode::Manager) {
                     // Idle hints recede so action feedback stands out.
@@ -731,18 +722,17 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                     Paragraph::new(Line::from(right)).alignment(Alignment::Right),
                     status_row[1],
                 );
-                let has_modal = show_help
+                let has_modal = matches!(mode, Mode::Help | Mode::Add)
                     || confirm_stop.is_some()
                     || confirm_remove.is_some()
                     || confirm_update
                     || confirm_quit
-                    || confirm_start_all
-                    || adding;
+                    || confirm_start_all;
                 if has_modal {
                     let full_area = f.area();
                     dim_area(f.buffer_mut(), full_area);
                 }
-                if show_help {
+                if mode == Mode::Help {
                     // Fixed-size so every row fits on short terminals (a 50%
                     // popup clipped the last help rows at 24 lines).
                     let popup = fixed_rect(66, help_lines().len() as u16 + 2, f.area());
@@ -879,7 +869,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         popup,
                     );
                 }
-                if adding {
+                if mode == Mode::Add {
                     let popup = centered_rect(70, 40, f.area());
                     let modal_w = (popup.width as usize).saturating_sub(2);
                     f.render_widget(ratatui::widgets::Clear, popup);
@@ -1010,27 +1000,27 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
                 Event::Paste(data) => {
                     dirty = true;
-                    if focus {
+                    if mode == Mode::Focus {
                         if let Some(&pi) = order.get(selected) {
                             if let Some(Some(s)) = sessions.get_mut(pi) {
                                 s.scroll_live();
                                 if let Err(e) = s.input(data.as_bytes()) {
                                     message = (e.to_string(), Notice::Error);
-                                    focus = false;
+                                    mode = Mode::Manager;
                                 }
                             }
                         }
-                    } else if sending {
+                    } else if mode == Mode::Send {
                         for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                             send_buf.insert(ch);
                         }
-                    } else if filtering {
+                    } else if mode == Mode::Filter {
                         for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                             filter_buf.insert(ch);
                         }
                         order = apply_filter(&c.projects, &filter_buf.as_str());
                         selected = 0;
-                    } else if adding {
+                    } else if mode == Mode::Add {
                         for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                             match add_field {
                                 0 => add_path.insert(ch),
@@ -1043,7 +1033,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
                 Event::Mouse(m) => {
                     if let Some(lines) = wheel_lines(m.kind) {
-                        let over_sidebar = !focus
+                        let over_sidebar = mode != Mode::Focus
                             && side_rect.width > 0
                             && side_rect.contains(ratatui::layout::Position::new(m.column, m.row));
                         if over_sidebar {
@@ -1062,7 +1052,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             let is_alt = s.parser.screen().alternate_screen();
                             let scrollback_len = s.parser.screen().scrollback_len();
 
-                            if is_alt || (focus && scrollback_len == 0) {
+                            if is_alt || (mode == Mode::Focus && scrollback_len == 0) {
                                 let mouse_mode = s.parser.screen().mouse_protocol_mode();
                                 if mouse_mode != vt100::MouseProtocolMode::None {
                                     let btn = if lines > 0 { 64 } else { 65 };
@@ -1091,8 +1081,8 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         dirty = true;
                     } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
-                        if show_help {
-                            show_help = false;
+                        if mode == Mode::Help {
+                            mode = Mode::Manager;
                             dirty = true;
                         } else if confirm_stop.is_some() {
                             let popup = centered_rect(60, 30, area.into());
@@ -1129,12 +1119,12 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 confirm_update = false;
                                 dirty = true;
                             }
-                        } else if adding {
+                        } else if mode == Mode::Add {
                             let popup = centered_rect(70, 40, area.into());
                             let clicked = ratatui::layout::Position::new(m.column, m.row);
                             if !popup.contains(clicked) {
                                 if add_path.is_empty() && add_cmd.is_empty() {
-                                    adding = false;
+                                    mode = Mode::Manager;
                                 }
                             } else {
                                 let rel_y = m.row.saturating_sub(popup.y + 1);
@@ -1153,7 +1143,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 }
                             }
                             dirty = true;
-                        } else if sending || filtering {
+                        } else if matches!(mode, Mode::Send | Mode::Filter) {
                             // In text input bar, keep input focus
                         } else if let Some(i) =
                             sidebar_click(side_rect, list_offset, &row_targets, m.column, m.row)
@@ -1166,7 +1156,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                         .and_then(|o| o.as_ref())
                                         .is_some_and(|s| s.status == "Running");
                                     if live {
-                                        focus = true;
+                                        mode = Mode::Focus;
                                     } else {
                                         match start_session(
                                             &mut sessions,
@@ -1175,14 +1165,14 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                             rows,
                                             cols,
                                         ) {
-                                            None => focus = true,
+                                            None => mode = Mode::Focus,
                                             Some(e) => message = (e, Notice::Error),
                                         }
                                     }
                                 }
                             } else {
                                 selected = i;
-                                focus = false;
+                                mode = Mode::Manager;
                             }
                             dirty = true;
                         } else if pane_rect
@@ -1195,11 +1185,11 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     .and_then(|o| o.as_ref())
                                     .is_some_and(|s| s.status == "Running");
                                 if live {
-                                    focus = true;
+                                    mode = Mode::Focus;
                                 } else {
                                     match start_session(&mut sessions, &c.projects, pi, rows, cols)
                                     {
-                                        None => focus = true,
+                                        None => mode = Mode::Focus,
                                         Some(e) => message = (e, Notice::Error),
                                     }
                                 }
@@ -1207,14 +1197,15 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             dirty = true;
                         } else if m.row >= area.height.saturating_sub(1) && m.column < 12 {
                             // Clicking the status-bar mode chip toggles help
-                            show_help = !show_help;
+                            mode = if mode == Mode::Help {
+                                Mode::Manager
+                            } else {
+                                Mode::Help
+                            };
                             dirty = true;
                         }
                     } else if m.kind == MouseEventKind::Down(MouseButton::Right)
-                        && !(adding
-                            || show_help
-                            || sending
-                            || filtering
+                        && !(matches!(mode, Mode::Help | Mode::Add | Mode::Send | Mode::Filter)
                             || confirm_quit
                             || confirm_start_all
                             || confirm_stop.is_some()
@@ -1236,7 +1227,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 } else {
                                     match start_session(&mut sessions, &c.projects, pi, rows, cols)
                                     {
-                                        None => focus = true,
+                                        None => mode = Mode::Focus,
                                         Some(e) => message = (e, Notice::Error),
                                     }
                                 }
@@ -1247,9 +1238,9 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                 }
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     dirty = true;
-                    if focus {
+                    if mode == Mode::Focus {
                         if focus_exit_key(k.code, k.modifiers) {
-                            focus = false;
+                            mode = Mode::Manager;
                             continue;
                         }
                         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
@@ -1274,21 +1265,21 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                 let bytes = key_bytes(k, s.parser.screen().application_cursor());
                                 if let Err(e) = s.input(&bytes) {
                                     message = (e.to_string(), Notice::Error);
-                                    focus = false;
+                                    mode = Mode::Manager;
                                 }
                             }
                         }
                         continue;
                     }
-                    if sending {
+                    if mode == Mode::Send {
                         match k.code {
                             KeyCode::Esc => {
-                                sending = false;
+                                mode = Mode::Manager;
                                 send_buf.clear();
                             }
                             KeyCode::Enter => {
                                 let line = send_buf.take();
-                                sending = false;
+                                mode = Mode::Manager;
                                 if line.is_empty() {
                                     message = ("Empty. Nothing sent.".to_string(), Notice::Info);
                                 } else if let Some(&pi) = order.get(selected) {
@@ -1343,15 +1334,15 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         continue;
                     }
-                    if filtering {
+                    if mode == Mode::Filter {
                         match k.code {
                             KeyCode::Esc => {
-                                filtering = false;
+                                mode = Mode::Manager;
                                 filter_buf.clear();
                                 order = display_order(&c.projects);
                                 selected = 0;
                             }
-                            KeyCode::Enter => filtering = false,
+                            KeyCode::Enter => mode = Mode::Manager,
                             KeyCode::Backspace => {
                                 filter_buf.backspace();
                                 order = apply_filter(&c.projects, &filter_buf.as_str());
@@ -1378,9 +1369,9 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         continue;
                     }
-                    if adding {
+                    if mode == Mode::Add {
                         match k.code {
-                            KeyCode::Esc => adding = false,
+                            KeyCode::Esc => mode = Mode::Manager,
                             KeyCode::Enter => {
                                 add_err.clear();
                                 // A new project must be visible, so drop any filter.
@@ -1419,7 +1410,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                                         .iter()
                                                         .position(|&x| x == c.projects.len() - 1)
                                                         .unwrap_or(0);
-                                                    adding = false;
+                                                    mode = Mode::Manager;
                                                     message = (
                                                         format!("Registered {name} ({kind_label})"),
                                                         Notice::Info,
@@ -1513,9 +1504,11 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         continue;
                     }
-                    if show_help {
+                    if mode == Mode::Help {
                         match k.code {
-                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => show_help = false,
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => {
+                                mode = Mode::Manager
+                            }
                             _ => {}
                         }
                         continue;
@@ -1694,13 +1687,12 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             selected = (selected + order.len() - 1) % order.len()
                         }
                         KeyCode::Char('m') if !order.is_empty() => {
-                            sending = true;
+                            mode = Mode::Send;
                             send_buf.clear();
                         }
-                        KeyCode::Char('?') => show_help = true,
+                        KeyCode::Char('?') => mode = Mode::Help,
                         KeyCode::Char('a') => {
-                            adding = true;
-                            show_help = false;
+                            mode = Mode::Add;
                             add_field = 0;
                             add_path.clear();
                             add_kind = Kind::Agent;
@@ -1715,7 +1707,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         // Reopening keeps the current text so a filter can be refined,
                         // and works even when it matched nothing.
                         KeyCode::Char('/') if !c.projects.is_empty() => {
-                            filtering = true;
+                            mode = Mode::Filter;
                         }
                         // Esc in the manager drops a kept filter, or dismisses exit banner.
                         KeyCode::Esc if !filter_buf.is_empty() => {
@@ -1799,8 +1791,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                         }
                         KeyCode::Enter => {
                             if order.is_empty() {
-                                adding = true;
-                                show_help = false;
+                                mode = Mode::Add;
                                 add_field = 0;
                                 add_path.clear();
                                 add_kind = Kind::Agent;
@@ -1813,7 +1804,7 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                                     message = (e, Notice::Error);
                                     continue;
                                 }
-                                focus = true;
+                                mode = Mode::Focus;
                             }
                         }
                         _ => {}
