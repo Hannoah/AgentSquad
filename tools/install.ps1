@@ -76,17 +76,31 @@ if ($dlSha) {
   }
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+# Clean up leftover .old-* binaries from earlier updates/installs when not locked.
+Get-ChildItem -Path $InstallDir -Filter "squad.exe.old*" -ErrorAction SilentlyContinue | ForEach-Object {
+  Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+}
+# Windows cannot overwrite a running .exe in place, but it *can* rename it.
+# Move a live squad.exe aside so the installer succeeds even inside a running squad session.
+$targetExe = Join-Path $InstallDir "squad.exe"
 $running = Get-Process -Name "squad" -ErrorAction SilentlyContinue
-if ($running) {
-  $pids = ($running | Select-Object -ExpandProperty Id) -join ", "
-  throw "squad is running (PID $pids) and Windows cannot replace a running program. Quit every squad manager (q in each window) and run the installer again."
+if ($running -and (Test-Path $targetExe)) {
+  $oldExe = "$targetExe.old-$PID"
+  Move-Item -Path $targetExe -Destination $oldExe -Force
 }
 try {
   Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
 } catch {
-  throw "Could not write to $InstallDir ($($_.Exception.Message)). If squad is running, quit it first and run the installer again."
+  if ($oldExe -and (Test-Path $oldExe) -and -not (Test-Path $targetExe)) {
+    Move-Item -Path $oldExe -Destination $targetExe -Force -ErrorAction SilentlyContinue
+  }
+  throw "Could not write to $InstallDir ($($_.Exception.Message))."
 }
-Write-Host "Installed to $InstallDir"
+if ($running) {
+  Write-Host "Installed to $InstallDir (restart running squad windows to switch to the new build)."
+} else {
+  Write-Host "Installed to $InstallDir"
+}
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (($userPath -split ";") -notcontains $InstallDir) {
