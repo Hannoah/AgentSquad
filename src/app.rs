@@ -302,12 +302,40 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
                             } else {
                                 None
                             };
-                            let status_span_style = if Some(pi) == sel_pi {
-                                row_style
-                            } else if let Some(ph) = agent_phase {
-                                ph.icon(tick).1
-                            } else {
-                                status_style(status)
+                            let status_span_style = {
+                                let (base_fg, is_bold) = if let Some(ph) = agent_phase {
+                                    match ph {
+                                        AgentPhase::Working => (Color::Cyan, true),
+                                        AgentPhase::NeedsInput => (Color::Yellow, true),
+                                        AgentPhase::Done => (Color::Green, true),
+                                        AgentPhase::Idle => {
+                                            if Some(pi) == sel_pi {
+                                                (Color::Gray, false)
+                                            } else {
+                                                (Color::DarkGray, false)
+                                            }
+                                        }
+                                    }
+                                } else if status == "Running" {
+                                    (Color::Green, true)
+                                } else if status.starts_with("Error")
+                                    || (status.starts_with("Exited") && !status.ends_with("(0)"))
+                                {
+                                    (Color::Red, true)
+                                } else if Some(pi) == sel_pi {
+                                    (Color::Gray, false)
+                                } else {
+                                    (Color::DarkGray, false)
+                                };
+
+                                let mut st = Style::default().fg(base_fg);
+                                if is_bold {
+                                    st = st.add_modifier(ratatui::style::Modifier::BOLD);
+                                }
+                                if Some(pi) == sel_pi {
+                                    st = st.bg(Color::DarkGray);
+                                }
+                                st
                             };
                             let detail_style = if Some(pi) == sel_pi {
                                 row_style
