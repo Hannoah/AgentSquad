@@ -782,6 +782,14 @@ fn persist_helpers_keep_other_writers_projects() {
 }
 #[test]
 fn version_comparison() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
     assert_eq!(parse_version("v0.5.4"), Some((0, 5, 4)));
     assert_eq!(parse_version("0.5.4\n"), Some((0, 5, 4)));
     assert_eq!(parse_version("v1.2"), None);

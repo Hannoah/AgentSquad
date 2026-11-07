@@ -116,8 +116,14 @@ pub fn run(mut c: Config, initial: Option<usize>) -> Result<()> {
     if update_check_enabled() {
         let tx = upd_tx.clone();
         thread::spawn(move || {
+            // Defer background file cleanup and update probe past startup so
+            // AV behavioral monitors (e.g. AhnLab V3 MDP) never see immediate
+            // child process creation when launching from a shell.
+            thread::sleep(Duration::from_secs(6));
             cleanup_old_binaries();
-            if let Some(tag) = latest_tag().filter(|t| is_newer(env!("CARGO_PKG_VERSION"), t)) {
+            if let Some(tag) =
+                latest_tag_cached().filter(|t| is_newer(env!("CARGO_PKG_VERSION"), t))
+            {
                 let _ = tx.send(UpdateMsg::Available(tag));
             }
         });
