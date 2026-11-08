@@ -4,7 +4,7 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 
 ## 구조
 
-- 바이너리 `squad`의 진입점은 `src/main.rs`(CLI 명령 처리)이고, 나머지는 `app`(이벤트 루프), `config`, `input`, `ledger`, `session`, `sys`, `ui`, `updater`, `tests` 모듈로 나뉘어 있다. `app`은 다시 `app.rs`(상태, 틱 처리, `run`)와 `app/draw.rs`(그리기), `app/keys.rs`(키 입력), `app/mouse.rs`(마우스, 붙여넣기, 크기 변경), `app/actions.rs`(확인창, 우클릭 메뉴, 명령 하달, 브리핑)로 나뉜다. 빌드 설정은 `Cargo.toml`. 모듈 분리 이력은 [log.md](log.md) 참고.
+- 바이너리 `squad`의 진입점은 `src/main.rs`(CLI 명령 처리)이고, 나머지는 `app`(이벤트 루프), `config`, `input`, `ledger`, `session`, `sys`, `ui`, `updater`, `tests` 모듈로 나뉘어 있다. 테스트는 `tests.rs`(공용 `use`와 헬퍼)와 `tests/`의 `config`, `input`, `ledger`, `session`, `sys`, `ui`, `updater`로 주제별로 나눴다. `app`은 다시 `app.rs`(상태, 틱 처리, `run`)와 `app/draw.rs`(그리기), `app/keys.rs`(키 입력), `app/mouse.rs`(마우스, 붙여넣기, 크기 변경), `app/actions.rs`(확인창, 우클릭 메뉴, 명령 하달, 브리핑)로 나뉜다. 빌드 설정은 `Cargo.toml`. 모듈 분리 이력은 [log.md](log.md) 참고.
 - 입력 모드는 `mode: Mode` 하나로 표현한다(Manager, Focus, Send, Filter, Add, Help). 확인 팝업은 별도 `confirm_*` 상태. `App`의 메서드는 위 파일들에 `impl App` 블록으로 나뉘어 있고, 파일 사이에서 부르는 메서드는 `pub(super)`다.
 - 주요 의존성: ratatui(화면), crossterm(입력), portable-pty(세션 PTY), vt100(터미널 에뮬레이션), serde + toml(설정), anyhow, windows-sys(프로세스 트리, 측정).
 - `portable-pty`는 0.8에 고정했다. 0.9는 콘솔이 없는 환경에서 시작 시 멈춘다(`Cargo.toml` 주석 참고).

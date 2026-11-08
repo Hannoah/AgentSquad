@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.9.2 | 동작 변화 없는 정리: `tests.rs`(2,300줄)를 `tests/`의 `config`, `input`, `ledger`, `session`, `sys`, `ui`, `updater`로 주제별 분할(테스트 125개 그대로). 바이너리는 v0.9.1과 같음 | 태그 `v0.9.2` 참고 |
 | v0.9.1 | 동작 변화 없는 리팩터링: `app.rs`(2,400줄)를 `app/draw.rs`, `app/keys.rs`, `app/mouse.rs`, `app/actions.rs`로 분할 | 태그 `v0.9.1` 참고 |
 | v0.9.0 | 지휘 체계: 프로젝트의 `reports_to`(`squad add --under`, 추가 폼의 Reports to 칸), 지휘관 아래 들여쓰기·`★` 표시, 같은 폴더에 에이전트 여러 개 등록(`name`, `name-2`), `b` 브리핑에 이름·지휘관·부하 포함, 부하가 작업을 마치면 지휘관 폴더의 `.squad/REPORTS.md`에 squad가 기록(터미널 입력 없음), `o`로 휘하 전원에게 명령 하달(질문 중인 에이전트는 건너뜀) | 태그 `v0.9.0` 참고 |
 | v0.8.2 | 업데이트·설치 다운로드 실패 시 원인 표시(`GitHub answered HTTP 504; … try again later`, 404, 시간 초과, 연결 불가), 체크섬 파일을 못 받았을 때도 이유 표시 | 태그 `v0.8.2` 참고 |
