@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.1
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.2
 ```
 
 To install elsewhere:
@@ -228,13 +228,13 @@ answer a trust or permission dialog.
 
 ### Chain of command
 
-Agents can report to other agents. The first agent registered in a folder
-is that folder's commander (`★`), always. Every later agent registered in
-the same folder reports to it by default; name another commander with
+Agents can report to other agents. An agent with agents under it is a
+commander (`★`): it becomes one the moment another agent attaches. Every
+agent registered in a folder that already has one reports to the first by
+default; name another commander with
 `squad add C:\work\my-app --under my-app-2 -- claude` (or the add form's
-"Reports to" field). Anyone with agents under them is a commander too, and
-commanders can report to commanders, so the chain can grow as deep as you
-need. The sidebar and `squad list` draw it as a tree:
+"Reports to" field). Commanders can report to commanders, so the chain can
+grow as deep as you need. The sidebar and `squad list` draw it as a tree:
 
 ```
 ★ my-app

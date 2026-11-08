@@ -387,20 +387,21 @@ pub fn same_dir(a: &Project, b: &Project) -> bool {
         .to_string_lossy()
         .eq_ignore_ascii_case(&b.path.to_string_lossy())
 }
-/// The first agent registered in `path` is that folder's founding
-/// commander: always a commander, even before anyone reports to it.
+/// The first agent registered in `path`: the one later agents in the same
+/// folder report to by default.
 fn founder(projects: &[Project], path: &Project) -> Option<usize> {
     projects
         .iter()
         .position(|p| p.kind == Kind::Agent && same_dir(p, path))
 }
-/// Commanders: agents with agents under them, and every folder's founder.
+/// Commanders: agents with agents under them. An agent becomes one the
+/// moment another agent attaches to it.
 pub fn is_commander(projects: &[Project], i: usize) -> bool {
-    projects[i].kind == Kind::Agent
-        && (founder(projects, &projects[i]) == Some(i) || !subordinates(projects, i).is_empty())
+    !subordinates(projects, i).is_empty()
 }
 /// Whom a new agent in `new`'s folder reports to when none is named: the
-/// folder's founding commander. None for the founder itself and services.
+/// first agent registered there (which thereby becomes a commander). None
+/// for the first agent itself and for services.
 pub fn default_superior(existing: &[Project], new: &Project) -> Option<String> {
     if new.kind != Kind::Agent {
         return None;

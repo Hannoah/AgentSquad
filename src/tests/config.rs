@@ -583,7 +583,7 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
 
 #[test]
 fn chain_of_command_orders_ranks_and_briefs() {
-    // One folder: only the first agent registered there is a founder.
+    // One folder, so all of them share the same default commander.
     let mk = |name: &str, under: Option<&str>| Project {
         name: name.into(),
         path: PathBuf::from("/w"),
@@ -654,16 +654,19 @@ fn agent_in(name: &str, dir: &str, under: Option<&str>) -> Project {
 }
 
 #[test]
-fn first_agent_in_a_folder_is_always_a_commander() {
-    let p = vec![
+fn an_agent_becomes_a_commander_when_another_attaches() {
+    let mut p = vec![
         agent_in("lead", "/work/app", None),
         agent_in("helper", "/work/app", None),
         agent_in("solo", "/work/other", None),
     ];
-    assert!(is_commander(&p, 0), "founder needs no subordinates");
+    assert!(!is_commander(&p, 0), "alone, nobody is under it");
+    assert!(!is_commander(&p, 2));
+    p[1].reports_to = Some("lead".into());
+    assert!(is_commander(&p, 0), "a commander once an agent attaches");
     assert!(!is_commander(&p, 1));
-    assert!(is_commander(&p, 2), "founder of its own folder");
-    // Later agents default to the folder's founder; the founder to nobody.
+    assert!(!is_commander(&p, 2), "other folders are unaffected");
+    // Later agents default to the folder's first agent; it defaults to nobody.
     let new = agent_in("third", "/work/app", None);
     assert_eq!(default_superior(&p, &new).as_deref(), Some("lead"));
     assert_eq!(default_superior(&[], &new), None);

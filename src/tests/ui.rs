@@ -248,8 +248,8 @@ fn list_table_aligns_columns() {
     assert_eq!(
         list_table(&projects, false),
         vec![
-            "★ web  agent    /tmp  claude".to_string(),
-            "api    service  /tmp  node server.js".to_string(),
+            "web  agent    /tmp  claude".to_string(),
+            "api  service  /tmp  node server.js".to_string(),
         ]
     );
     assert!(list_table(&[], false).is_empty());
