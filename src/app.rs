@@ -2082,7 +2082,7 @@ impl App {
         self.message = if !p.ledger {
             (
                 format!(
-                    "Ledger is off for {}: set ledger = true in its config entry",
+                    "Operations log is off for {}: set ledger = true in its config entry",
                     p.name
                 ),
                 Notice::Info,
@@ -2104,7 +2104,7 @@ impl App {
                     match s.input(&bytes) {
                         Ok(()) => {
                             s.log_event("brief");
-                            (format!("Briefed {} on .squad/", p.name), Notice::Info)
+                            (format!("{} briefed.", p.name), Notice::Info)
                         }
                         Err(e) => (e.to_string(), Notice::Error),
                     }

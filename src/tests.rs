@@ -183,7 +183,7 @@ fn agent_phase_badge_and_pane_display() {
         Kind::Agent,
         Some(AgentPhase::Working),
     );
-    assert_eq!(text, "⠋ 12s");
+    assert_eq!(text, "⠋ Engaged 12s");
 
     let (text, _) = pane_status_display(
         "Running",
@@ -192,14 +192,14 @@ fn agent_phase_badge_and_pane_display() {
         Kind::Agent,
         Some(AgentPhase::NeedsInput),
     );
-    assert_eq!(text, "? 5s");
+    assert_eq!(text, "? Awaiting orders 5s");
 
     let (text, _) =
         pane_status_display("Running", Some(42), 0, Kind::Agent, Some(AgentPhase::Done));
-    assert_eq!(text, "✔ 42s");
+    assert_eq!(text, "✔ Task complete 42s");
 
     let (text, _) = pane_status_display("Running", Some(0), 0, Kind::Agent, Some(AgentPhase::Idle));
-    assert_eq!(text, "○ 0s");
+    assert_eq!(text, "○ Standby 0s");
 
     let (text, _) = pane_status_display("Running", Some(10), 0, Kind::Service, None);
     assert_eq!(text, "⠋ 10s");
@@ -2181,7 +2181,7 @@ fn ledger_session_records_start_and_exit() {
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let (msg, _) = s.ledger_note.take().expect("creation is announced once");
-    assert!(msg.contains("Created .squad/"), "{msg}");
+    assert!(msg.contains("Operations log opened"), "{msg}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while s.status.is_running() && std::time::Instant::now() < deadline {
         s.update();

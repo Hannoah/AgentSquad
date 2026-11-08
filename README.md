@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.8.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.8.1
 ```
 
 To install elsewhere:
@@ -202,25 +202,28 @@ Optional settings:
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
 
-## Ledger (opt-in)
+## Operations log (opt-in)
 
-Agents forget everything when a session ends. A ledger gives a project a
-memory: set `ledger = true` on it (or `squad add --ledger`) and the first
-time its session starts, squad creates a `.squad/` folder in the project:
+Agents forget everything when a session ends. An operations log gives a
+project a memory: set `ledger = true` on it (or `squad add --ledger`) and the
+first time its session starts, squad opens a `.squad/` folder in the project:
 
 ```
 .squad/
   README.md    the protocol agents follow
-  CONTEXT.md   goal, decisions, conventions, pitfalls (short)
-  log/         one file per piece of work (agents add them)
-  events.log   written by squad: starts, stops, exit codes
+  CONTEXT.md   the mission briefing: goal, decisions, standing orders, hazards
+  log/         SITREPs: one file per piece of work (agents file them)
+  events.log   kept by squad: starts, stops, exit codes
 ```
 
 An existing `.squad/` is never touched. In a git repository squad adds
 `.squad/` to `.git/info/exclude` (local only; delete that line to commit
-it). Press `b` on a running agent to type the instruction to read the
-ledger into it; squad never does that by itself, because typing at the
-wrong moment could answer a trust or permission dialog.
+it). Press `b` on a running agent to type the order to read the log into it;
+squad never does that by itself, because typing at the wrong moment could
+answer a trust or permission dialog.
+
+In the pane title an agent reads as `Engaged` (working), `Awaiting orders`
+(needs input), `Task complete` or `Standby`.
 
 ## Building from source (developers)
 

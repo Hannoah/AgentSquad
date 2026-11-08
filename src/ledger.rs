@@ -1,5 +1,6 @@
-//! The squad ledger: a `.squad/` folder inside a project where agents keep
-//! their history and key facts, and squad records what it observed.
+//! The operations log: a `.squad/` folder inside a project where agents file
+//! their reports and keep the mission briefing, and squad records what it
+//! observed.
 //!
 //! Plain markdown files, readable by people and agents alike:
 //! `README.md` (the protocol), `CONTEXT.md` (key facts), `log/` (one file
@@ -17,60 +18,63 @@ use std::{
 pub const DIR: &str = ".squad";
 
 const README: &str = "\
-# Squad ledger
+# Operations log
 
-This folder is the shared memory of the agents working on this project.
-You (the agent) read it before working and write to it as you go. Sessions
-end and your memory with them; this folder does not.
+This folder is the operations log of the squad working on this project.
+You (the agent) read it before you act and report to it as you go.
+Sessions end and your memory with them; this folder does not.
 
 ## Before you start
 
-1. Read `CONTEXT.md` - the goal, decisions, conventions and known pitfalls.
-2. Read the newest files in `log/` - what was done lately and what is next.
+1. Read `CONTEXT.md` - the mission briefing: goal, decisions, standing
+   orders and known hazards.
+2. Read the newest files in `log/` - the latest SITREPs: what was done
+   and what is next.
 
 ## While you work
 
 After each meaningful unit of work (a feature, a fix, a decision, a dead
-end worth remembering) add ONE new file to `log/`:
+end worth remembering) file ONE new SITREP as a file in `log/`:
 
 - name: `<UTC date and time>-<short-slug>.md`, e.g. `20261108T061200Z-add-auth.md`
-- content: **What** you did, **Why**, **Result** (including what failed), **Next**.
-- never edit or delete old entries; correct a mistake with a new entry.
+- content: **Situation** (what you found), **Action** (what you did and why),
+  **Result** (including what failed), **Next**.
+- never edit or delete old SITREPs; correct a mistake with a new one.
 
-Update `CONTEXT.md` only when a durable fact changes (a decision, a rule, a
-pitfall). Keep it short: it is read at the start of every session.
+Update `CONTEXT.md` only when a durable fact changes (a decision, a standing
+order, a hazard). Keep it short: it is read at the start of every session.
 
 ## Rules
 
-- `events.log` is written by squad. Do not edit it.
+- `events.log` is kept by squad. Do not edit it.
 - Write in the language the user uses with you.
 - Never put secrets (keys, tokens, passwords) in this folder.
 ";
 
 const CONTEXT: &str = "\
-# Project context
+# Mission briefing
 
 Keep this short. It is read at the start of every session.
 
-## Goal
+## Mission
 
 (what this project is for)
 
-## Architecture and key decisions
+## Key decisions
 
 (decisions that are costly to rediscover, with the reason)
 
-## Conventions
+## Standing orders
 
 (naming, structure, how to build and test)
 
-## Known pitfalls
+## Hazards
 
 (things that wasted time before)
 
-## Current state
+## Current situation
 
-(where things stand; the log has the details)
+(where things stand; the SITREPs in log/ have the details)
 ";
 
 /// Seconds since the epoch as `2026-11-08T06:12:03Z`.
@@ -157,5 +161,5 @@ pub fn event(project: &Path, text: &str) {
 /// What `b` types into an agent to point it at the ledger. No digits or
 /// other keystrokes that could answer a menu by accident.
 pub fn brief_line() -> &'static str {
-    "Before you start, read .squad/README.md, then .squad/CONTEXT.md and the newest files in .squad/log/. Follow the protocol in README.md for the rest of this session."
+    "Report for briefing: read .squad/README.md, then the mission briefing in .squad/CONTEXT.md and the newest SITREPs in .squad/log/. Follow the standing protocol in README.md for the rest of this session."
 }

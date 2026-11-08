@@ -124,6 +124,15 @@ pub fn rings_bell(prev: AgentPhase, now: AgentPhase) -> bool {
 }
 
 impl AgentPhase {
+    /// The state in words, as the pane title shows it.
+    pub fn word(self) -> &'static str {
+        match self {
+            AgentPhase::Working => "Engaged",
+            AgentPhase::NeedsInput => "Awaiting orders",
+            AgentPhase::Done => "Task complete",
+            AgentPhase::Idle => "Standby",
+        }
+    }
     pub fn icon(self, tick: u64) -> (String, Style) {
         match self {
             AgentPhase::Working => (
@@ -338,25 +347,25 @@ pub fn pane_status_display(
                 .unwrap_or_default();
             return match phase {
                 AgentPhase::Working => (
-                    format!("{}{uptime_str}", spinner_frame(tick)),
+                    format!("{} {}{uptime_str}", spinner_frame(tick), phase.word()),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 AgentPhase::NeedsInput => (
-                    format!("?{uptime_str}"),
+                    format!("? {}{uptime_str}", phase.word()),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 AgentPhase::Done => (
-                    format!("✔{uptime_str}"),
+                    format!("✔ {}{uptime_str}", phase.word()),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 AgentPhase::Idle => (
-                    format!("○{uptime_str}"),
+                    format!("○ {}{uptime_str}", phase.word()),
                     Style::default().fg(Color::DarkGray),
                 ),
             };
@@ -471,7 +480,10 @@ impl Session {
                     ledger::event(&p.path, &format!("start {}", p.name));
                     let note = created.then(|| {
                         (
-                            format!("Created .squad/ in {} - press b to brief the agent", p.name),
+                            format!(
+                                "Operations log opened in {} - press b to brief the agent",
+                                p.name
+                            ),
                             Notice::Info,
                         )
                     });
@@ -480,7 +492,7 @@ impl Session {
                 Err(e) => (
                     None,
                     Some((
-                        format!("Ledger unavailable in {}: {e:#}", p.name),
+                        format!("Operations log unavailable in {}: {e:#}", p.name),
                         Notice::Warn,
                     )),
                 ),
