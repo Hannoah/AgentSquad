@@ -17,7 +17,9 @@ use std::{
 };
 
 use app::run;
-use config::{build_project, check_superior, load, persist_add, persist_remove, shell, Kind};
+use config::{
+    build_project, check_superior, load, persist_add, persist_remove, persist_under, shell, Kind,
+};
 use ui::{cli_help, empty_list_hint, list_table};
 use updater::{install_update, is_newer, latest_tag_result};
 
@@ -115,7 +117,32 @@ fn main() -> Result<()> {
             }
             // Re-reads the file so a running squad's own writes are not clobbered.
             persist_add(&p)?;
-            println!("Registered {} ({})", p.name, kind.as_str());
+            if p.reports_to.is_some() {
+                // Report in to the commander (it learns its head count).
+                ledger::report_transfer(&load()?.projects, &p.name, None);
+            }
+            match &p.reports_to {
+                Some(c) => println!("Registered {} ({}) under {c}", p.name, kind.as_str()),
+                None => println!("Registered {} ({})", p.name, kind.as_str()),
+            }
+            Ok(())
+        }
+        Some("under") => {
+            let name = args
+                .get(1)
+                .context("Usage: squad under <name> [<commander>] (no commander clears it)")?;
+            let under = args.get(2).map(String::as_str);
+            let old = c
+                .projects
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .and_then(|p| p.reports_to.clone());
+            persist_under(name, under)?;
+            ledger::report_transfer(&load()?.projects, name, old.as_deref());
+            match under {
+                Some(u) => println!("{name} now reports to {u}"),
+                None => println!("{name} now reports to no one"),
+            }
             Ok(())
         }
         Some("list") => {

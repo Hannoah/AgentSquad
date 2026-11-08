@@ -64,6 +64,17 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
 /// Everything the manager keeps between frames. `run` owns the terminal;
 /// `App` owns state, drawing and input handling.
+/// Where the text typed into the status-bar input line goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SendTo {
+    /// A message for the selected session.
+    One,
+    /// An order for everyone under the selected commander.
+    All,
+    /// A new commander name for the selected agent.
+    Under,
+}
+
 struct App {
     cfg: Config,
     sessions: Vec<Option<Session>>,
@@ -78,8 +89,8 @@ struct App {
     pane_rect: Rect,
     mode: Mode,
     send_buf: LineInput,
-    /// The send line is an order for everyone under the selected commander.
-    send_all: bool,
+    /// What the status-bar input line does with the text typed into it.
+    send_to: SendTo,
     filter_buf: LineInput,
     add_field: usize,
     add_path: LineInput,
@@ -130,6 +141,7 @@ struct App {
 
 impl App {
     fn new(cfg: Config, initial: Option<usize>) -> Self {
+        ledger::write_rosters(&cfg.projects);
         let sessions = (0..cfg.projects.len()).map(|_| None).collect();
         let order = display_order(&cfg.projects);
         let selected = start_selection(
@@ -163,7 +175,7 @@ impl App {
             pane_rect: Rect::default(),
             mode: Mode::Manager,
             send_buf: LineInput::new(),
-            send_all: false,
+            send_to: SendTo::One,
             filter_buf: LineInput::new(),
             add_field: 0,
             add_path: LineInput::new(),

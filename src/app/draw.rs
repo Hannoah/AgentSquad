@@ -104,11 +104,8 @@ impl App {
                 let fg = self.sessions[pi]
                     .as_ref()
                     .and_then(|s| s.fg_name.as_deref());
-                let shown = format!(
-                    "{}{}",
-                    rank_prefix(&self.cfg.projects, pi),
-                    live_name(p, fg)
-                );
+                let tree = rank_prefix(&self.cfg.projects, pi);
+                let shown = format!("{tree}{}", live_name(p, fg));
                 let shown_name: &str = &shown;
                 let mut detail = String::new();
                 if status == "Running" {
@@ -219,13 +216,28 @@ impl App {
                     sel_row = Some(items.len());
                 }
                 targets.push(Some(n - 1));
+                // Tree lines recede; the star and the name keep the row's colors.
+                let name_fit = fit(shown_name, name_w);
+                let lines_w = tree.chars().take_while(|&c| c != '★').count();
+                let split = name_fit
+                    .char_indices()
+                    .nth(lines_w)
+                    .map_or(name_fit.len(), |(at, _)| at);
+                let (name_head, name_tail) =
+                    (name_fit[..split].to_string(), name_fit[split..].to_string());
+                let tree_style = if Some(pi) == sel_pi {
+                    row_style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
                 let row = ListItem::new(Line::from(vec![
                     Span::styled(mark, mark_style),
                     Span::styled(format!("{n} "), row_style),
                     Span::styled(fit(&status_full, status_w), status_span_style),
                     Span::raw(" "),
+                    Span::styled(name_head, tree_style),
                     Span::styled(
-                        fit(shown_name, name_w),
+                        name_tail,
                         if needs_input {
                             mark_style
                         } else {
@@ -517,10 +529,10 @@ impl App {
                 .and_then(|pi| self.cfg.projects.get(pi))
                 .map(|p| p.name.as_str())
                 .unwrap_or("?");
-            let label = if self.send_all {
-                format!("Order to all under {name}: ")
-            } else {
-                format!("Send to {name}: ")
+            let label = match self.send_to {
+                SendTo::One => format!("Send to {name}: "),
+                SendTo::All => format!("Order to all under {name}: "),
+                SendTo::Under => format!("{name} reports to (empty clears): "),
             };
             bar.extend(input_line(
                 label,

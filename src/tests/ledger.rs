@@ -118,3 +118,55 @@ fn finished_tasks_are_reported_to_the_commander_file() {
     );
     assert!(!text.contains("soldier-old"));
 }
+
+#[test]
+fn joining_a_commander_files_a_report_in_with_the_head_count() {
+    let dir = scratch_dir("report-in");
+    std::fs::create_dir_all(dir.join(".squad")).unwrap();
+    let d = dir.to_str().unwrap();
+    let mk = |name: &str, under: Option<&str>| Project {
+        name: name.into(),
+        path: PathBuf::from(d),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: true,
+        reports_to: under.map(Into::into),
+    };
+    let reports = || std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap_or_default();
+    // Two agents join "lead": each report-in carries the new head count.
+    let one = vec![mk("lead", None), mk("a", Some("lead"))];
+    crate::ledger::report_transfer(&one, "a", None);
+    let two = vec![
+        mk("lead", None),
+        mk("a", Some("lead")),
+        mk("b", Some("lead")),
+    ];
+    crate::ledger::report_transfer(&two, "b", None);
+    let text = reports();
+    assert!(
+        text.contains("**a -> lead**: reporting in. Now 1 directly under lead, 1 in all"),
+        "{text}"
+    );
+    assert!(
+        text.contains("**b -> lead**: reporting in. Now 2 directly under lead, 2 in all"),
+        "{text}"
+    );
+    // b moves under a: lead hears it left, a hears it arrived.
+    let moved = vec![mk("lead", None), mk("a", Some("lead")), mk("b", Some("a"))];
+    crate::ledger::report_transfer(&moved, "b", Some("lead"));
+    let text = reports();
+    assert!(
+        text.contains("**b** left lead. Now 1 directly under lead, 2 in all"),
+        "{text}"
+    );
+    assert!(
+        text.contains("**b -> a**: reporting in. Now 1 directly under a, 1 in all"),
+        "{text}"
+    );
+    // No commander, no report; unknown names are ignored.
+    let before = reports();
+    crate::ledger::report_transfer(&one, "lead", None);
+    crate::ledger::report_transfer(&one, "ghost", None);
+    assert_eq!(reports(), before);
+}

@@ -3,6 +3,35 @@
 use super::*;
 
 impl App {
+    /// Point agent `pi` at a new commander (empty clears it), saving to the
+    /// config file first so a failed save changes nothing.
+    pub(super) fn set_superior(&mut self, pi: usize, under: &str) -> (String, Notice) {
+        let name = self.cfg.projects[pi].name.clone();
+        let stored = if under.is_empty() {
+            None
+        } else {
+            match check_reassign(&self.cfg.projects, &name, under) {
+                Ok(c) => Some(c),
+                Err(e) => return (e, Notice::Error),
+            }
+        };
+        if let Err(e) = persist_under(&name, stored.as_deref()) {
+            return (format!("Save failed: {e:#}"), Notice::Error);
+        }
+        let old = std::mem::replace(&mut self.cfg.projects[pi].reports_to, stored.clone());
+        ledger::write_rosters(&self.cfg.projects);
+        ledger::report_transfer(&self.cfg.projects, &name, old.as_deref());
+        // The new tree must be visible, so drop any filter and follow the agent.
+        self.filter_buf.clear();
+        self.order = display_order(&self.cfg.projects);
+        self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
+        let msg = match stored {
+            Some(c) => format!("{name} now reports to {c}"),
+            None => format!("{name} now reports to no one"),
+        };
+        (msg, Notice::Info)
+    }
+
     /// Type `line` as an order into every running agent below commander `ci`.
     /// An agent showing a question (`?`) is skipped: the Enter that ends the
     /// order could answer it.
@@ -260,6 +289,7 @@ impl App {
         let Some(&pi) = self.order.get(self.selected) else {
             return;
         };
+        ledger::write_rosters(&self.cfg.projects);
         let Some(p) = self.cfg.projects.get(pi) else {
             return;
         };

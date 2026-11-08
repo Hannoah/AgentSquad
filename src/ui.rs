@@ -98,6 +98,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "m          message: send a line to session",
         "b          brief the agent on .squad/ (ledger = true)",
         "o          order: send a line to every agent under a commander",
+        "u          set whom the selected agent reports to",
         "s          stop session (asks to confirm)",
         "r          restart session",
         "d/Del      remove project (asks to confirm)",
@@ -511,6 +512,7 @@ Usage:
                                                      Register project (path optional for services)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
+  squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
   squad start <name>                                 Open manager and start project
   squad update [--check]                             Install the newest release (--check only looks)
   squad --version                                    Print version

@@ -583,27 +583,28 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
 
 #[test]
 fn chain_of_command_orders_ranks_and_briefs() {
+    // One folder: only the first agent registered there is a founder.
     let mk = |name: &str, under: Option<&str>| Project {
         name: name.into(),
-        path: PathBuf::from("/tmp"),
+        path: PathBuf::from("/w"),
         command: vec!["claude".into()],
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
         reports_to: under.map(Into::into),
     };
-    // Registered out of rank order: soldier, company, platoon.
+    // Registered out of rank order: company, soldier, platoon.
     let p = vec![
-        mk("soldier", Some("platoon")),
         mk("company", None),
+        mk("soldier", Some("platoon")),
         mk("platoon", Some("company")),
     ];
-    assert_eq!(display_order(&p), vec![1, 2, 0], "commander before reports");
-    assert_eq!(rank_prefix(&p, 1), "\u{2605} ");
-    assert_eq!(rank_prefix(&p, 2), "  \u{2605} ");
-    assert_eq!(rank_prefix(&p, 0), "    ");
-    assert_eq!(superior(&p, 0), Some(2));
-    assert_eq!(subordinates(&p, 1), vec![2]);
+    assert_eq!(display_order(&p), vec![0, 2, 1], "commander before reports");
+    assert_eq!(rank_prefix(&p, 0), "★ ");
+    assert_eq!(rank_prefix(&p, 2), "└─★ ");
+    assert_eq!(rank_prefix(&p, 1), "  └── ");
+    assert_eq!(superior(&p, 1), Some(2));
+    assert_eq!(subordinates(&p, 0), vec![2]);
     assert!(check_superior(&p, Kind::Agent, "COMPANY").is_ok());
     assert!(check_superior(&p, Kind::Service, "company").is_err());
     assert!(check_superior(&p, Kind::Agent, "nobody").is_err());
@@ -638,4 +639,102 @@ fn orders_reach_every_depth_below_a_commander() {
     assert!(all_subordinates(&p, 3).is_empty());
     let looped = vec![mk("a", Some("b")), mk("b", Some("a"))];
     assert_eq!(all_subordinates(&looped, 0), vec![1]);
+}
+
+fn agent_in(name: &str, dir: &str, under: Option<&str>) -> Project {
+    Project {
+        name: name.into(),
+        path: PathBuf::from(dir),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: under.map(Into::into),
+    }
+}
+
+#[test]
+fn first_agent_in_a_folder_is_always_a_commander() {
+    let p = vec![
+        agent_in("lead", "/work/app", None),
+        agent_in("helper", "/work/app", None),
+        agent_in("solo", "/work/other", None),
+    ];
+    assert!(is_commander(&p, 0), "founder needs no subordinates");
+    assert!(!is_commander(&p, 1));
+    assert!(is_commander(&p, 2), "founder of its own folder");
+    // Later agents default to the folder's founder; the founder to nobody.
+    let new = agent_in("third", "/work/app", None);
+    assert_eq!(default_superior(&p, &new).as_deref(), Some("lead"));
+    assert_eq!(default_superior(&[], &new), None);
+    let mut svc = new.clone();
+    svc.kind = Kind::Service;
+    assert_eq!(default_superior(&p, &svc), None);
+}
+
+#[test]
+fn second_agent_in_a_folder_reports_to_the_first() {
+    let dir = scratch_dir("founder");
+    let d = dir.to_str().unwrap();
+    let first = build_project(&[], d, Kind::Agent, vec![]).unwrap();
+    assert_eq!(first.reports_to, None);
+    let second = build_project(std::slice::from_ref(&first), d, Kind::Agent, vec![]).unwrap();
+    assert_eq!(second.reports_to.as_deref(), Some(first.name.as_str()));
+}
+
+#[test]
+fn reassignment_refuses_loops_and_non_agents() {
+    let p = vec![
+        agent_in("a", "/a", None),
+        agent_in("b", "/b", Some("a")),
+        agent_in("c", "/c", Some("b")),
+    ];
+    assert_eq!(check_reassign(&p, "c", "A").as_deref(), Ok("a"));
+    assert!(
+        check_reassign(&p, "a", "c").is_err(),
+        "a under its own subordinate"
+    );
+    assert!(check_reassign(&p, "b", "b").is_err(), "under itself");
+    assert!(check_reassign(&p, "c", "nobody").is_err());
+    assert!(check_reassign(&p, "ghost", "a").is_err());
+}
+
+#[test]
+fn rank_prefix_draws_branches_and_pipes() {
+    let p = vec![
+        agent_in("boss", "/w", None),
+        agent_in("one", "/w", Some("boss")),
+        agent_in("kid", "/w", Some("one")),
+        agent_in("two", "/w", Some("boss")),
+    ];
+    assert_eq!(rank_prefix(&p, 0), "★ ");
+    assert_eq!(rank_prefix(&p, 1), "├─★ ");
+    assert_eq!(
+        rank_prefix(&p, 2),
+        "│ └── ",
+        "pipe while a later sibling exists"
+    );
+    assert_eq!(rank_prefix(&p, 3), "└── ");
+}
+
+#[test]
+fn roster_lists_the_chain_of_command() {
+    let dir = scratch_dir("roster");
+    std::fs::create_dir_all(dir.join(".squad")).unwrap();
+    let d = dir.to_str().unwrap();
+    let p = vec![
+        agent_in("lead", d, None),
+        agent_in("helper", d, Some("lead")),
+    ];
+    crate::ledger::write_rosters(&p);
+    let text = std::fs::read_to_string(dir.join(".squad/ROSTER.md")).unwrap();
+    assert!(
+        text.contains("- **lead** (commander), commands helper"),
+        "{text}"
+    );
+    assert!(text.contains("- **helper**, reports to lead"), "{text}");
+    // A folder without a ledger gets no file.
+    let bare = scratch_dir("roster-bare");
+    crate::ledger::write_rosters(&[agent_in("x", bare.to_str().unwrap(), None)]);
+    assert!(!bare.join(".squad").exists());
 }

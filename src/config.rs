@@ -227,6 +227,22 @@ pub fn persist_remove(name: &str) -> Result<()> {
     disk.projects.retain(|q| !q.name.eq_ignore_ascii_case(name));
     save(&disk)
 }
+/// Change (or with `None`, clear) whom `name` reports to on disk, re-reading
+/// the file first (see `persist_add`) and validating against what is there.
+pub fn persist_under(name: &str, under: Option<&str>) -> Result<()> {
+    let mut disk = load()?;
+    let stored = match under {
+        Some(u) => Some(check_reassign(&disk.projects, name, u).map_err(anyhow::Error::msg)?),
+        None => None,
+    };
+    let p = disk
+        .projects
+        .iter_mut()
+        .find(|q| q.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))?;
+    p.reports_to = stored;
+    save(&disk)
+}
 /// Drop the Windows verbatim prefix `fs::canonicalize` adds, so stored
 /// paths read `C:\x` instead of `\\?\C:\x` (many tools choke on the latter).
 pub fn plain_path(p: PathBuf) -> PathBuf {
@@ -355,6 +371,31 @@ pub fn subordinates(projects: &[Project], i: usize) -> Vec<usize> {
         .filter(|&j| superior(projects, j) == Some(i))
         .collect()
 }
+pub fn same_dir(a: &Project, b: &Project) -> bool {
+    a.path
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&b.path.to_string_lossy())
+}
+/// The first agent registered in `path` is that folder's founding
+/// commander: always a commander, even before anyone reports to it.
+fn founder(projects: &[Project], path: &Project) -> Option<usize> {
+    projects
+        .iter()
+        .position(|p| p.kind == Kind::Agent && same_dir(p, path))
+}
+/// Commanders: agents with agents under them, and every folder's founder.
+pub fn is_commander(projects: &[Project], i: usize) -> bool {
+    projects[i].kind == Kind::Agent
+        && (founder(projects, &projects[i]) == Some(i) || !subordinates(projects, i).is_empty())
+}
+/// Whom a new agent in `new`'s folder reports to when none is named: the
+/// folder's founding commander. None for the founder itself and services.
+pub fn default_superior(existing: &[Project], new: &Project) -> Option<String> {
+    if new.kind != Kind::Agent {
+        return None;
+    }
+    founder(existing, new).map(|f| existing[f].name.clone())
+}
 /// Every agent below project `i`, at any depth (subordinates of
 /// subordinates included), without repeats even if a hand-edited loop exists.
 pub fn all_subordinates(projects: &[Project], i: usize) -> Vec<usize> {
@@ -371,22 +412,61 @@ pub fn all_subordinates(projects: &[Project], i: usize) -> Vec<usize> {
     found.remove(0);
     found
 }
-/// Sidebar prefix showing rank: two spaces per level below the top, and a
-/// star for commanders. Unit names (squad, platoon, company) can be derived
-/// from the subtree size here later.
+/// Sidebar prefix drawing the chain of command as a tree: a star for
+/// commanders and, below the top, branch lines (`├─`, `└─`) with a vertical
+/// line under every ancestor that has later siblings. Unit names (squad,
+/// platoon, company) can be derived from the subtree size here later.
 pub fn rank_prefix(projects: &[Project], i: usize) -> String {
-    let (mut depth, mut at) = (0, i);
-    // Bounded by the project count so a hand-edited loop cannot hang the UI.
-    while let Some(up) = superior(projects, at).filter(|_| depth < projects.len()) {
-        depth += 1;
-        at = up;
+    // Chain from the top commander down to `i`; the length bound and the
+    // repeat check keep a hand-edited loop from hanging the UI.
+    let mut chain = vec![i];
+    while let Some(up) = superior(projects, chain[chain.len() - 1]) {
+        if chain.len() > projects.len() || chain.contains(&up) {
+            break;
+        }
+        chain.push(up);
     }
-    let star = if subordinates(projects, i).is_empty() {
-        ""
-    } else {
-        "★ "
-    };
-    format!("{}{star}", "  ".repeat(depth))
+    chain.reverse();
+    let mut out = String::new();
+    for w in chain.windows(2) {
+        let last = subordinates(projects, w[0]).last() == Some(&w[1]);
+        let own = w[1] == i;
+        out.push_str(match (own, last) {
+            (true, true) => "└─",
+            (true, false) => "├─",
+            (false, true) => "  ",
+            (false, false) => "│ ",
+        });
+    }
+    match (chain.len() > 1, is_commander(projects, i)) {
+        (_, true) => out.push_str("★ "),
+        (true, false) => out.push_str("─ "),
+        (false, false) => {}
+    }
+    out
+}
+/// Move agent `name` under commander `under`, checked against `projects`:
+/// both must be agents, and the chain of command may not loop back to
+/// `name`. Returns the commander's stored name.
+pub fn check_reassign(projects: &[Project], name: &str, under: &str) -> Result<String, String> {
+    let i = projects
+        .iter()
+        .position(|p| p.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| format!("Unknown project: {name}"))?;
+    let stored = check_superior(projects, projects[i].kind, under)?;
+    let mut at = projects.iter().position(|p| p.name == stored).unwrap_or(i);
+    for _ in 0..=projects.len() {
+        if at == i {
+            return Err(format!(
+                "{name} cannot report to itself or its own subordinate."
+            ));
+        }
+        match superior(projects, at) {
+            Some(up) => at = up,
+            None => break,
+        }
+    }
+    Ok(stored)
 }
 /// Validate `--under`: the new project must be an agent and the named
 /// commander must be a registered agent. Returns the commander's stored name.
@@ -481,7 +561,7 @@ pub fn build_project(
     };
     let name = unique_name(&base, existing);
     let command = if parts.is_empty() { shell() } else { parts };
-    Ok(Project {
+    let mut p = Project {
         name,
         path,
         command,
@@ -489,7 +569,10 @@ pub fn build_project(
         autostart: false,
         ledger: false,
         reports_to: None,
-    })
+    };
+    // An explicit --under / Reports to replaces this default afterwards.
+    p.reports_to = default_superior(existing, &p);
+    Ok(p)
 }
 /// The name a new project would get, guessed from the typed text alone (no
 /// disk access, so it can run on every redraw). None while it is unknowable.

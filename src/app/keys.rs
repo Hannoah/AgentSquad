@@ -102,9 +102,15 @@ impl App {
             KeyCode::Enter => {
                 let line = self.send_buf.take();
                 self.mode = Mode::Manager;
-                if line.is_empty() {
+                if self.send_to == SendTo::Under {
+                    if let Some(&pi) = self.order.get(self.selected) {
+                        self.message = self.set_superior(pi, line.trim());
+                    }
+                } else if line.is_empty() {
                     self.message = ("Empty. Nothing sent.".to_string(), Notice::Info);
-                } else if let (true, Some(&pi)) = (self.send_all, self.order.get(self.selected)) {
+                } else if let (SendTo::All, Some(&pi)) =
+                    (self.send_to, self.order.get(self.selected))
+                {
                     self.message = self.issue_order(pi, &line);
                 } else if let Some(&pi) = self.order.get(self.selected) {
                     let alive = self
@@ -257,6 +263,8 @@ impl App {
                                         .position(|&x| x == self.cfg.projects.len() - 1)
                                         .unwrap_or(0);
                                     self.mode = Mode::Manager;
+                                    ledger::write_rosters(&self.cfg.projects);
+                                    ledger::report_transfer(&self.cfg.projects, &name, None);
                                     self.message =
                                         (format!("Registered {name} ({kind_label})"), Notice::Info);
                                 }
@@ -358,8 +366,26 @@ impl App {
             }
             KeyCode::Char('m') if !self.order.is_empty() => {
                 self.mode = Mode::Send;
-                self.send_all = false;
+                self.send_to = SendTo::One;
                 self.send_buf.clear();
+            }
+            // Change whom the selected agent reports to (empty clears it).
+            KeyCode::Char('u') if !self.order.is_empty() => {
+                let pi = self.order[self.selected];
+                let p = &self.cfg.projects[pi];
+                if p.kind != Kind::Agent {
+                    self.message = (
+                        "Only agents report to a commander".to_string(),
+                        Notice::Info,
+                    );
+                } else {
+                    self.send_buf.clear();
+                    for ch in p.reports_to.clone().unwrap_or_default().chars() {
+                        self.send_buf.insert(ch);
+                    }
+                    self.mode = Mode::Send;
+                    self.send_to = SendTo::Under;
+                }
             }
             // Orders: one line to every agent under the selected commander.
             KeyCode::Char('o') if !self.order.is_empty() => {
@@ -371,7 +397,7 @@ impl App {
                     );
                 } else {
                     self.mode = Mode::Send;
-                    self.send_all = true;
+                    self.send_to = SendTo::All;
                     self.send_buf.clear();
                 }
             }

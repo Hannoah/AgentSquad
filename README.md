@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.9.2
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.0
 ```
 
 To install elsewhere:
@@ -126,6 +126,7 @@ case-insensitively by `remove` and `start`.
 | `a` | Add a project without leaving the manager (form previews the registered name and offers an autostart toggle) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `o` | Order: type a line into every agent under the selected commander |
+| `u` | Set whom the selected agent reports to (empty clears it) |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
 | `r` | Restart the selected session (asks to confirm with `y` when running) |
 | `d` / `Delete` | Remove the selected project (asks to confirm with `y`; a running session is stopped, files untouched) |
@@ -154,6 +155,7 @@ squad add [<path>] [--kind agent|service] [--autostart] [--under <commander>] [-
                                                                    Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
+squad under <name> [<commander>]                                   Set whom an agent reports to (none clears it)
 squad start <name>                                                 Open the manager on a project and start it
 squad update [--check]                                             Install the newest release (--check only looks)
 squad --version
@@ -226,16 +228,36 @@ answer a trust or permission dialog.
 
 ### Chain of command
 
-Agents can report to other agents: `squad add C:\work\my-app --under my-app -- claude`
-registers a second agent in the same folder that reports to `my-app`
-(`reports_to = "my-app"` in the config; the add form has a "Reports to"
-field too). Anyone with agents under them is a commander (`★`), and
+Agents can report to other agents. The first agent registered in a folder
+is that folder's commander (`★`), always. Every later agent registered in
+the same folder reports to it by default; name another commander with
+`squad add C:\work\my-app --under my-app-2 -- claude` (or the add form's
+"Reports to" field). Anyone with agents under them is a commander too, and
 commanders can report to commanders, so the chain can grow as deep as you
-need. The sidebar lists each commander above its agents, indented by level.
+need. The sidebar and `squad list` draw it as a tree:
 
-- **Briefing:** `b` tells an agent its name, its commander and its agents.
-- **Reports:** when an agent finishes a task, squad appends a line to
-  `.squad/REPORTS.md` (who, when, and their newest SITREP). Squad is the
+```
+★ my-app
+├─★ my-app-2
+│ └── my-app-4
+└── my-app-3
+```
+
+Change it later with `u` on an agent in the manager, or from the shell:
+`squad under my-app-4 my-app-3` (no commander clears it). Loops, such as a
+commander reporting to its own agent, are refused.
+
+- **Roster:** squad keeps `.squad/ROSTER.md` (who commands whom) current
+  whenever the chain changes, so agents can read it at any time.
+- **Briefing:** `b` points an agent at the log and the roster and tells it
+  its name, its commander and its agents. It is a one-time prompt: press it
+  after starting or changing agents.
+- **Reporting in:** when an agent is registered under a commander, or moved
+  there, squad files its transfer in the commander's `.squad/REPORTS.md`
+  with the new head count ("Now 2 directly under app, 3 in all"); a
+  commander that loses an agent hears that too.
+- **Reports:** when an agent finishes a task, squad appends a line to the
+  same file (who, when, and their newest SITREP). Squad is the
   only writer and types nothing into any terminal. Commanders read the file.
 - **Orders:** `o` on a commander types one line, prefixed `Order from "<name>":`,
   into every running agent under it, at any depth. An agent that is showing a
