@@ -442,8 +442,8 @@ pub fn program_name(parts: &[String]) -> Option<String> {
     }
     Some(program_stem(first))
 }
-/// Filtered view: display order narrowed to projects whose name or
-/// command contains the query (case-insensitive). Empty query = all.
+/// Filtered view: narrowed to projects whose name, path, or command
+/// contains the query (case-insensitive). Empty query = all.
 pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
     let q = query.to_ascii_lowercase();
     display_order(projects)
@@ -451,6 +451,11 @@ pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
         .filter(|&i| {
             q.is_empty()
                 || projects[i].name.to_ascii_lowercase().contains(&q)
+                || projects[i]
+                    .path
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains(&q)
                 || projects[i]
                     .command
                     .join(" ")
@@ -460,5 +465,13 @@ pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
         .collect()
 }
 pub fn fit(s: &str, w: usize) -> String {
-    s.chars().take(w).collect()
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= w {
+        return s.to_string();
+    }
+    if w <= 1 {
+        return chars.into_iter().take(w).collect();
+    }
+    // Keep a visible marker so a clipped name/command reads as clipped.
+    chars.into_iter().take(w - 1).collect::<String>() + "…"
 }

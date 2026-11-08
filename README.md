@@ -115,16 +115,16 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions |
 | `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
 | `1`–`9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
-| `/` | Filter the project list by name or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
-| `a` | Add a project without leaving the manager |
+| `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
+| `a` | Add a project without leaving the manager (form previews the registered name and offers an autostart toggle) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
-| `s` | Stop the selected session (asks to confirm; process is killed, files untouched; `x` also works) |
-| `r` | Restart the selected session |
-| `d` / `Delete` | Remove the selected project (asks to confirm; a running session is stopped, files untouched) |
+| `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
+| `r` | Restart the selected session (asks to confirm with `y` when running) |
+| `d` / `Delete` | Remove the selected project (asks to confirm with `y`; a running session is stopped, files untouched) |
 | `S` | Start all stopped sessions |
 | `U` | Open the update prompt when a new release has been detected |
 | `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |

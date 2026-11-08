@@ -97,10 +97,13 @@ struct App {
     add_path: LineInput,
     add_kind: Kind,
     add_cmd: LineInput,
+    add_autostart: bool,
     add_err: String,
     confirm_stop: Option<usize>,
     confirm_remove: Option<usize>,
     confirm_restart: Option<usize>,
+    /// Right-click quick-action menu target, if open.
+    context_menu: Option<usize>,
     confirm_quit: bool,
     confirm_start_all: bool,
     message: (String, Notice),
@@ -173,10 +176,12 @@ impl App {
             add_path: LineInput::new(),
             add_kind: Kind::Agent,
             add_cmd: LineInput::new(),
+            add_autostart: false,
             add_err: String::new(),
             confirm_stop: None,
             confirm_remove: None,
             confirm_restart: None,
+            context_menu: None,
             confirm_quit: false,
             confirm_start_all: false,
             message: (mode_hints(Mode::Manager).to_string(), Notice::Info),
@@ -208,9 +213,10 @@ impl App {
         }
     }
 
-    /// Spinner clock; redraws only while something is running.
+    /// Spinner clock; redraws only while something is running, in every
+    /// mode so background rows never look frozen while typing in Focus.
     fn animate(&mut self) {
-        if self.mode != Mode::Focus && self.last_anim_tick.elapsed() >= Duration::from_millis(200) {
+        if self.last_anim_tick.elapsed() >= Duration::from_millis(200) {
             self.last_anim_tick = Instant::now();
             self.tick = self.tick.wrapping_add(1);
             if self
@@ -416,6 +422,7 @@ impl App {
         self.add_path.clear();
         self.add_kind = Kind::Agent;
         self.add_cmd.clear();
+        self.add_autostart = false;
         self.add_err.clear();
     }
 
@@ -451,7 +458,8 @@ impl App {
             || self.confirm_restart.is_some()
             || self.confirm_update
             || self.confirm_quit
-            || self.confirm_start_all;
+            || self.confirm_start_all
+            || self.context_menu.is_some();
         if has_modal {
             let full_area = f.area();
             dim_area(f.buffer_mut(), full_area);
@@ -460,8 +468,18 @@ impl App {
             self.draw_help(f);
         }
         self.draw_confirms(f);
+        self.draw_context_menu(f);
         if self.mode == Mode::Add {
             self.draw_add(f);
+        }
+    }
+
+    fn draw_context_menu(&self, f: &mut Frame) {
+        if let Some(pi) = self.context_menu {
+            if let Some(p) = self.cfg.projects.get(pi) {
+                let lines = context_menu_lines(&p.name, slot_running(&self.sessions, pi));
+                modal(f, "Actions", Color::Cyan, lines);
+            }
         }
     }
 
@@ -683,13 +701,13 @@ impl App {
             .and_then(|pi| self.sessions.get(pi))
             .and_then(|o| o.as_ref())
             .and_then(|s| s.usage)
-            .map(usage_label);
+            .map(pane_usage_note);
         let scroll_note = sel_pi
             .and_then(|pi| self.sessions.get(pi))
             .and_then(|o| o.as_ref())
             .map(|s| s.parser.screen().scrollback())
             .filter(|&n| n > 0)
-            .map(|n| format!("⇅{n}"));
+            .map(|n| format!("history {n}"));
         // The mode shows in the border color and the status-bar chip, so the
         // title keeps only what the session is and how it is doing.
         let title = sel_pi
@@ -774,7 +792,7 @@ impl App {
                                 .add_modifier(ratatui::style::Modifier::BOLD),
                         ),
                         Span::styled(
-                            " Enter/r restart · Esc/s dismiss ",
+                            " Enter/r restart · Esc dismiss ",
                             Style::default().add_modifier(ratatui::style::Modifier::DIM),
                         ),
                     ]))
@@ -968,7 +986,7 @@ impl App {
     fn draw_help(&self, f: &mut Frame) {
         // Fixed-size so every row fits on short terminals (a 50%
         // popup clipped the last help rows at 24 lines).
-        let popup = fixed_rect(66, help_lines().len() as u16 + 2, f.area());
+        let popup = help_popup(f.area());
         f.render_widget(ratatui::widgets::Clear, popup);
         let lines: Vec<Line> = help_lines()
             .iter()
@@ -1066,7 +1084,7 @@ impl App {
     /// The add form's popup; its height follows the rows it shows.
     fn add_popup(&self, area: Rect) -> Rect {
         let rows =
-            3 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
+            4 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
         fixed_rect(72, rows + 2, area)
     }
 
@@ -1089,10 +1107,16 @@ impl App {
         } else {
             "Path"
         };
+        let autostart_hint = if self.add_autostart {
+            "yes (Space toggles)".to_string()
+        } else {
+            "no (Space toggles)".to_string()
+        };
         let fields = [
             (path_label, self.add_path.as_str()),
             ("Kind", kind_hint.to_string()),
             ("Command", cmd_text),
+            ("Autostart", autostart_hint),
         ];
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
@@ -1104,7 +1128,7 @@ impl App {
                 Style::default().fg(Color::DarkGray)
             };
             let mut row = vec![Span::styled(format!("{mark} {label}: "), label_style)];
-            let editing = active && i != 1;
+            let editing = active && (i == 0 || i == 2);
             if editing {
                 let input = if i == 0 {
                     &self.add_path
@@ -1288,8 +1312,13 @@ impl App {
                     .contains(ratatui::layout::Position::new(m.column, m.row))
             });
             if self.mode == Mode::Help {
-                self.mode = Mode::Manager;
-                self.dirty = true;
+                // Clicks inside the popup (e.g. selecting text) keep it open.
+                if !help_popup(area.into())
+                    .contains(ratatui::layout::Position::new(m.column, m.row))
+                {
+                    self.mode = Mode::Manager;
+                    self.dirty = true;
+                }
             } else if self.confirm_stop.is_some() {
                 if outside_modal {
                     self.confirm_stop = None;
@@ -1320,6 +1349,34 @@ impl App {
                     self.confirm_update = false;
                     self.dirty = true;
                 }
+            } else if let Some(pi) = self.context_menu {
+                // Quick-action menu is open: a click outside closes it,
+                // a click on a numbered row runs that action.
+                let data = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| (p.name.clone(), slot_running(&self.sessions, pi)));
+                match data {
+                    None => self.context_menu = None,
+                    Some((name, running)) => {
+                        let lines = context_menu_lines(&name, running);
+                        let popup = modal_rect(&lines, area.into());
+                        let clicked = ratatui::layout::Position::new(m.column, m.row);
+                        if !popup.contains(clicked) {
+                            self.context_menu = None;
+                        } else {
+                            // Row 0 names the project; rows 1.. are actions.
+                            let rel = m.row.saturating_sub(popup.y + 1) as usize;
+                            if rel >= 1 && rel - 1 < context_menu_items(running).len() {
+                                let action = rel - 1;
+                                self.context_menu = None;
+                                self.run_context_action(pi, action, rows, cols);
+                            }
+                        }
+                    }
+                }
+                self.dirty = true;
             } else if self.mode == Mode::Add {
                 let popup = self.add_popup(area.into());
                 let clicked = ratatui::layout::Position::new(m.column, m.row);
@@ -1336,6 +1393,10 @@ impl App {
                             self.add_kind = self.add_kind.toggled();
                         }
                         2 => self.add_field = 2,
+                        3 => {
+                            self.add_field = 3;
+                            self.add_autostart = !self.add_autostart;
+                        }
                         _ => {}
                     }
                 }
@@ -1413,17 +1474,17 @@ impl App {
             self.mode = Mode::Manager;
             self.dirty = true;
         } else if m.kind == MouseEventKind::Down(MouseButton::Right)
-            && !(matches!(
-                self.mode,
-                Mode::Help | Mode::Add | Mode::Send | Mode::Filter
-            ) || self.confirm_quit
-                || self.confirm_start_all
-                || self.confirm_stop.is_some()
-                || self.confirm_remove.is_some()
-                || self.confirm_restart.is_some()
-                || self.confirm_update)
+            && self.mode == Mode::Manager
+            && !self.confirm_quit
+            && !self.confirm_start_all
+            && self.confirm_stop.is_none()
+            && self.confirm_remove.is_none()
+            && self.confirm_restart.is_none()
+            && !self.confirm_update
         {
-            // Right-click on sidebar: quick toggle (stop if running, start if stopped)
+            // Right-click on a sidebar row opens its quick-action menu.
+            // Manager-only, so typing in a terminal is never stolen, and
+            // nothing runs until a menu row is picked.
             if let Some(i) = sidebar_click(
                 self.side_rect,
                 self.list_offset,
@@ -1433,20 +1494,7 @@ impl App {
             ) {
                 self.selected = i;
                 if let Some(&pi) = self.order.get(self.selected) {
-                    let live = self
-                        .sessions
-                        .get(pi)
-                        .and_then(|o| o.as_ref())
-                        .is_some_and(|s| s.status.is_running());
-                    if live {
-                        self.confirm_stop = Some(pi);
-                    } else {
-                        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-                        {
-                            None => self.mode = Mode::Focus,
-                            Some(e) => self.message = (e, Notice::Error),
-                        }
-                    }
+                    self.context_menu = Some(pi);
                 }
                 self.dirty = true;
             }
@@ -1467,7 +1515,9 @@ impl App {
 
     /// Manager keys, or the answer to whichever confirmation is open.
     fn key_manager_or_confirm(&mut self, k: KeyEvent, rows: u16, cols: u16) {
-        if self.confirm_update {
+        if self.context_menu.is_some() {
+            self.key_context_menu(k, rows, cols);
+        } else if self.confirm_update {
             self.key_confirm_update(k);
         } else if self.confirm_quit {
             self.key_confirm_quit(k);
@@ -1659,7 +1709,8 @@ impl App {
                         split_command(&self.add_cmd.as_str()),
                     ) {
                         Err(e) => self.add_err = e,
-                        Ok(p) => {
+                        Ok(mut p) => {
+                            p.autostart = self.add_autostart;
                             let name = p.name.clone();
                             let kind_label = p.kind.as_str();
                             self.cfg.projects.push(p);
@@ -1688,9 +1739,9 @@ impl App {
                     }
                 }
             }
-            KeyCode::Tab => self.add_field = (self.add_field + 1) % 3,
-            KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 2) % 3,
-            KeyCode::Down => self.add_field = (self.add_field + 1) % 3,
+            KeyCode::Tab => self.add_field = (self.add_field + 1) % 4,
+            KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 3) % 4,
+            KeyCode::Down => self.add_field = (self.add_field + 1) % 4,
             KeyCode::Backspace => {
                 match self.add_field {
                     0 => {
@@ -1721,6 +1772,9 @@ impl App {
                     self.add_kind = self.add_kind.toggled();
                 }
                 2 => self.add_cmd.move_left(),
+                3 => {
+                    self.add_autostart = !self.add_autostart;
+                }
                 _ => {}
             },
             KeyCode::Right => match self.add_field {
@@ -1729,6 +1783,9 @@ impl App {
                     self.add_kind = self.add_kind.toggled();
                 }
                 2 => self.add_cmd.move_right(),
+                3 => {
+                    self.add_autostart = !self.add_autostart;
+                }
                 _ => {}
             },
             KeyCode::Home => match self.add_field {
@@ -1743,6 +1800,9 @@ impl App {
             },
             KeyCode::Char(' ') if self.add_field == 1 => {
                 self.add_kind = self.add_kind.toggled();
+            }
+            KeyCode::Char(' ') if self.add_field == 3 => {
+                self.add_autostart = !self.add_autostart;
             }
             KeyCode::Char(ch)
                 if !k.modifiers.contains(KeyModifiers::CONTROL)
@@ -1796,7 +1856,7 @@ impl App {
     }
 
     fn key_confirm_quit(&mut self, k: KeyEvent) {
-        match confirm_key(k.code) {
+        match confirm_destructive_key(k.code) {
             Some(true) => {
                 self.quit = true;
             }
@@ -1838,7 +1898,7 @@ impl App {
     }
 
     fn key_confirm_stop(&mut self, k: KeyEvent) {
-        match confirm_key(k.code) {
+        match confirm_destructive_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_stop.take() {
                     if let Some(slot) = self.sessions.get_mut(pi) {
@@ -1860,7 +1920,7 @@ impl App {
     }
 
     fn key_confirm_restart(&mut self, k: KeyEvent, rows: u16, cols: u16) {
-        match confirm_key(k.code) {
+        match confirm_destructive_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_restart.take() {
                     self.message = match restart_session(
@@ -1884,7 +1944,7 @@ impl App {
     }
 
     fn key_confirm_remove(&mut self, k: KeyEvent) {
-        match confirm_key(k.code) {
+        match confirm_destructive_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_remove.take() {
                     // Save first: a failed save leaves the project and
@@ -1912,6 +1972,74 @@ impl App {
                 self.confirm_remove = None;
             }
             None => {}
+        }
+    }
+
+    /// Run one row of the right-click quick-action menu. `action` is the
+    /// row index into `context_menu_items(running)`.
+    fn run_context_action(&mut self, pi: usize, action: usize, rows: u16, cols: u16) {
+        if self.cfg.projects.get(pi).is_none() {
+            return;
+        }
+        // Select the project the menu was opened for, so the action and
+        // the sidebar agree even if the selection moved meanwhile.
+        if let Some(pos) = self.order.iter().position(|&x| x == pi) {
+            self.selected = pos;
+        }
+        if slot_running(&self.sessions, pi) {
+            match action {
+                0 => self.mode = Mode::Focus,
+                1 => self.confirm_stop = Some(pi),
+                2 => self.confirm_restart = Some(pi),
+                3 => self.confirm_remove = Some(pi),
+                _ => {}
+            }
+            return;
+        }
+        match action {
+            0 => match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
+                None => self.mode = Mode::Focus,
+                Some(e) => self.message = (e, Notice::Error),
+            },
+            1 => {
+                self.message =
+                    match restart_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
+                        None => (
+                            format!("Restarted {}", self.cfg.projects[pi].name),
+                            Notice::Info,
+                        ),
+                        Some(e) => (e, Notice::Error),
+                    };
+            }
+            2 => self.confirm_remove = Some(pi),
+            _ => {}
+        }
+    }
+
+    /// Keys while the quick-action menu is open: number rows run, `Enter`
+    /// runs the first row, `Esc` closes. Everything else is ignored so a
+    /// key meant for a session cannot slip through.
+    fn key_context_menu(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+        let Some(pi) = self.context_menu else {
+            return;
+        };
+        let count = context_menu_items(slot_running(&self.sessions, pi)).len();
+        match k.code {
+            KeyCode::Esc => self.context_menu = None,
+            KeyCode::Enter => {
+                self.context_menu = None;
+                self.run_context_action(pi, 0, rows, cols);
+            }
+            KeyCode::Char(c) => {
+                if let Some(d) = c.to_digit(10) {
+                    let idx = d as usize;
+                    if idx >= 1 && idx <= count {
+                        self.context_menu = None;
+                        self.run_context_action(pi, idx - 1, rows, cols);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2056,10 +2184,15 @@ impl App {
                     .is_some_and(|s| s.status.is_running());
                 if is_running {
                     self.confirm_stop = target;
-                } else if let Some(pi) = target {
-                    if let Some(Some(s)) = self.sessions.get_mut(pi) {
-                        s.dismissed_exit = true;
-                    }
+                } else if target.is_some() {
+                    // `s` never clears the exit banner: `Esc` dismisses it
+                    // and `Enter` restarts the session. Say so instead of
+                    // going quiet.
+                    self.message = (
+                        "Session already stopped. Enter restarts it; Esc clears this banner."
+                            .to_string(),
+                        Notice::Info,
+                    );
                 }
             }
             KeyCode::Delete | KeyCode::Char('d') => {

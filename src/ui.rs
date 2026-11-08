@@ -1,5 +1,6 @@
 use crate::config::{display_order, is_bare_shell, Kind, Project};
 use crate::session::Session;
+use crate::sys::Usage;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -31,14 +32,28 @@ pub fn status_glyph(status: &str, tick: u64) -> char {
         '●'
     }
 }
-/// Short uptime label for a running session: "7s", "12m", "3h".
+/// Short uptime label: "7s", "12m", "1h5m", "2d3h".
 pub fn uptime_label(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m == 0 {
+            format!("{h}h")
+        } else {
+            format!("{h}h{m}m")
+        }
     } else {
-        format!("{}h", secs / 3600)
+        let d = secs / 86400;
+        let h = (secs % 86400) / 3600;
+        if h == 0 {
+            format!("{d}d")
+        } else {
+            format!("{d}d{h}h")
+        }
     }
 }
 pub fn status_style(status: &str) -> Style {
@@ -57,10 +72,17 @@ pub fn status_style(status: &str) -> Style {
         Style::default().fg(Color::DarkGray)
     }
 }
+/// Session usage for the terminal pane corner: labeled so first-time
+/// readers know which number is which ("CPU 12% · 340M"). The sidebar
+/// keeps the compact `usage_label` form where columns are tight.
+pub fn pane_usage_note(u: Usage) -> String {
+    format!("CPU {:.0}% · {}", u.cpu, crate::sys::mem_label(u.mem))
+}
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
         "Click      select a project / focus its terminal",
+        "Right-click  open quick actions for a project",
         "j/k, arrows  select project",
         "1-9        jump to project",
         "Home/End   first / last project",
@@ -126,7 +148,7 @@ pub fn mode_chip(m: Mode) -> (&'static str, Style) {
     // Solid-background chips so the current mode reads at a glance.
     let (label, fg, bg) = match m {
         Mode::Manager => (" MANAGER ", Color::Black, Color::Cyan),
-        Mode::Focus => (" INPUT ", Color::Black, Color::Green),
+        Mode::Focus => (" FOCUS ", Color::Black, Color::Green),
         Mode::Send => (" SEND ", Color::Black, Color::Yellow),
         Mode::Filter => (" FILTER ", Color::Black, Color::Magenta),
         Mode::Add => (" ADD ", Color::White, Color::Blue),
@@ -164,7 +186,7 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
         ],
         Mode::Add => &[
             ("Tab", "next"),
-            ("Space", "kind"),
+            ("Space", "toggle"),
             ("Enter", "save"),
             ("Esc", "cancel"),
         ],
@@ -192,18 +214,18 @@ pub fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("q", "quit"),
             ("s", "stop"),
             ("?", "help"),
+            ("j/k", "select"),
             ("m", "message"),
             ("a", "add"),
             ("d/Del", "remove"),
             ("r", "restart"),
             ("S", "start all"),
-            ("j/k", "select"),
         ],
         Mode::Add => &[
             ("Enter", "save"),
             ("Esc", "cancel"),
             ("Tab", "next"),
-            ("Space", "kind"),
+            ("Space", "toggle"),
         ],
         _ => &[],
     }
@@ -353,6 +375,53 @@ pub fn confirm_start_all_lines(n: usize) -> Vec<Line<'static>> {
         ])),
     ]
 }
+/// Right-click quick-action menu entries for a project: (number key,
+/// label) in display order. Stopped projects offer starting instead of
+/// focusing and stopping.
+pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
+    if running {
+        vec![
+            ('1', "Focus terminal"),
+            ('2', "Stop session…"),
+            ('3', "Restart session…"),
+            ('4', "Remove project…"),
+        ]
+    } else {
+        vec![
+            ('1', "Start and focus"),
+            ('2', "Restart session"),
+            ('3', "Remove project…"),
+        ]
+    }
+}
+/// Rendered lines for the quick-action menu popup, shared by drawing
+/// and click mapping: one row per action, then the key hint.
+pub fn context_menu_lines(name: &str, running: bool) -> Vec<Line<'static>> {
+    let items = context_menu_items(running);
+    let mut lines = Vec::with_capacity(items.len() + 2);
+    lines.push(Line::from(Span::styled(
+        name.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )));
+    for (key, label) in &items {
+        lines.push(Line::from(vec![
+            Span::styled(
+                key.to_string(),
+                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::raw(format!("  {label}")),
+        ]));
+    }
+    lines.push(Line::from(""));
+    let range = format!("1-{}", items.len());
+    lines.push(Line::from(hint_spans(&[
+        (range.as_str(), "selects"),
+        ("Esc", "cancels"),
+    ])));
+    lines
+}
 pub fn dim_area(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
@@ -417,6 +486,11 @@ pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layou
         w,
         h,
     )
+}
+/// Help popup rect, shared by drawing and click handling so a click (or
+/// text selection) inside the popup does not dismiss it.
+pub fn help_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    fixed_rect(66, help_lines().len() as u16 + 2, area)
 }
 pub fn cli_help() -> String {
     format!(
@@ -537,10 +611,10 @@ pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
         })
         .collect()
 }
-/// Sidebar width in columns: hidden on narrow terminals, a quarter of
-/// the width (clamped) otherwise so names and commands stay readable.
+/// Sidebar width in columns: hidden on very narrow terminals, a quarter
+/// of the width (clamped) otherwise so names and commands stay readable.
 pub fn sidebar_width(area_w: u16) -> u16 {
-    if area_w < 60 {
+    if area_w < 48 {
         0
     } else {
         (area_w / 4).clamp(24, 38)

@@ -128,7 +128,7 @@ fn mode_chip_and_hints() {
     .collect();
     assert_eq!(
         chips,
-        vec!["MANAGER", "INPUT", "SEND", "FILTER", "ADD", "HELP"]
+        vec!["MANAGER", "FOCUS", "SEND", "FILTER", "ADD", "HELP"]
     );
 }
 #[test]
@@ -1162,7 +1162,8 @@ fn row_name_style_marks_kind() {
 }
 #[test]
 fn sidebar_width_scales() {
-    assert_eq!(sidebar_width(59), 0);
+    assert_eq!(sidebar_width(47), 0);
+    assert_eq!(sidebar_width(48), 24);
     assert_eq!(sidebar_width(60), 24);
     assert_eq!(sidebar_width(100), 25);
     assert_eq!(sidebar_width(152), 38);
@@ -1185,7 +1186,7 @@ fn hint_text_matches_legacy_strings() {
     );
     assert_eq!(
         mode_hints(Mode::Add),
-        "Tab next | Space kind | Enter save | Esc cancel"
+        "Tab next | Space toggle | Enter save | Esc cancel"
     );
     assert_eq!(mode_hints(Mode::Help), "?/Esc closes");
 }
@@ -1500,7 +1501,9 @@ fn uptime_labels_scale() {
     assert_eq!(uptime_label(125), "2m");
     assert_eq!(uptime_label(3599), "59m");
     assert_eq!(uptime_label(3600), "1h");
-    assert_eq!(uptime_label(9000), "2h");
+    assert_eq!(uptime_label(3900), "1h5m");
+    assert_eq!(uptime_label(9000), "2h30m");
+    assert_eq!(uptime_label(90000), "1d1h");
 }
 #[test]
 fn start_session_starts_and_reports() {
@@ -1913,4 +1916,104 @@ fn prompt_summary_finds_the_question() {
     );
     assert_eq!(prompt_summary("only line\n").as_deref(), Some("only line"));
     assert_eq!(prompt_summary("  \n\n"), None);
+}
+
+#[test]
+fn destructive_confirms_need_y_not_enter() {
+    assert_eq!(confirm_destructive_key(KeyCode::Char('y')), Some(true));
+    assert_eq!(confirm_destructive_key(KeyCode::Char('Y')), Some(true));
+    assert_eq!(
+        confirm_destructive_key(KeyCode::Enter),
+        None,
+        "Enter must not destroy a session or project"
+    );
+    assert_eq!(confirm_destructive_key(KeyCode::Esc), Some(false));
+    // The non-destructive start-all keeps its Enter shortcut.
+    assert_eq!(confirm_key(KeyCode::Enter), Some(true));
+}
+
+#[test]
+fn fit_marks_truncation() {
+    assert_eq!(fit("hello", 8), "hello");
+    assert_eq!(fit("hello", 5), "hello");
+    assert_eq!(fit("hello world", 5), "hell…");
+    assert_eq!(fit("hello", 0), "");
+}
+
+#[test]
+fn filter_matches_path_too() {
+    let mk = |name: &str, path: &str| Project {
+        name: name.into(),
+        path: PathBuf::from(path),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+    };
+    let projects = vec![mk("web", "/work/my-api"), mk("other", "/work/site")];
+    assert_eq!(apply_filter(&projects, "my-api"), vec![0]);
+    assert_eq!(apply_filter(&projects, "web"), vec![0]);
+}
+
+#[test]
+fn help_popup_survives_inside_clicks() {
+    use ratatui::layout::Rect;
+    let area = Rect::new(0, 0, 100, 30);
+    let popup = help_popup(area);
+    assert!(popup.width <= 66 && popup.height == help_lines().len() as u16 + 2);
+    assert!(popup.contains(ratatui::layout::Position::new(popup.x + 2, popup.y + 2)));
+}
+
+#[test]
+fn pane_usage_note_labels_numbers() {
+    let u = Usage {
+        cpu: 12.4,
+        mem: 340 << 20,
+    };
+    assert_eq!(pane_usage_note(u), "CPU 12% · 340M");
+    // The sidebar keeps its compact unlabeled form.
+    assert_eq!(usage_label(u), "12% 340M");
+}
+
+#[test]
+fn context_menu_offers_start_for_stopped() {
+    let running = context_menu_items(true);
+    assert_eq!(running.len(), 4);
+    assert!(running.iter().any(|(_, l)| l.contains("Focus")));
+    assert!(running.iter().any(|(_, l)| l.contains("Stop")));
+    let stopped = context_menu_items(false);
+    assert_eq!(stopped.len(), 3);
+    assert!(stopped.iter().any(|(_, l)| l.contains("Start")));
+    assert!(!stopped.iter().any(|(_, l)| l.contains("Stop")));
+    // Number keys are 1-based in order with no gaps.
+    assert_eq!(
+        running.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        ['1', '2', '3', '4']
+    );
+}
+
+#[test]
+fn context_menu_lines_match_click_mapping() {
+    // One title row, then one row per action: clicking row `1 + action`
+    // (the mapping in `on_mouse`) must land on that action.
+    for running in [true, false] {
+        let lines = context_menu_lines("web", running);
+        let items = context_menu_items(running);
+        assert_eq!(lines.len(), items.len() + 3);
+        for (i, (key, _)) in items.iter().enumerate() {
+            let row: String = lines[i + 1]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert!(row.starts_with(&key.to_string()), "row {i} shows its key");
+        }
+        let hint: String = lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(hint.contains("Esc"), "last row tells how to cancel");
+    }
 }
