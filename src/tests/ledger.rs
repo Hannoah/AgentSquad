@@ -170,3 +170,22 @@ fn joining_a_commander_files_a_report_in_with_the_head_count() {
     crate::ledger::report_transfer(&one, "ghost", None);
     assert_eq!(reports(), before);
 }
+
+#[test]
+fn report_in_opens_the_ledger_when_there_is_none() {
+    let dir = scratch_dir("report-in-opens");
+    let d = dir.to_str().unwrap();
+    let mk = |name: &str, under: Option<&str>| Project {
+        name: name.into(),
+        path: PathBuf::from(d),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: under.map(Into::into),
+    };
+    assert!(!dir.join(".squad").exists());
+    crate::ledger::report_transfer(&[mk("lead", None), mk("a", Some("lead"))], "a", None);
+    let text = std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap();
+    assert!(text.contains("**a -> lead**: reporting in"), "{text}");
+}

@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.1
 ```
 
 To install elsewhere:
@@ -255,7 +255,9 @@ commander reporting to its own agent, are refused.
 - **Reporting in:** when an agent is registered under a commander, or moved
   there, squad files its transfer in the commander's `.squad/REPORTS.md`
   with the new head count ("Now 2 directly under app, 3 in all"); a
-  commander that loses an agent hears that too.
+  commander that loses an agent hears that too. Joining a commander also
+  turns the operations log on (`ledger = true`) for the agent and the
+  commander and opens their `.squad/` right away; it is never turned off.
 - **Reports:** when an agent finishes a task, squad appends a line to the
   same file (who, when, and their newest SITREP). Squad is the
   only writer and types nothing into any terminal. Commanders read the file.

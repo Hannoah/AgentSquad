@@ -208,6 +208,14 @@ pub fn save(c: &Config) -> Result<()> {
     let p = config_path()?;
     save_to(c, &p)
 }
+/// Reporting needs a shared log: turn the operations log on for agent `i`
+/// and the commander it reports to. Never turns anything off.
+pub fn enable_chain_ledger(projects: &mut [Project], i: usize) {
+    if let Some(c) = superior(projects, i) {
+        projects[i].ledger = true;
+        projects[c].ledger = true;
+    }
+}
 /// Register `p` on disk, re-reading the file first so projects added or
 /// removed by another process are not clobbered.
 pub fn persist_add(p: &Project) -> Result<()> {
@@ -218,6 +226,8 @@ pub fn persist_add(p: &Project) -> Result<()> {
         .any(|q| q.name.eq_ignore_ascii_case(&p.name))
     {
         disk.projects.push(p.clone());
+        let last = disk.projects.len() - 1;
+        enable_chain_ledger(&mut disk.projects, last);
     }
     save(&disk)
 }
@@ -235,12 +245,13 @@ pub fn persist_under(name: &str, under: Option<&str>) -> Result<()> {
         Some(u) => Some(check_reassign(&disk.projects, name, u).map_err(anyhow::Error::msg)?),
         None => None,
     };
-    let p = disk
+    let i = disk
         .projects
-        .iter_mut()
-        .find(|q| q.name.eq_ignore_ascii_case(name))
+        .iter()
+        .position(|q| q.name.eq_ignore_ascii_case(name))
         .with_context(|| format!("Unknown project: {name}"))?;
-    p.reports_to = stored;
+    disk.projects[i].reports_to = stored;
+    enable_chain_ledger(&mut disk.projects, i);
     save(&disk)
 }
 /// Drop the Windows verbatim prefix `fs::canonicalize` adds, so stored

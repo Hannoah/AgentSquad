@@ -271,6 +271,9 @@ pub fn report_transfer(projects: &[Project], name: &str, old: Option<&str>) {
     };
     let new = superior(projects, i);
     if let Some(c) = new {
+        // Reporting needs a ledger: open it now rather than at the next start.
+        let _ = ensure(&projects[c].path);
+        let _ = ensure(&projects[i].path);
         append_report(
             &projects[c].path,
             &format!(

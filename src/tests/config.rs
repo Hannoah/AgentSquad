@@ -738,3 +738,21 @@ fn roster_lists_the_chain_of_command() {
     crate::ledger::write_rosters(&[agent_in("x", bare.to_str().unwrap(), None)]);
     assert!(!bare.join(".squad").exists());
 }
+
+#[test]
+fn joining_a_commander_turns_the_ledger_on_for_both() {
+    let mut p = vec![
+        agent_in("lead", "/w", None),
+        agent_in("a", "/w", Some("lead")),
+        agent_in("loner", "/x", None),
+    ];
+    enable_chain_ledger(&mut p, 1);
+    assert!(p[0].ledger && p[1].ledger, "agent and its commander");
+    assert!(!p[2].ledger, "others keep their setting");
+    // A commander-less agent changes nothing, and nothing is ever turned off.
+    enable_chain_ledger(&mut p, 2);
+    assert!(!p[2].ledger);
+    p[1].reports_to = None;
+    enable_chain_ledger(&mut p, 1);
+    assert!(p[0].ledger && p[1].ledger);
+}

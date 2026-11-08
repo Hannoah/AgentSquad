@@ -19,8 +19,9 @@ impl App {
             return (format!("Save failed: {e:#}"), Notice::Error);
         }
         let old = std::mem::replace(&mut self.cfg.projects[pi].reports_to, stored.clone());
-        ledger::write_rosters(&self.cfg.projects);
+        enable_chain_ledger(&mut self.cfg.projects, pi);
         ledger::report_transfer(&self.cfg.projects, &name, old.as_deref());
+        ledger::write_rosters(&self.cfg.projects);
         // The new tree must be visible, so drop any filter and follow the agent.
         self.filter_buf.clear();
         self.order = display_order(&self.cfg.projects);

@@ -263,8 +263,10 @@ impl App {
                                         .position(|&x| x == self.cfg.projects.len() - 1)
                                         .unwrap_or(0);
                                     self.mode = Mode::Manager;
-                                    ledger::write_rosters(&self.cfg.projects);
+                                    let last = self.cfg.projects.len() - 1;
+                                    enable_chain_ledger(&mut self.cfg.projects, last);
                                     ledger::report_transfer(&self.cfg.projects, &name, None);
+                                    ledger::write_rosters(&self.cfg.projects);
                                     self.message =
                                         (format!("Registered {name} ({kind_label})"), Notice::Info);
                                 }
