@@ -1,9 +1,10 @@
 use crate::config::{is_bare_shell, pty_env, size, Kind, Project};
+use crate::ledger;
 use crate::sys::{cpu_percent, Usage};
 #[cfg(windows)]
 use crate::sys::{kill_tree_by_pid, kill_trees};
 use crate::ui::{
-    pane_status_text, screen_lines, spinner_frame, status_glyph, status_style, uptime_label,
+    pane_status_text, screen_lines, spinner_frame, status_glyph, status_style, uptime_label, Notice,
 };
 use anyhow::{anyhow, Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty};
@@ -425,6 +426,10 @@ pub struct Session {
     pub dismissed_exit: bool,
     /// Phase seen at the last check, to spot changes worth a bell.
     pub last_phase: AgentPhase,
+    /// Project folder whose ledger gets this session's events, if enabled.
+    ledger: Option<std::path::PathBuf>,
+    /// One-time message for the status bar (ledger created, or why not).
+    pub ledger_note: Option<(String, Notice)>,
     pub cached_needs_input: bool,
     /// The question a waiting agent shows, for the sidebar.
     pub prompt_hint: Option<String>,
@@ -460,6 +465,29 @@ impl Session {
             .spawn_command(cmd)
             .with_context(|| format!("Cannot start {program}"))?;
         drop(pair.slave);
+        let (ledger, ledger_note) = if p.ledger {
+            match ledger::ensure(&p.path) {
+                Ok(created) => {
+                    ledger::event(&p.path, &format!("start {}", p.name));
+                    let note = created.then(|| {
+                        (
+                            format!("Created .squad/ in {} - press b to brief the agent", p.name),
+                            Notice::Info,
+                        )
+                    });
+                    (Some(p.path.clone()), note)
+                }
+                Err(e) => (
+                    None,
+                    Some((
+                        format!("Ledger unavailable in {}: {e:#}", p.name),
+                        Notice::Warn,
+                    )),
+                ),
+            }
+        } else {
+            (None, None)
+        };
         // Bounded queue: at most 32 * 16 KiB of pending output per session.
         let (tx, rx) = mpsc::sync_channel(32);
         thread::spawn(move || {
@@ -497,6 +525,8 @@ impl Session {
             had_activity: false,
             dismissed_exit: false,
             last_phase: AgentPhase::Idle,
+            ledger,
+            ledger_note,
             cached_needs_input: false,
             prompt_hint: None,
             cached_working_text: false,
@@ -570,10 +600,12 @@ impl Session {
         if self.status.is_running() {
             match self.child.try_wait() {
                 Ok(Some(exit)) => {
+                    self.log_event(&format!("exit code={}", exit.exit_code()));
                     self.status = SessionStatus::Exited(exit.exit_code());
                     changed = true;
                 }
                 Err(e) => {
+                    self.log_event("error");
                     self.status = SessionStatus::Error(e.to_string());
                     changed = true;
                 }
@@ -581,6 +613,12 @@ impl Session {
             }
         }
         changed
+    }
+    /// Record a fact in the project's ledger, when it has one.
+    pub fn log_event(&self, text: &str) {
+        if let Some(dir) = &self.ledger {
+            ledger::event(dir, text);
+        }
     }
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         self.master.resize(size(rows, cols))?;
@@ -857,6 +895,9 @@ pub fn shutdown_all(sessions: &mut [Option<Session>]) {
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        if self.status.is_running() {
+            self.log_event("stop");
+        }
         // Sweep the whole tree first: the direct child may already be dead
         // while orphaned grandchildren (the real agent) live on.
         #[cfg(windows)]

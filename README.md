@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.7.2
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.8.0
 ```
 
 To install elsewhere:
@@ -201,6 +201,26 @@ Optional settings:
 - `scrollback = 5000` sets the lines kept per session (default 2000).
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
+
+## Ledger (opt-in)
+
+Agents forget everything when a session ends. A ledger gives a project a
+memory: set `ledger = true` on it (or `squad add --ledger`) and the first
+time its session starts, squad creates a `.squad/` folder in the project:
+
+```
+.squad/
+  README.md    the protocol agents follow
+  CONTEXT.md   goal, decisions, conventions, pitfalls (short)
+  log/         one file per piece of work (agents add them)
+  events.log   written by squad: starts, stops, exit codes
+```
+
+An existing `.squad/` is never touched. In a git repository squad adds
+`.squad/` to `.git/info/exclude` (local only; delete that line to commit
+it). Press `b` on a running agent to type the instruction to read the
+ledger into it; squad never does that by itself, because typing at the
+wrong moment could answer a trust or permission dialog.
 
 ## Building from source (developers)
 

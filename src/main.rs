@@ -1,6 +1,7 @@
 pub mod app;
 pub mod config;
 pub mod input;
+pub mod ledger;
 pub mod session;
 pub mod sys;
 pub mod ui;
@@ -60,7 +61,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
             };
             let mut kind = Kind::default();
             let mut autostart = false;
+            let mut ledger = false;
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
             while i < tail.len() {
@@ -82,6 +84,10 @@ fn main() -> Result<()> {
                         autostart = true;
                         i += 1;
                     }
+                    "--ledger" => {
+                        ledger = true;
+                        i += 1;
+                    }
                     "--" => {
                         if i + 1 >= tail.len() {
                             bail!("Use -- before command: squad add [<path>] -- claude");
@@ -90,13 +96,14 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger or -- command")
                     }
                 }
             }
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
+            p.ledger = ledger;
             // Re-reads the file so a running squad's own writes are not clobbered.
             persist_add(&p)?;
             println!("Registered {} ({})", p.name, kind.as_str());

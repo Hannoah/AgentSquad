@@ -51,6 +51,9 @@ pub struct Project {
     /// Start this project's session as soon as the manager opens.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub autostart: bool,
+    /// Keep a `.squad/` ledger in the project (created on first start).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ledger: bool,
 }
 /// Bump when `load_from` gains a one-time migration. A file stamped with
 /// this version is left exactly as the user wrote it.
@@ -406,6 +409,7 @@ pub fn build_project(
         command,
         kind,
         autostart: false,
+        ledger: false,
     })
 }
 /// The name a new project would get, guessed from the typed text alone (no

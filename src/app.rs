@@ -27,6 +27,7 @@ use std::{
 
 use crate::config::*;
 use crate::input::*;
+use crate::ledger;
 use crate::session::*;
 use crate::sys::*;
 use crate::ui::*;
@@ -357,6 +358,10 @@ impl App {
         }
         for (pi, slot) in self.sessions.iter_mut().enumerate() {
             if let Some(s) = slot {
+                if let Some(note) = s.ledger_note.take() {
+                    self.message = note;
+                    self.dirty = true;
+                }
                 let was_running = s.status.is_running();
                 let phase_before = s.phase();
                 let changed = s.update();
@@ -2064,6 +2069,50 @@ impl App {
         }
     }
 
+    /// `b`: type the ledger brief into the selected agent. A person presses
+    /// it when the agent is at its prompt; squad never types it on its own,
+    /// where it could answer a trust or permission dialog by accident.
+    fn brief_selected(&mut self) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        let Some(p) = self.cfg.projects.get(pi) else {
+            return;
+        };
+        self.message = if !p.ledger {
+            (
+                format!(
+                    "Ledger is off for {}: set ledger = true in its config entry",
+                    p.name
+                ),
+                Notice::Info,
+            )
+        } else {
+            match self
+                .sessions
+                .get_mut(pi)
+                .and_then(|o| o.as_mut())
+                .filter(|s| s.status.is_running())
+            {
+                None => (
+                    format!("Start {} first, then press b to brief it", p.name),
+                    Notice::Info,
+                ),
+                Some(s) => {
+                    let mut bytes = ledger::brief_line().as_bytes().to_vec();
+                    bytes.push(b'\r');
+                    match s.input(&bytes) {
+                        Ok(()) => {
+                            s.log_event("brief");
+                            (format!("Briefed {} on .squad/", p.name), Notice::Info)
+                        }
+                        Err(e) => (e.to_string(), Notice::Error),
+                    }
+                }
+            }
+        };
+    }
+
     fn key_manager(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         match k.code {
             KeyCode::Char('q') | KeyCode::Char('c')
@@ -2092,6 +2141,7 @@ impl App {
                 self.mode = Mode::Send;
                 self.send_buf.clear();
             }
+            KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             // Open the update prompt on demand; it also pops up by
             // itself whenever the manager has the keyboard.

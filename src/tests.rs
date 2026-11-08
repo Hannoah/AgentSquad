@@ -28,6 +28,7 @@ fn config_roundtrip() {
             command: shell(),
             kind: Kind::Agent,
             autostart: false,
+            ledger: false,
         }],
         scrollback: None,
         ..Default::default()
@@ -60,6 +61,7 @@ fn order_groups_agents_first() {
         command: vec!["sh".into()],
         kind,
         autostart: false,
+        ledger: false,
     };
     let ps = vec![mk(Kind::Service), mk(Kind::Agent), mk(Kind::Service)];
     assert_eq!(display_order(&ps), vec![1, 0, 2]);
@@ -213,6 +215,7 @@ fn pane_title_name_prefers_service_command() {
         command: vec!["cargo".into(), "run".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     assert_eq!(pane_title_name(&agent), "my-agent");
 
@@ -222,6 +225,7 @@ fn pane_title_name_prefers_service_command() {
         command: vec!["npm".into(), "run".into(), "dev".into()],
         kind: Kind::Service,
         autostart: false,
+        ledger: false,
     };
     assert_eq!(pane_title_name(&service), "npm run dev");
 }
@@ -347,6 +351,7 @@ fn stop_kills_process_tree() {
         ],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -399,6 +404,7 @@ fn stop_kills_orphaned_grandchildren() {
         ],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -513,6 +519,7 @@ fn filter_matches_name_and_command() {
         command: cmd.iter().map(|s| s.to_string()).collect(),
         kind,
         autostart: false,
+        ledger: false,
     };
     let ps = vec![
         mk("api", &["node", "server.js"], Kind::Service),
@@ -625,6 +632,7 @@ fn session_sampling_tracks_a_live_tree() {
         ],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pid");
@@ -766,6 +774,7 @@ fn persist_helpers_keep_other_writers_projects() {
         command: vec!["sh".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
     // no other test reads it.
@@ -925,6 +934,7 @@ fn pty_smoke() {
         },
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..100 {
@@ -1001,6 +1011,7 @@ fn remove_unregisters_project() {
         command: vec!["sh".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let mut projects = vec![mk("a"), mk("b")];
     let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
@@ -1036,6 +1047,7 @@ fn remove_persists_to_config_file() {
         command: vec!["sh".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
@@ -1108,6 +1120,7 @@ fn list_table_aligns_columns() {
         command: cmd.iter().map(|s| s.to_string()).collect(),
         kind,
         autostart: false,
+        ledger: false,
     };
     // Registration order is service-first; output is agents-first.
     let projects = vec![
@@ -1394,6 +1407,7 @@ fn agent_tag_shows_program() {
         command,
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     assert_eq!(
         agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
@@ -1448,6 +1462,7 @@ fn group_counts_split_by_kind() {
         command: vec!["sh".into()],
         kind,
         autostart: false,
+        ledger: false,
     };
     let projects = vec![
         mk("a1", Kind::Agent),
@@ -1525,6 +1540,7 @@ fn start_session_starts_and_reports() {
             command: shell,
             kind: Kind::Agent,
             autostart: false,
+            ledger: false,
         },
         Project {
             name: "bad".into(),
@@ -1532,6 +1548,7 @@ fn start_session_starts_and_reports() {
             command: vec!["agentsquad-no-such-binary-xyz".into()],
             kind: Kind::Service,
             autostart: false,
+            ledger: false,
         },
     ];
     let mut sessions: Vec<Option<Session>> = vec![None, None];
@@ -1555,6 +1572,7 @@ fn merge_appends_missing_projects() {
         command: vec!["sh".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let mut c = Config {
         projects: vec![mk("a")],
@@ -1630,6 +1648,7 @@ fn service_naming_looks_through_shells_and_live_foreground() {
         command: vec!["powershell.exe".into(), "-NoLogo".into()],
         kind: Kind::Service,
         autostart: false,
+        ledger: false,
     };
     assert_eq!(live_name(&p, None), "my-dir");
     assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
@@ -1766,6 +1785,7 @@ fn empty_command_errors_instead_of_panicking() {
         command: vec![],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -1883,6 +1903,7 @@ fn add_preview_name_matches_what_gets_registered() {
         command: vec!["x".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let existing = vec![mk("node")];
     let none: Vec<String> = Vec::new();
@@ -1948,6 +1969,7 @@ fn filter_matches_path_too() {
         command: vec!["claude".into()],
         kind: Kind::Agent,
         autostart: false,
+        ledger: false,
     };
     let projects = vec![mk("web", "/work/my-api"), mk("other", "/work/site")];
     assert_eq!(apply_filter(&projects, "my-api"), vec![0]);
@@ -2045,6 +2067,7 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
         command: vec!["x".into()],
         kind,
         autostart: false,
+        ledger: false,
     };
     // Config order: svc, a1, a2. Sidebar order: agents first, so a1, a2, svc.
     let projects = vec![
@@ -2066,4 +2089,108 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
         0,
         "removed project"
     );
+}
+
+fn scratch_dir(tag: &str) -> PathBuf {
+    let d = env::temp_dir().join(format!("squad-test-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+fn utc_stamp_formats_known_instants() {
+    use crate::ledger::utc_stamp;
+    assert_eq!(utc_stamp(0), "1970-01-01T00:00:00Z");
+    assert_eq!(utc_stamp(1_000_000_000), "2001-09-09T01:46:40Z");
+    assert_eq!(utc_stamp(1_709_164_800), "2024-02-29T00:00:00Z", "leap day");
+    assert_eq!(utc_stamp(1_709_251_199), "2024-02-29T23:59:59Z");
+}
+
+#[test]
+fn ledger_is_created_once_and_never_overwritten() {
+    use crate::ledger;
+    let dir = scratch_dir("ledger");
+    assert!(ledger::ensure(&dir).unwrap(), "first call creates it");
+    for f in ["README.md", "CONTEXT.md"] {
+        assert!(dir.join(".squad").join(f).is_file(), "{f} exists");
+    }
+    assert!(dir.join(".squad").join("log").is_dir());
+    // Someone edits the context; a later start must leave it alone.
+    let ctx = dir.join(".squad").join("CONTEXT.md");
+    std::fs::write(&ctx, "my notes").unwrap();
+    assert!(!ledger::ensure(&dir).unwrap(), "second call is a no-op");
+    assert_eq!(std::fs::read_to_string(&ctx).unwrap(), "my notes");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ledger_hides_itself_from_git_without_duplicating() {
+    use crate::ledger;
+    let dir = scratch_dir("ledger-git");
+    std::fs::create_dir_all(dir.join(".git").join("info")).unwrap();
+    std::fs::write(dir.join(".git").join("info").join("exclude"), "target/").unwrap();
+    ledger::ensure(&dir).unwrap();
+    let ex = std::fs::read_to_string(dir.join(".git").join("info").join("exclude")).unwrap();
+    assert_eq!(
+        ex,
+        "target/
+.squad/
+",
+        "existing lines kept, ours added"
+    );
+    // Re-creating after the folder is deleted must not add a second line.
+    std::fs::remove_dir_all(dir.join(".squad")).unwrap();
+    ledger::ensure(&dir).unwrap();
+    let ex = std::fs::read_to_string(dir.join(".git").join("info").join("exclude")).unwrap();
+    assert_eq!(ex.matches(".squad/").count(), 1);
+    // A plain folder (no .git) just gets the ledger.
+    let plain = scratch_dir("ledger-plain");
+    assert!(ledger::ensure(&plain).unwrap());
+    assert!(!plain.join(".git").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&plain);
+}
+
+#[test]
+fn ledger_events_append_only_when_a_ledger_exists() {
+    use crate::ledger;
+    let dir = scratch_dir("ledger-events");
+    ledger::event(&dir, "ignored");
+    assert!(!dir.join(".squad").exists(), "no ledger, nothing written");
+    ledger::ensure(&dir).unwrap();
+    ledger::event(&dir, "start demo");
+    ledger::event(&dir, "stop");
+    let log = std::fs::read_to_string(dir.join(".squad").join("events.log")).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].ends_with("Z start demo") && lines[1].ends_with("Z stop"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ledger_session_records_start_and_exit() {
+    let dir = scratch_dir("ledger-session");
+    let p = Project {
+        name: "led".into(),
+        path: dir.clone(),
+        command: vec!["cmd.exe".into(), "/d".into(), "/c".into(), "exit 3".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: true,
+    };
+    let mut s = Session::spawn(&p, 24, 80).unwrap();
+    let (msg, _) = s.ledger_note.take().expect("creation is announced once");
+    assert!(msg.contains("Created .squad/"), "{msg}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while s.status.is_running() && std::time::Instant::now() < deadline {
+        s.update();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(s.status, SessionStatus::Exited(3));
+    let log = std::fs::read_to_string(dir.join(".squad").join("events.log")).unwrap();
+    assert!(log.contains("start led"), "{log}");
+    assert!(log.contains("exit code=3"), "{log}");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
 }
