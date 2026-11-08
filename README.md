@@ -101,6 +101,8 @@ case-insensitively by `remove` and `start`.
   asking appears under its row.
   Service rows also show their command; agent rows show their program
   unless it is the default shell.
+  The manager reopens on the project you had selected last time, and an
+  agent that finished and sat quiet for a minute shows `idle 5m`.
 - **Right:** the selected session's terminal output (full xterm emulation:
   colors, bold/italic/underline, cursor positioning).
 - **Bottom:** a one-line status bar with hints, which doubles as the input

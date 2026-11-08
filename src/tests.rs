@@ -2017,3 +2017,53 @@ fn context_menu_lines_match_click_mapping() {
         assert!(hint.contains("Esc"), "last row tells how to cancel");
     }
 }
+
+#[test]
+fn idle_note_flags_quiet_finished_agents_only() {
+    use AgentPhase::*;
+    assert_eq!(idle_note(Done, Some(300)).as_deref(), Some("idle 5m"));
+    assert_eq!(idle_note(Idle, Some(60)).as_deref(), Some("idle 1m"));
+    assert_eq!(
+        idle_note(Done, Some(59)),
+        None,
+        "under a minute is not idle"
+    );
+    assert_eq!(idle_note(Done, None), None, "no output yet");
+    assert_eq!(idle_note(Working, Some(900)), None);
+    assert_eq!(
+        idle_note(NeedsInput, Some(900)),
+        None,
+        "waiting is not idle"
+    );
+}
+
+#[test]
+fn startup_selection_prefers_explicit_then_last_then_first() {
+    let mk = |name: &str, kind| Project {
+        name: name.into(),
+        path: PathBuf::from("x"),
+        command: vec!["x".into()],
+        kind,
+        autostart: false,
+    };
+    // Config order: svc, a1, a2. Sidebar order: agents first, so a1, a2, svc.
+    let projects = vec![
+        mk("svc", Kind::Service),
+        mk("a1", Kind::Agent),
+        mk("a2", Kind::Agent),
+    ];
+    let order = display_order(&projects);
+    assert_eq!(start_selection(&projects, &order, None, None), 0);
+    assert_eq!(start_selection(&projects, &order, None, Some("A2")), 1);
+    assert_eq!(start_selection(&projects, &order, None, Some("svc")), 2);
+    assert_eq!(
+        start_selection(&projects, &order, Some(1), Some("svc")),
+        0,
+        "explicit wins"
+    );
+    assert_eq!(
+        start_selection(&projects, &order, None, Some("gone")),
+        0,
+        "removed project"
+    );
+}

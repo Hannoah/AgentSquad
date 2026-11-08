@@ -32,6 +32,13 @@ pub fn status_glyph(status: &str, tick: u64) -> char {
         '●'
     }
 }
+/// "idle 5m" for an agent that finished (or never started) and has been
+/// quiet for a minute or more, so forgotten sessions stand out.
+pub fn idle_note(phase: crate::session::AgentPhase, quiet_secs: Option<u64>) -> Option<String> {
+    use crate::session::AgentPhase::{Done, Idle};
+    let secs = quiet_secs.filter(|&s| s >= 60)?;
+    matches!(phase, Done | Idle).then(|| format!("idle {}", uptime_label(secs)))
+}
 /// Short uptime label: "7s", "12m", "1h5m", "2d3h".
 pub fn uptime_label(secs: u64) -> String {
     if secs < 60 {

@@ -91,6 +91,36 @@ pub fn config_path() -> Result<PathBuf> {
         .context("Set AGENTSQUAD_CONFIG to a writable config file")?;
     Ok(base.join("AgentSquad").join("config.toml"))
 }
+/// File next to the config that remembers the project selected at exit.
+fn last_project_path() -> Result<PathBuf> {
+    Ok(config_path()?.with_file_name("last-project"))
+}
+/// Name of the project that was selected when squad last closed.
+pub fn load_last_project() -> Option<String> {
+    let text = fs::read_to_string(last_project_path().ok()?).ok()?;
+    Some(text.trim().to_string()).filter(|s| !s.is_empty())
+}
+/// Best effort: forgetting the selection is not worth an error.
+pub fn save_last_project(name: &str) {
+    if let Ok(p) = last_project_path() {
+        let _ = fs::write(p, name);
+    }
+}
+/// Row to select at startup: an explicit `squad start` target wins, then
+/// the project selected last time, then the first row.
+pub fn start_selection(
+    projects: &[Project],
+    order: &[usize],
+    initial: Option<usize>,
+    last: Option<&str>,
+) -> usize {
+    let wanted = initial.or_else(|| {
+        last.and_then(|n| projects.iter().position(|p| p.name.eq_ignore_ascii_case(n)))
+    });
+    wanted
+        .and_then(|i| order.iter().position(|&x| x == i))
+        .unwrap_or(0)
+}
 pub fn load_from(p: &Path) -> Result<Config> {
     if !p.exists() {
         return Ok(Config::default());

@@ -143,9 +143,12 @@ impl App {
     fn new(cfg: Config, initial: Option<usize>) -> Self {
         let sessions = (0..cfg.projects.len()).map(|_| None).collect();
         let order = display_order(&cfg.projects);
-        let selected = initial
-            .and_then(|i| order.iter().position(|&x| x == i))
-            .unwrap_or(0);
+        let selected = start_selection(
+            &cfg.projects,
+            &order,
+            initial,
+            load_last_project().as_deref(),
+        );
         let (req_tx, req_rx) = mpsc::channel::<Vec<(usize, u32)>>();
         let (res_tx, res_rx) = mpsc::channel::<Measurement>();
         thread::spawn(move || {
@@ -210,6 +213,17 @@ impl App {
             last_bell: None,
             autostart_pending: true,
             quit: false,
+        }
+    }
+
+    /// Remember the selected project so the next launch opens on it.
+    fn remember_selection(&self) {
+        if let Some(p) = self
+            .order
+            .get(self.selected)
+            .and_then(|&pi| self.cfg.projects.get(pi))
+        {
+            save_last_project(&p.name);
         }
     }
 
@@ -523,6 +537,13 @@ impl App {
                         if let Some(started) = s.started {
                             detail.push(' ');
                             detail.push_str(&uptime_label(started.elapsed().as_secs()));
+                        }
+                        if p.kind == Kind::Agent {
+                            let quiet = s.last_output.map(|t| t.elapsed().as_secs());
+                            if let Some(note) = idle_note(s.phase(), quiet) {
+                                detail.push_str(" · ");
+                                detail.push_str(&note);
+                            }
                         }
                         if let Some(u) = s.usage {
                             detail.push_str(" · ");
@@ -2275,6 +2296,7 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
             break;
         }
     }
+    app.remember_selection();
     shutdown_all(&mut app.sessions);
     Ok(())
 }
