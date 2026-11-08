@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.6.6
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.7.0
 ```
 
 To install elsewhere:
@@ -127,7 +127,8 @@ case-insensitively by `remove` and `start`.
 | `U` | Open the update prompt when a new release has been detected |
 | `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |
 | Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
-| `Ctrl+Q` | Back to the manager (from inside a terminal; clicking the project list works too) |
+| `Ctrl+Q`, middle-click | Back to the manager (from inside a terminal; clicking the project list works too) |
+| `Alt+1`–`Alt+9` | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
 | `?` | Toggle the help popup |
 | `q`, `Ctrl+C` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
@@ -136,14 +137,15 @@ for cursor-aware editing.
 
 Inside a terminal, every key reaches the session, including `Esc` and
 `Ctrl+G`, which agents such as Claude Code use to interrupt, rewind or open
-an editor. `Ctrl+Q` is the only key squad keeps for itself: it returns to
-the manager.
+an editor. squad keeps only `Ctrl+Q` (back to the manager) and
+`Alt+1`–`Alt+9` (switch project) for itself.
 
 ## CLI reference
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [-- command args...]   Register a project (path optional for services)
+squad add [<path>] [--kind agent|service] [--autostart] [-- command args...]
+                                                                   Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
 squad start <name>                                                 Open the manager on a project and start it
@@ -155,6 +157,7 @@ squad --help
 Notes:
 
 - Without `-- command`, the project opens a plain PowerShell session (`pwsh.exe` if installed, otherwise `powershell.exe`).
+- `--autostart` makes the project start by itself whenever the manager opens.
 - `--kind` defaults to `agent`. Existing config files without a kind keep working.
 - Services may omit the path: they run in the current directory and are
   named after the program (e.g. `ollama` for `ollama serve`).
@@ -183,6 +186,15 @@ path = "C:/work/my-api"
 command = ["npm", "run", "dev"]
 kind = "service"
 ```
+
+Optional settings:
+
+- `autostart = true` on a project starts its session when the manager opens
+  (`squad add --autostart` sets it too).
+- `bell = false` at the top level silences the terminal bell. By default squad
+  rings it once (at most every 3 seconds) when an agent you are not typing
+  into starts waiting for input (`?`) or finishes (`✔`).
+- `scrollback = 5000` sets the lines kept per session (default 2000).
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
 

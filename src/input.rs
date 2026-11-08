@@ -217,6 +217,14 @@ pub fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
 pub fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
     code == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
 }
+/// Alt+1..9 inside a terminal switches to that project (same numbering as
+/// the manager's `1`-`9`). Returns the position in the sidebar order.
+pub fn focus_switch_key(code: KeyCode, mods: KeyModifiers, order_len: usize) -> Option<usize> {
+    match code {
+        KeyCode::Char(c) if mods == KeyModifiers::ALT => jump_to(order_len, c),
+        _ => None,
+    }
+}
 pub fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);

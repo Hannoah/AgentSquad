@@ -104,6 +104,11 @@ struct App {
     confirm_quit: bool,
     confirm_start_all: bool,
     message: (String, Notice),
+    /// Idle hint text, restored when a message expires.
+    hints: String,
+    /// Last message seen and when it first appeared, for expiry.
+    msg_seen: String,
+    msg_at: Instant,
     dirty: bool,
     /// `squad start <name>`: start and focus the first selection once.
     first: bool,
@@ -123,6 +128,11 @@ struct App {
     updating: bool,
     tick: u64,
     last_anim_tick: Instant,
+    /// A background agent wants attention; `take_bell` decides if it rings.
+    bell: bool,
+    last_bell: Option<Instant>,
+    /// Projects with `autostart` start once, on the first loop pass.
+    autostart_pending: bool,
     quit: bool,
 }
 
@@ -170,6 +180,9 @@ impl App {
             confirm_quit: false,
             confirm_start_all: false,
             message: (mode_hints(Mode::Manager).to_string(), Notice::Info),
+            hints: mode_hints(Mode::Manager),
+            msg_seen: String::new(),
+            msg_at: Instant::now(),
             dirty: true,
             first: initial.is_some(),
             cores: thread::available_parallelism().map_or(1, |n| n.get()),
@@ -188,6 +201,9 @@ impl App {
             updating: false,
             tick: 0,
             last_anim_tick: Instant::now(),
+            bell: false,
+            last_bell: None,
+            autostart_pending: true,
             quit: false,
         }
     }
@@ -209,6 +225,21 @@ impl App {
     }
 
     fn start_initial(&mut self, rows: u16, cols: u16) {
+        if self.autostart_pending {
+            self.autostart_pending = false;
+            let pis: Vec<usize> = (0..self.cfg.projects.len())
+                .filter(|&i| self.cfg.projects[i].autostart)
+                .collect();
+            if !pis.is_empty() {
+                let (n, failed) =
+                    start_sessions(&mut self.sessions, &self.cfg.projects, &pis, rows, cols);
+                self.message = match failed {
+                    Some(e) => (format!("Autostart: {n} started; error: {e}"), Notice::Error),
+                    None => (format!("Autostarted {}.", plural_sessions(n)), Notice::Info),
+                };
+                self.dirty = true;
+            }
+        }
         if self.first {
             self.first = false;
             if let Some(&pi) = self.order.get(self.selected) {
@@ -220,8 +251,23 @@ impl App {
         }
     }
 
+    /// Messages fade back to the idle hints; otherwise the last one would
+    /// hide the key hints for good.
+    fn expire_message(&mut self) {
+        if self.message.0 != self.msg_seen {
+            self.msg_seen.clone_from(&self.message.0);
+            self.msg_at = Instant::now();
+        }
+        if self.message.0 != self.hints && self.msg_at.elapsed() >= message_ttl(self.message.1) {
+            self.message = (self.hints.clone(), Notice::Info);
+            self.msg_seen.clone_from(&self.hints);
+            self.dirty = true;
+        }
+    }
+
     /// Fold in measurements, update messages and finished sessions.
     fn pump(&mut self) {
+        self.expire_message();
         while let Ok(m) = self.res_rx.try_recv() {
             self.sampling = false;
             if let Some(snap) = m.sys {
@@ -298,10 +344,17 @@ impl App {
                 // icon (the 200 ms spinner clock redraws the rest), so skip the
                 // frame unless that icon or the status changed.
                 let selected = self.order.get(self.selected) == Some(&pi);
+                let phase_now = s.phase();
                 self.dirty |= changed
                     && (selected
-                        || s.phase() != phase_before
+                        || phase_now != phase_before
                         || s.status.is_running() != was_running);
+                if self.cfg.projects[pi].kind == Kind::Agent && phase_now != s.last_phase {
+                    // No bell for the session you are typing into.
+                    let watching = selected && self.mode == Mode::Focus;
+                    self.bell |= !watching && rings_bell(s.last_phase, phase_now);
+                    s.last_phase = phase_now;
+                }
                 let label = s.status.label();
                 if let Some(note) = exit_notice(
                     &self.cfg.projects[pi].name,
@@ -318,6 +371,20 @@ impl App {
                 }
             }
         }
+    }
+
+    /// True when the terminal bell should ring now. At most one ring per
+    /// 3 s, so an agent flipping between working and done cannot buzz.
+    fn take_bell(&mut self) -> bool {
+        let want = std::mem::take(&mut self.bell);
+        let gap_ok = self
+            .last_bell
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(3));
+        if want && gap_ok && self.cfg.bell != Some(false) {
+            self.last_bell = Some(Instant::now());
+            return true;
+        }
+        false
     }
 
     /// Adaptive poll: 10 ms while output or typing is recent so echo feels
@@ -465,6 +532,17 @@ impl App {
                 } else {
                     None
                 };
+                // Waiting agents get a yellow bar and name so they stand out
+                // at a glance, even in rows that are not selected.
+                let needs_input = agent_phase == Some(AgentPhase::NeedsInput) && Some(pi) != sel_pi;
+                let mark = if needs_input { "▎" } else { mark };
+                let mark_style = if needs_input {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD)
+                } else {
+                    row_style
+                };
                 let status_span_style = {
                     let (base_fg, is_bold) = if let Some(ph) = agent_phase {
                         match ph {
@@ -524,12 +602,17 @@ impl App {
                 }
                 targets.push(Some(n - 1));
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled(prefix, row_style),
+                    Span::styled(mark, mark_style),
+                    Span::styled(format!("{n} "), row_style),
                     Span::styled(fit(&status_full, status_w), status_span_style),
                     Span::raw(" "),
                     Span::styled(
                         fit(shown_name, name_w),
-                        row_name_style(Some(pi) == sel_pi, status, p.kind),
+                        if needs_input {
+                            mark_style
+                        } else {
+                            row_name_style(Some(pi) == sel_pi, status, p.kind)
+                        },
                     ),
                     Span::styled(fit(&detail, detail_w), detail_style),
                 ])));
@@ -576,29 +659,18 @@ impl App {
             .and_then(|pi| self.sessions.get(pi))
             .and_then(|o| o.as_ref())
             .and_then(|s| s.usage)
-            .map(|u| format!(" · {}", usage_label(u)))
-            .unwrap_or_default();
+            .map(usage_label);
+        let scroll_note = sel_pi
+            .and_then(|pi| self.sessions.get(pi))
+            .and_then(|o| o.as_ref())
+            .map(|s| s.parser.screen().scrollback())
+            .filter(|&n| n > 0)
+            .map(|n| format!("⇅{n}"));
+        // The mode shows in the border color and the status-bar chip, so the
+        // title keeps only what the session is and how it is doing.
         let title = sel_pi
             .and_then(|pi| self.cfg.projects.get(pi))
             .map(|p| {
-                let scroll_note = sel_pi
-                    .and_then(|pi| self.sessions.get(pi))
-                    .and_then(|o| o.as_ref())
-                    .map(|s| s.parser.screen().scrollback())
-                    .filter(|&n| n > 0)
-                    .map(|n| format!(" · ⇅{n}"))
-                    .unwrap_or_default();
-                let focus_label = if panel.width >= 60 {
-                    if self.mode == Mode::Focus {
-                        " · INPUT (Ctrl+Q to exit)"
-                    } else {
-                        " · PREVIEW (Enter to type)"
-                    }
-                } else if self.mode == Mode::Focus {
-                    " · INPUT"
-                } else {
-                    " · MANAGER"
-                };
                 let sel_phase = sel_pi
                     .and_then(|pi| self.sessions.get(pi))
                     .and_then(|o| o.as_ref())
@@ -619,25 +691,31 @@ impl App {
                     ),
                     Span::raw(" · "),
                     Span::styled(disp_status, disp_style),
-                    Span::styled(
-                        focus_label,
-                        if self.mode == Mode::Focus {
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(ratatui::style::Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                    Span::raw(format!("{usage_note}{scroll_note}]")),
+                    Span::raw("]"),
                 ])
             })
             .unwrap_or_else(|| Line::from("No projects: squad add <path>"));
-        let block = Block::default()
+        let mut block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(pane_border_style(self.mode == Mode::Focus))
             .title(title);
+        // Usage and scroll position ride on the right edge; on a narrow pane
+        // they would collide with the title, so they step aside.
+        let right_note = [usage_note, scroll_note]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if !right_note.is_empty() && panel.width >= 60 {
+            block = block.title_top(
+                Line::from(Span::styled(
+                    format!(" {right_note} "),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
+        }
         let inner = block.inner(panel);
         f.render_widget(block, panel);
         if let Some(s) = sel_pi.and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref())) {
@@ -1277,6 +1355,10 @@ impl App {
                 };
                 self.dirty = true;
             }
+        } else if m.kind == MouseEventKind::Down(MouseButton::Middle) && self.mode == Mode::Focus {
+            // Mouse twin of Ctrl+Q: leave the terminal without a key.
+            self.mode = Mode::Manager;
+            self.dirty = true;
         } else if m.kind == MouseEventKind::Down(MouseButton::Right)
             && !(matches!(
                 self.mode,
@@ -1352,6 +1434,18 @@ impl App {
     fn key_focus(&mut self, k: KeyEvent, rows: u16) {
         if focus_exit_key(k.code, k.modifiers) {
             self.mode = Mode::Manager;
+            return;
+        }
+        if let Some(i) = focus_switch_key(k.code, k.modifiers, self.order.len()) {
+            self.selected = i;
+            // A stopped project has nothing to type into: land on the manager.
+            if !self
+                .order
+                .get(i)
+                .is_some_and(|&pi| slot_running(&self.sessions, pi))
+            {
+                self.mode = Mode::Manager;
+            }
             return;
         }
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
@@ -1960,6 +2054,11 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
         app.animate();
         app.start_initial(rows, cols);
         app.pump();
+        if app.take_bell() {
+            let backend = terminal.backend_mut();
+            let _ = backend.write_all(b"\x07");
+            let _ = backend.flush();
+        }
         if app.dirty {
             let _ = terminal.backend_mut().write_all(b"\x1b[?2026h");
             terminal.draw(|f| app.draw(f))?;

@@ -116,6 +116,12 @@ pub enum AgentPhase {
     Idle,
 }
 
+/// Should the bell ring for this change? Yes when an agent starts waiting
+/// for input, or finishes after working.
+pub fn rings_bell(prev: AgentPhase, now: AgentPhase) -> bool {
+    now == AgentPhase::NeedsInput || (now == AgentPhase::Done && prev == AgentPhase::Working)
+}
+
 impl AgentPhase {
     pub fn icon(self, tick: u64) -> (String, Style) {
         match self {
@@ -387,6 +393,8 @@ pub struct Session {
     pub last_input: Option<Instant>,
     pub had_activity: bool,
     pub dismissed_exit: bool,
+    /// Phase seen at the last check, to spot changes worth a bell.
+    pub last_phase: AgentPhase,
     pub cached_needs_input: bool,
     pub cached_working_text: bool,
     /// Program the user started inside a shell session ("jarvis").
@@ -456,6 +464,7 @@ impl Session {
             last_input: None,
             had_activity: false,
             dismissed_exit: false,
+            last_phase: AgentPhase::Idle,
             cached_needs_input: false,
             cached_working_text: false,
             fg_name: None,

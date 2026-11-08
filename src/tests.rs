@@ -27,6 +27,7 @@ fn config_roundtrip() {
             path: PathBuf::from("demo"),
             command: shell(),
             kind: Kind::Agent,
+            autostart: false,
         }],
         scrollback: None,
         ..Default::default()
@@ -58,6 +59,7 @@ fn order_groups_agents_first() {
         path: PathBuf::from("x"),
         command: vec!["sh".into()],
         kind,
+        autostart: false,
     };
     let ps = vec![mk(Kind::Service), mk(Kind::Agent), mk(Kind::Service)];
     assert_eq!(display_order(&ps), vec![1, 0, 2]);
@@ -210,6 +212,7 @@ fn pane_title_name_prefers_service_command() {
         path: PathBuf::from("."),
         command: vec!["cargo".into(), "run".into()],
         kind: Kind::Agent,
+        autostart: false,
     };
     assert_eq!(pane_title_name(&agent), "my-agent");
 
@@ -218,6 +221,7 @@ fn pane_title_name_prefers_service_command() {
         path: PathBuf::from("."),
         command: vec!["npm".into(), "run".into(), "dev".into()],
         kind: Kind::Service,
+        autostart: false,
     };
     assert_eq!(pane_title_name(&service), "npm run dev");
 }
@@ -342,6 +346,7 @@ fn stop_kills_process_tree() {
             "/nobreak".into(),
         ],
         kind: Kind::Agent,
+        autostart: false,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -393,6 +398,7 @@ fn stop_kills_orphaned_grandchildren() {
             "127.0.0.1".into(),
         ],
         kind: Kind::Agent,
+        autostart: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -506,6 +512,7 @@ fn filter_matches_name_and_command() {
         path: PathBuf::from("x"),
         command: cmd.iter().map(|s| s.to_string()).collect(),
         kind,
+        autostart: false,
     };
     let ps = vec![
         mk("api", &["node", "server.js"], Kind::Service),
@@ -617,6 +624,7 @@ fn session_sampling_tracks_a_live_tree() {
             "/nobreak".into(),
         ],
         kind: Kind::Agent,
+        autostart: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pid");
@@ -757,6 +765,7 @@ fn persist_helpers_keep_other_writers_projects() {
         path: PathBuf::from("x"),
         command: vec!["sh".into()],
         kind: Kind::Agent,
+        autostart: false,
     };
     // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
     // no other test reads it.
@@ -915,6 +924,7 @@ fn pty_smoke() {
             vec!["sh".into(), "-c".into(), "echo AGENTSQUAD_OK".into()]
         },
         kind: Kind::Agent,
+        autostart: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..100 {
@@ -990,6 +1000,7 @@ fn remove_unregisters_project() {
         path: PathBuf::from("x"),
         command: vec!["sh".into()],
         kind: Kind::Agent,
+        autostart: false,
     };
     let mut projects = vec![mk("a"), mk("b")];
     let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
@@ -1024,6 +1035,7 @@ fn remove_persists_to_config_file() {
         path: PathBuf::from("x"),
         command: vec!["sh".into()],
         kind: Kind::Agent,
+        autostart: false,
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
@@ -1095,6 +1107,7 @@ fn list_table_aligns_columns() {
         path: PathBuf::from("/tmp"),
         command: cmd.iter().map(|s| s.to_string()).collect(),
         kind,
+        autostart: false,
     };
     // Registration order is service-first; output is agents-first.
     let projects = vec![
@@ -1163,7 +1176,7 @@ fn hint_text_matches_legacy_strings() {
         );
     assert_eq!(
         mode_hints(Mode::Focus),
-        "Ctrl+Q manager | other keys go to the session"
+        "Ctrl+Q manager | Alt+1-9 switch | other keys go to the session"
     );
     assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
     assert_eq!(
@@ -1379,6 +1392,7 @@ fn agent_tag_shows_program() {
         path: PathBuf::from("/tmp"),
         command,
         kind: Kind::Agent,
+        autostart: false,
     };
     assert_eq!(
         agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
@@ -1432,6 +1446,7 @@ fn group_counts_split_by_kind() {
         path: PathBuf::from("/tmp"),
         command: vec!["sh".into()],
         kind,
+        autostart: false,
     };
     let projects = vec![
         mk("a1", Kind::Agent),
@@ -1506,12 +1521,14 @@ fn start_session_starts_and_reports() {
             path: dir.clone(),
             command: shell,
             kind: Kind::Agent,
+            autostart: false,
         },
         Project {
             name: "bad".into(),
             path: dir,
             command: vec!["agentsquad-no-such-binary-xyz".into()],
             kind: Kind::Service,
+            autostart: false,
         },
     ];
     let mut sessions: Vec<Option<Session>> = vec![None, None];
@@ -1534,6 +1551,7 @@ fn merge_appends_missing_projects() {
         path: PathBuf::from("/tmp"),
         command: vec!["sh".into()],
         kind: Kind::Agent,
+        autostart: false,
     };
     let mut c = Config {
         projects: vec![mk("a")],
@@ -1608,6 +1626,7 @@ fn service_naming_looks_through_shells_and_live_foreground() {
         path: PathBuf::from("C:/work/my-dir"),
         command: vec!["powershell.exe".into(), "-NoLogo".into()],
         kind: Kind::Service,
+        autostart: false,
     };
     assert_eq!(live_name(&p, None), "my-dir");
     assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
@@ -1743,6 +1762,7 @@ fn empty_command_errors_instead_of_panicking() {
         path: env::current_dir().unwrap(),
         command: vec![],
         kind: Kind::Agent,
+        autostart: false,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -1762,4 +1782,73 @@ fn save_to_leaves_no_temp_file() {
         .collect();
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(names, ["config.toml"]);
+}
+
+#[test]
+fn bell_rings_for_attention_not_for_noise() {
+    use AgentPhase::*;
+    assert!(rings_bell(Working, NeedsInput));
+    assert!(rings_bell(Idle, NeedsInput));
+    assert!(rings_bell(Working, Done));
+    assert!(!rings_bell(Idle, Done), "Done without work is not news");
+    assert!(!rings_bell(Done, Working));
+    assert!(!rings_bell(NeedsInput, Working));
+    assert!(!rings_bell(Working, Idle));
+}
+
+#[test]
+fn autostart_and_bell_config_roundtrip() {
+    let text = r#"
+bell = false
+[[projects]]
+name = "a"
+path = "."
+command = ["x"]
+autostart = true
+[[projects]]
+name = "b"
+path = "."
+command = ["x"]
+"#;
+    let c: Config = toml::from_str(text).unwrap();
+    assert_eq!(c.bell, Some(false));
+    assert!(c.projects[0].autostart && !c.projects[1].autostart);
+    let out = toml::to_string(&c).unwrap();
+    assert_eq!(out.matches("autostart").count(), 1, "false is not written");
+    let again: Config = toml::from_str(&out).unwrap();
+    assert!(again.projects[0].autostart && again.bell == Some(false));
+    assert!(Config::default().bell.is_none());
+}
+
+#[test]
+fn alt_digit_switches_project_inside_terminal() {
+    let alt = KeyModifiers::ALT;
+    assert_eq!(focus_switch_key(KeyCode::Char('1'), alt, 3), Some(0));
+    assert_eq!(focus_switch_key(KeyCode::Char('3'), alt, 3), Some(2));
+    assert_eq!(
+        focus_switch_key(KeyCode::Char('4'), alt, 3),
+        None,
+        "no such row"
+    );
+    assert_eq!(focus_switch_key(KeyCode::Char('0'), alt, 3), None);
+    // Plain digits and other modifiers still reach the session.
+    assert_eq!(
+        focus_switch_key(KeyCode::Char('1'), KeyModifiers::NONE, 3),
+        None
+    );
+    assert_eq!(
+        focus_switch_key(KeyCode::Char('1'), KeyModifiers::CONTROL, 3),
+        None
+    );
+    assert_eq!(
+        focus_switch_key(KeyCode::Char('1'), alt | KeyModifiers::SHIFT, 3),
+        None
+    );
+}
+
+#[test]
+fn messages_expire_and_problems_linger_longer() {
+    assert!(message_ttl(Notice::Info) < message_ttl(Notice::Warn));
+    assert_eq!(message_ttl(Notice::Warn), message_ttl(Notice::Error));
+    assert!(message_ttl(Notice::Info) >= std::time::Duration::from_secs(3));
 }

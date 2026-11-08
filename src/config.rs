@@ -48,6 +48,9 @@ pub struct Project {
     pub command: Vec<String>,
     #[serde(default)]
     pub kind: Kind,
+    /// Start this project's session as soon as the manager opens.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autostart: bool,
 }
 /// Bump when `load_from` gains a one-time migration. A file stamped with
 /// this version is left exactly as the user wrote it.
@@ -62,6 +65,10 @@ pub struct Config {
     /// Lines of scrollback kept per session (default 2000).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
+    /// Ring the terminal bell when a background agent needs input or
+    /// finishes (default true; `bell = false` silences it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bell: Option<bool>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -69,6 +76,7 @@ impl Default for Config {
             version: CONFIG_VERSION,
             projects: Vec::new(),
             scrollback: None,
+            bell: None,
         }
     }
 }
@@ -367,6 +375,7 @@ pub fn build_project(
         path,
         command,
         kind,
+        autostart: false,
     })
 }
 /// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.

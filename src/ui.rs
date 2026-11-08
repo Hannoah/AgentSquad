@@ -74,7 +74,8 @@ pub fn help_lines() -> Vec<&'static str> {
         "S          start all stopped sessions",
         "U          install the update squad found",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
-        "Ctrl+Q     terminal back to manager (Esc goes to the session)",
+        "Ctrl+Q, middle-click  terminal back to manager",
+        "Alt+1-9    switch project from inside a terminal",
         "q, Ctrl+C  quit (confirms when sessions exist)",
         "?/Esc      close this help",
     ]
@@ -104,6 +105,14 @@ pub enum Notice {
     Info,
     Warn,
     Error,
+}
+/// How long a status-bar message stays before the idle hints return.
+/// Problems linger longer than confirmations.
+pub fn message_ttl(kind: Notice) -> std::time::Duration {
+    std::time::Duration::from_secs(match kind {
+        Notice::Info => 4,
+        Notice::Warn | Notice::Error => 8,
+    })
 }
 pub fn notice_style(kind: Notice) -> Style {
     match kind {
@@ -143,7 +152,11 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("q", "quit"),
             ("?", "help"),
         ],
-        Mode::Focus => &[("Ctrl+Q", "manager"), ("", "other keys go to the session")],
+        Mode::Focus => &[
+            ("Ctrl+Q", "manager"),
+            ("Alt+1-9", "switch"),
+            ("", "other keys go to the session"),
+        ],
         Mode::Send => &[("Enter", "sends"), ("Esc", "cancels")],
         Mode::Filter => &[
             ("", "type to narrow"),
@@ -420,7 +433,8 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [-- cmd]  Register project (path optional for services)
+  squad add [<path>] [--kind agent|service] [--autostart] [-- cmd]
+                                                     Register project (path optional for services)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad start <name>                                 Open manager and start project
@@ -434,7 +448,8 @@ Manager keys:
   PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:
-  Ctrl+Q  back to manager · every other key, Esc included, goes to the session
+  Ctrl+Q  back to manager (or middle-click) · Alt+1-9  switch project
+  every other key, Esc included, goes to the session
 
 Quitting stops managed child processes; no detached daemon.",
         env!("CARGO_PKG_VERSION")

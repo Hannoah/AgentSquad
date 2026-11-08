@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.6.6"
+version = "0.7.0"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
