@@ -292,7 +292,16 @@ impl App {
         for (pi, slot) in self.sessions.iter_mut().enumerate() {
             if let Some(s) = slot {
                 let was_running = s.status.is_running();
-                self.dirty |= s.update();
+                let phase_before = s.phase();
+                let changed = s.update();
+                // Output from a background session only shows in the sidebar
+                // icon (the 200 ms spinner clock redraws the rest), so skip the
+                // frame unless that icon or the status changed.
+                let selected = self.order.get(self.selected) == Some(&pi);
+                self.dirty |= changed
+                    && (selected
+                        || s.phase() != phase_before
+                        || s.status.is_running() != was_running);
                 let label = s.status.label();
                 if let Some(note) = exit_notice(
                     &self.cfg.projects[pi].name,

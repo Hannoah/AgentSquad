@@ -198,6 +198,11 @@ fn is_choice_line(line: &str) -> bool {
 /// active spinner wins over everything: the agent may print "do you want to"
 /// or code containing `"[y/n]"` in its own output while it works.
 pub fn is_needs_input(screen_text: &str) -> bool {
+    !is_working_text(screen_text) && has_prompt(screen_text)
+}
+/// The prompt half of `is_needs_input`, for callers that already know the
+/// agent is not working.
+fn has_prompt(screen_text: &str) -> bool {
     const STRONG: [&str; 17] = [
         "[y/n]",
         "(y/n)",
@@ -225,9 +230,6 @@ pub fn is_needs_input(screen_text: &str) -> bool {
         "confirm?",
         "permission to",
     ];
-    if is_working_text(screen_text) {
-        return false;
-    }
     let lines: Vec<String> = tail_lines(screen_text, 6)
         .into_iter()
         .filter(|l| !is_code_or_diff_line(l))
@@ -482,8 +484,9 @@ impl Session {
         if scrolled != 0 {
             self.parser.screen_mut().set_scrollback(scrolled);
         }
-        self.cached_needs_input = is_needs_input(&tail);
-        self.cached_working_text = is_working_text(&tail);
+        let working = is_working_text(&tail);
+        self.cached_working_text = working;
+        self.cached_needs_input = !working && has_prompt(&tail);
         self.flags_stale = false;
         self.last_flags = Instant::now();
     }
