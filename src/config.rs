@@ -54,6 +54,10 @@ pub struct Project {
     /// Keep a `.squad/` ledger in the project (created on first start).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ledger: bool,
+    /// Name of the commander this agent reports to. Anyone with
+    /// subordinates is a commander; commanders may report to commanders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reports_to: Option<String>,
 }
 /// Bump when `load_from` gains a one-time migration. A file stamped with
 /// this version is left exactly as the user wrote it.
@@ -337,11 +341,89 @@ pub fn size(rows: u16, cols: u16) -> PtySize {
         pixel_height: 0,
     }
 }
-/// Sidebar order: all agents first, then all services. Positions in this
-/// vector are what the manager selection index refers to.
+/// The commander project `i` reports to, if it names a registered agent.
+pub fn superior(projects: &[Project], i: usize) -> Option<usize> {
+    let name = projects[i].reports_to.as_deref()?;
+    projects
+        .iter()
+        .enumerate()
+        .position(|(j, p)| j != i && p.kind == Kind::Agent && p.name.eq_ignore_ascii_case(name))
+}
+/// Agents that report directly to project `i`, in registration order.
+pub fn subordinates(projects: &[Project], i: usize) -> Vec<usize> {
+    (0..projects.len())
+        .filter(|&j| superior(projects, j) == Some(i))
+        .collect()
+}
+/// Every agent below project `i`, at any depth (subordinates of
+/// subordinates included), without repeats even if a hand-edited loop exists.
+pub fn all_subordinates(projects: &[Project], i: usize) -> Vec<usize> {
+    let mut found = vec![i];
+    let mut next = 0;
+    while next < found.len() {
+        for j in subordinates(projects, found[next]) {
+            if !found.contains(&j) {
+                found.push(j);
+            }
+        }
+        next += 1;
+    }
+    found.remove(0);
+    found
+}
+/// Sidebar prefix showing rank: two spaces per level below the top, and a
+/// star for commanders. Unit names (squad, platoon, company) can be derived
+/// from the subtree size here later.
+pub fn rank_prefix(projects: &[Project], i: usize) -> String {
+    let (mut depth, mut at) = (0, i);
+    // Bounded by the project count so a hand-edited loop cannot hang the UI.
+    while let Some(up) = superior(projects, at).filter(|_| depth < projects.len()) {
+        depth += 1;
+        at = up;
+    }
+    let star = if subordinates(projects, i).is_empty() {
+        ""
+    } else {
+        "★ "
+    };
+    format!("{}{star}", "  ".repeat(depth))
+}
+/// Validate `--under`: the new project must be an agent and the named
+/// commander must be a registered agent. Returns the commander's stored name.
+pub fn check_superior(existing: &[Project], kind: Kind, under: &str) -> Result<String, String> {
+    if kind != Kind::Agent {
+        return Err("Only agents can report to a commander.".into());
+    }
+    existing
+        .iter()
+        .find(|p| p.kind == Kind::Agent && p.name.eq_ignore_ascii_case(under))
+        .map(|p| p.name.clone())
+        .ok_or_else(|| format!("No agent named {under} to report to."))
+}
+/// Sidebar order: agents first (each commander followed by its
+/// subordinates), then all services. Positions in this vector are what the
+/// manager selection index refers to.
 pub fn display_order(projects: &[Project]) -> Vec<usize> {
+    fn push_tree(projects: &[Project], i: usize, order: &mut Vec<usize>) {
+        if order.contains(&i) {
+            return;
+        }
+        order.push(i);
+        for j in subordinates(projects, i) {
+            push_tree(projects, j, order);
+        }
+    }
     let mut order = Vec::with_capacity(projects.len());
-    order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Agent));
+    let agents = || (0..projects.len()).filter(|&i| projects[i].kind == Kind::Agent);
+    for i in agents().filter(|&i| superior(projects, i).is_none()) {
+        push_tree(projects, i, &mut order);
+    }
+    // ponytail: a hand-edited reporting loop is listed flat rather than lost.
+    for i in agents() {
+        if !order.contains(&i) {
+            order.push(i);
+        }
+    }
     order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Service));
     order
 }
@@ -390,18 +472,14 @@ pub fn build_project(
     if dir_name.is_empty() {
         return Err("Cannot use filesystem root as project.".into());
     }
-    let name = if kind == Kind::Service {
-        let base = program_name(&parts).unwrap_or(dir_name);
-        unique_name(&base, existing)
+    // Agents may share a directory too (two agents collaborating on one
+    // project): the second becomes `dir-2`, like services.
+    let base = if kind == Kind::Service {
+        program_name(&parts).unwrap_or(dir_name)
     } else {
-        if existing
-            .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(&dir_name))
-        {
-            return Err(format!("Project name already registered: {dir_name}"));
-        }
         dir_name
     };
+    let name = unique_name(&base, existing);
     let command = if parts.is_empty() { shell() } else { parts };
     Ok(Project {
         name,
@@ -410,6 +488,7 @@ pub fn build_project(
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     })
 }
 /// The name a new project would get, guessed from the typed text alone (no
@@ -424,12 +503,11 @@ pub fn preview_name(
     let dir = Path::new(trimmed)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
-    match kind {
+    let base = match kind {
         Kind::Agent => dir,
-        Kind::Service => program_name(parts)
-            .or(dir)
-            .map(|base| unique_name(&base, existing)),
-    }
+        Kind::Service => program_name(parts).or(dir),
+    };
+    base.map(|b| unique_name(&b, existing))
 }
 /// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.
 fn program_stem(prog: &str) -> String {

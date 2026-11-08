@@ -93,11 +93,14 @@ struct App {
     pane_rect: Rect,
     mode: Mode,
     send_buf: LineInput,
+    /// The send line is an order for everyone under the selected commander.
+    send_all: bool,
     filter_buf: LineInput,
     add_field: usize,
     add_path: LineInput,
     add_kind: Kind,
     add_cmd: LineInput,
+    add_under: LineInput,
     add_autostart: bool,
     add_err: String,
     confirm_stop: Option<usize>,
@@ -175,11 +178,13 @@ impl App {
             pane_rect: Rect::default(),
             mode: Mode::Manager,
             send_buf: LineInput::new(),
+            send_all: false,
             filter_buf: LineInput::new(),
             add_field: 0,
             add_path: LineInput::new(),
             add_kind: Kind::Agent,
             add_cmd: LineInput::new(),
+            add_under: LineInput::new(),
             add_autostart: false,
             add_err: String::new(),
             confirm_stop: None,
@@ -378,6 +383,18 @@ impl App {
                     // No bell for the session you are typing into.
                     let watching = selected && self.mode == Mode::Focus;
                     self.bell |= !watching && rings_bell(s.last_phase, phase_now);
+                    // A finished task is reported to the commander's REPORTS.md.
+                    if phase_now == AgentPhase::Done && s.last_phase == AgentPhase::Working {
+                        let projects = &self.cfg.projects;
+                        if let Some(c) = superior(projects, pi) {
+                            ledger::report(
+                                &projects[c].path,
+                                &projects[pi].path,
+                                &projects[pi].name,
+                                &projects[c].name,
+                            );
+                        }
+                    }
                     s.last_phase = phase_now;
                 }
                 let label = s.status.label();
@@ -441,6 +458,7 @@ impl App {
         self.add_path.clear();
         self.add_kind = Kind::Agent;
         self.add_cmd.clear();
+        self.add_under.clear();
         self.add_autostart = false;
         self.add_err.clear();
     }
@@ -535,7 +553,12 @@ impl App {
                 let fg = self.sessions[pi]
                     .as_ref()
                     .and_then(|s| s.fg_name.as_deref());
-                let shown_name = live_name(p, fg);
+                let shown = format!(
+                    "{}{}",
+                    rank_prefix(&self.cfg.projects, pi),
+                    live_name(p, fg)
+                );
+                let shown_name: &str = &shown;
                 let mut detail = String::new();
                 if status == "Running" {
                     if let Some(s) = self.sessions[pi].as_ref() {
@@ -943,8 +966,13 @@ impl App {
                 .and_then(|pi| self.cfg.projects.get(pi))
                 .map(|p| p.name.as_str())
                 .unwrap_or("?");
+            let label = if self.send_all {
+                format!("Order to all under {name}: ")
+            } else {
+                format!("Send to {name}: ")
+            };
             bar.extend(input_line(
-                format!("Send to {name}: "),
+                label,
                 &self.send_buf,
                 " (Enter sends, Esc cancels)".to_string(),
                 input_w,
@@ -1088,29 +1116,21 @@ impl App {
         }
     }
 
-    /// What the add form would register, shown while typing: the name and
-    /// whether it is already taken.
-    fn add_preview(&self) -> Option<(String, bool)> {
+    /// The name the add form would register, shown while typing.
+    fn add_preview(&self) -> Option<String> {
         let parts = split_command(&self.add_cmd.as_str());
-        let name = preview_name(
+        preview_name(
             &self.cfg.projects,
             &self.add_path.as_str(),
             self.add_kind,
             &parts,
-        )?;
-        let taken = self.add_kind == Kind::Agent
-            && self
-                .cfg
-                .projects
-                .iter()
-                .any(|p| p.name.eq_ignore_ascii_case(&name));
-        Some((name, taken))
+        )
     }
 
     /// The add form's popup; its height follows the rows it shows.
     fn add_popup(&self, area: Rect) -> Rect {
         let rows =
-            4 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
+            5 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
         fixed_rect(72, rows + 2, area)
     }
 
@@ -1143,6 +1163,7 @@ impl App {
             ("Kind", kind_hint.to_string()),
             ("Command", cmd_text),
             ("Autostart", autostart_hint),
+            ("Reports to", self.add_under.as_str()),
         ];
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
@@ -1154,12 +1175,12 @@ impl App {
                 Style::default().fg(Color::DarkGray)
             };
             let mut row = vec![Span::styled(format!("{mark} {label}: "), label_style)];
-            let editing = active && (i == 0 || i == 2);
+            let editing = active && matches!(i, 0 | 2 | 4);
             if editing {
-                let input = if i == 0 {
-                    &self.add_path
-                } else {
-                    &self.add_cmd
+                let input = match i {
+                    0 => &self.add_path,
+                    2 => &self.add_cmd,
+                    _ => &self.add_under,
                 };
                 let (left, cur, right) = input.render_parts();
                 let label_w = format!("{mark} {label}: ").chars().count();
@@ -1193,18 +1214,11 @@ impl App {
             }
             lines.push(Line::from(row));
         }
-        if let Some((name, taken)) = self.add_preview() {
-            lines.push(Line::from(if taken {
-                Span::styled(
-                    format!("  Name already registered: {name}"),
-                    Style::default().fg(Color::Red),
-                )
-            } else {
-                Span::styled(
-                    format!("  Registers as: {name}"),
-                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
-                )
-            }));
+        if let Some(name) = self.add_preview() {
+            lines.push(Line::from(Span::styled(
+                format!("  Registers as: {name}"),
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            )));
         }
         if !self.add_err.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -1264,10 +1278,8 @@ impl App {
             self.selected = 0;
         } else if self.mode == Mode::Add {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                match self.add_field {
-                    0 => self.add_path.insert(ch),
-                    2 => self.add_cmd.insert(ch),
-                    _ => {}
+                if let Some(input) = self.add_input() {
+                    input.insert(ch);
                 }
             }
             self.add_err.clear();
@@ -1423,6 +1435,7 @@ impl App {
                             self.add_field = 3;
                             self.add_autostart = !self.add_autostart;
                         }
+                        4 => self.add_field = 4,
                         _ => {}
                     }
                 }
@@ -1617,6 +1630,39 @@ impl App {
         }
     }
 
+    /// Type `line` as an order into every running agent below commander `ci`.
+    /// An agent showing a question (`?`) is skipped: the Enter that ends the
+    /// order could answer it.
+    fn issue_order(&mut self, ci: usize, line: &str) -> (String, Notice) {
+        let from = self.cfg.projects[ci].name.clone();
+        let mut bytes = format!("Order from \"{from}\": {line}").into_bytes();
+        bytes.push(b'\r');
+        let (mut sent, mut held) = (0, 0);
+        for j in all_subordinates(&self.cfg.projects, ci) {
+            let delivered = match self.sessions[j].as_mut().filter(|s| s.status.is_running()) {
+                Some(s) if s.phase() != AgentPhase::NeedsInput => {
+                    let ok = s.input(&bytes).is_ok();
+                    if ok {
+                        s.log_event(&format!("order from {from}"));
+                    }
+                    ok
+                }
+                _ => false,
+            };
+            if delivered {
+                sent += 1;
+            } else {
+                held += 1;
+            }
+        }
+        let note = if held > 0 {
+            format!("Order sent to {sent}; {held} not running or waiting on a question")
+        } else {
+            format!("Order sent to {sent}")
+        };
+        (note, if sent > 0 { Notice::Info } else { Notice::Warn })
+    }
+
     fn key_send(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         match k.code {
             KeyCode::Esc => {
@@ -1628,6 +1674,8 @@ impl App {
                 self.mode = Mode::Manager;
                 if line.is_empty() {
                     self.message = ("Empty. Nothing sent.".to_string(), Notice::Info);
+                } else if let (true, Some(&pi)) = (self.send_all, self.order.get(self.selected)) {
+                    self.message = self.issue_order(pi, &line);
                 } else if let Some(&pi) = self.order.get(self.selected) {
                     let alive = self
                         .sessions
@@ -1713,6 +1761,17 @@ impl App {
         }
     }
 
+    /// The text input behind the active add-form field (path, command or
+    /// commander); the toggle fields have none.
+    fn add_input(&mut self) -> Option<&mut LineInput> {
+        match self.add_field {
+            0 => Some(&mut self.add_path),
+            2 => Some(&mut self.add_cmd),
+            4 => Some(&mut self.add_under),
+            _ => None,
+        }
+    }
+
     fn key_add(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Esc => self.mode = Mode::Manager,
@@ -1737,6 +1796,17 @@ impl App {
                         Err(e) => self.add_err = e,
                         Ok(mut p) => {
                             p.autostart = self.add_autostart;
+                            let under = self.add_under.as_str();
+                            let under = under.trim();
+                            if !under.is_empty() {
+                                match check_superior(&self.cfg.projects, p.kind, under) {
+                                    Ok(c) => p.reports_to = Some(c),
+                                    Err(e) => {
+                                        self.add_err = e;
+                                        return;
+                                    }
+                                }
+                            }
                             let name = p.name.clone();
                             let kind_label = p.kind.as_str();
                             self.cfg.projects.push(p);
@@ -1765,65 +1835,47 @@ impl App {
                     }
                 }
             }
-            KeyCode::Tab => self.add_field = (self.add_field + 1) % 4,
-            KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 3) % 4,
-            KeyCode::Down => self.add_field = (self.add_field + 1) % 4,
+            KeyCode::Tab => self.add_field = (self.add_field + 1) % 5,
+            KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
+            KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
             KeyCode::Backspace => {
-                match self.add_field {
-                    0 => {
-                        self.add_path.backspace();
-                    }
-                    2 => {
-                        self.add_cmd.backspace();
-                    }
-                    _ => {}
+                if let Some(input) = self.add_input() {
+                    input.backspace();
                 }
                 self.add_err.clear();
             }
             KeyCode::Delete => {
-                match self.add_field {
-                    0 => {
-                        self.add_path.delete();
-                    }
-                    2 => {
-                        self.add_cmd.delete();
-                    }
-                    _ => {}
+                if let Some(input) = self.add_input() {
+                    input.delete();
                 }
                 self.add_err.clear();
             }
-            KeyCode::Left => match self.add_field {
-                0 => self.add_path.move_left(),
-                1 => {
-                    self.add_kind = self.add_kind.toggled();
+            KeyCode::Left | KeyCode::Right => {
+                let left = k.code == KeyCode::Left;
+                match self.add_field {
+                    1 => self.add_kind = self.add_kind.toggled(),
+                    3 => self.add_autostart = !self.add_autostart,
+                    _ => {
+                        if let Some(input) = self.add_input() {
+                            if left {
+                                input.move_left()
+                            } else {
+                                input.move_right()
+                            }
+                        }
+                    }
                 }
-                2 => self.add_cmd.move_left(),
-                3 => {
-                    self.add_autostart = !self.add_autostart;
+            }
+            KeyCode::Home => {
+                if let Some(input) = self.add_input() {
+                    input.move_home();
                 }
-                _ => {}
-            },
-            KeyCode::Right => match self.add_field {
-                0 => self.add_path.move_right(),
-                1 => {
-                    self.add_kind = self.add_kind.toggled();
+            }
+            KeyCode::End => {
+                if let Some(input) = self.add_input() {
+                    input.move_end();
                 }
-                2 => self.add_cmd.move_right(),
-                3 => {
-                    self.add_autostart = !self.add_autostart;
-                }
-                _ => {}
-            },
-            KeyCode::Home => match self.add_field {
-                0 => self.add_path.move_home(),
-                2 => self.add_cmd.move_home(),
-                _ => {}
-            },
-            KeyCode::End => match self.add_field {
-                0 => self.add_path.move_end(),
-                2 => self.add_cmd.move_end(),
-                _ => {}
-            },
+            }
             KeyCode::Char(' ') if self.add_field == 1 => {
                 self.add_kind = self.add_kind.toggled();
             }
@@ -1834,10 +1886,8 @@ impl App {
                 if !k.modifiers.contains(KeyModifiers::CONTROL)
                     && !k.modifiers.contains(KeyModifiers::ALT) =>
             {
-                match self.add_field {
-                    0 => self.add_path.insert(ch),
-                    2 => self.add_cmd.insert(ch),
-                    _ => {}
+                if let Some(input) = self.add_input() {
+                    input.insert(ch);
                 }
                 self.add_err.clear();
             }
@@ -2099,7 +2149,13 @@ impl App {
                     Notice::Info,
                 ),
                 Some(s) => {
-                    let mut bytes = ledger::brief_line().as_bytes().to_vec();
+                    let projects = &self.cfg.projects;
+                    let commander = superior(projects, pi).map(|c| projects[c].name.as_str());
+                    let subs: Vec<&str> = subordinates(projects, pi)
+                        .into_iter()
+                        .map(|j| projects[j].name.as_str())
+                        .collect();
+                    let mut bytes = ledger::brief_line(&p.name, commander, &subs).into_bytes();
                     bytes.push(b'\r');
                     match s.input(&bytes) {
                         Ok(()) => {
@@ -2139,7 +2195,22 @@ impl App {
             }
             KeyCode::Char('m') if !self.order.is_empty() => {
                 self.mode = Mode::Send;
+                self.send_all = false;
                 self.send_buf.clear();
+            }
+            // Orders: one line to every agent under the selected commander.
+            KeyCode::Char('o') if !self.order.is_empty() => {
+                let pi = self.order[self.selected];
+                if all_subordinates(&self.cfg.projects, pi).is_empty() {
+                    self.message = (
+                        format!("{} has no agents under it", self.cfg.projects[pi].name),
+                        Notice::Info,
+                    );
+                } else {
+                    self.mode = Mode::Send;
+                    self.send_all = true;
+                    self.send_buf.clear();
+                }
             }
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('?') => self.mode = Mode::Help,

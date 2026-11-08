@@ -29,6 +29,7 @@ fn config_roundtrip() {
             kind: Kind::Agent,
             autostart: false,
             ledger: false,
+            reports_to: None,
         }],
         scrollback: None,
         ..Default::default()
@@ -62,6 +63,7 @@ fn order_groups_agents_first() {
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let ps = vec![mk(Kind::Service), mk(Kind::Agent), mk(Kind::Service)];
     assert_eq!(display_order(&ps), vec![1, 0, 2]);
@@ -216,6 +218,7 @@ fn pane_title_name_prefers_service_command() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     assert_eq!(pane_title_name(&agent), "my-agent");
 
@@ -226,6 +229,7 @@ fn pane_title_name_prefers_service_command() {
         kind: Kind::Service,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     assert_eq!(pane_title_name(&service), "npm run dev");
 }
@@ -352,6 +356,7 @@ fn stop_kills_process_tree() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -405,6 +410,7 @@ fn stop_kills_orphaned_grandchildren() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -455,10 +461,12 @@ fn build_project_validates() {
     assert_eq!(p.kind, Kind::Service);
     assert_eq!(p.name, "node");
     assert_eq!(p.command, vec!["node".to_string(), "server.js".to_string()]);
-    // Duplicate agent with same directory is rejected:
+    // A second agent in the same directory gets a unique name:
     let agent = build_project(&[], dir_str, Kind::Agent, parts("")).unwrap();
-    let existing = vec![agent];
-    assert!(build_project(&existing, dir_str, Kind::Agent, parts("")).is_err());
+    let existing = vec![agent.clone()];
+    let second = build_project(&existing, dir_str, Kind::Agent, parts("")).unwrap();
+    assert_eq!(second.name, format!("{}-2", agent.name));
+    assert_eq!(second.path, agent.path);
     assert!(build_project(&[], "", Kind::Agent, parts("")).is_err());
     assert!(build_project(&[], "C:/definitely/not/here/xyz", Kind::Agent, parts("")).is_err());
     let shell_p = build_project(&[], dir_str, Kind::Agent, parts("   ")).unwrap();
@@ -520,6 +528,7 @@ fn filter_matches_name_and_command() {
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let ps = vec![
         mk("api", &["node", "server.js"], Kind::Service),
@@ -633,6 +642,7 @@ fn session_sampling_tracks_a_live_tree() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pid");
@@ -775,6 +785,7 @@ fn persist_helpers_keep_other_writers_projects() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
     // no other test reads it.
@@ -935,6 +946,7 @@ fn pty_smoke() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..100 {
@@ -1012,6 +1024,7 @@ fn remove_unregisters_project() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let mut projects = vec![mk("a"), mk("b")];
     let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
@@ -1048,6 +1061,7 @@ fn remove_persists_to_config_file() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
@@ -1121,6 +1135,7 @@ fn list_table_aligns_columns() {
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     // Registration order is service-first; output is agents-first.
     let projects = vec![
@@ -1408,6 +1423,7 @@ fn agent_tag_shows_program() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     assert_eq!(
         agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
@@ -1463,6 +1479,7 @@ fn group_counts_split_by_kind() {
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let projects = vec![
         mk("a1", Kind::Agent),
@@ -1541,6 +1558,7 @@ fn start_session_starts_and_reports() {
             kind: Kind::Agent,
             autostart: false,
             ledger: false,
+            reports_to: None,
         },
         Project {
             name: "bad".into(),
@@ -1549,6 +1567,7 @@ fn start_session_starts_and_reports() {
             kind: Kind::Service,
             autostart: false,
             ledger: false,
+            reports_to: None,
         },
     ];
     let mut sessions: Vec<Option<Session>> = vec![None, None];
@@ -1573,6 +1592,7 @@ fn merge_appends_missing_projects() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let mut c = Config {
         projects: vec![mk("a")],
@@ -1649,6 +1669,7 @@ fn service_naming_looks_through_shells_and_live_foreground() {
         kind: Kind::Service,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     assert_eq!(live_name(&p, None), "my-dir");
     assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
@@ -1786,6 +1807,7 @@ fn empty_command_errors_instead_of_panicking() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -1904,6 +1926,7 @@ fn add_preview_name_matches_what_gets_registered() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let existing = vec![mk("node")];
     let none: Vec<String> = Vec::new();
@@ -1970,6 +1993,7 @@ fn filter_matches_path_too() {
         kind: Kind::Agent,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     let projects = vec![mk("web", "/work/my-api"), mk("other", "/work/site")];
     assert_eq!(apply_filter(&projects, "my-api"), vec![0]);
@@ -2068,6 +2092,7 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
         kind,
         autostart: false,
         ledger: false,
+        reports_to: None,
     };
     // Config order: svc, a1, a2. Sidebar order: agents first, so a1, a2, svc.
     let projects = vec![
@@ -2178,6 +2203,7 @@ fn ledger_session_records_start_and_exit() {
         kind: Kind::Agent,
         autostart: false,
         ledger: true,
+        reports_to: None,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let (msg, _) = s.ledger_note.take().expect("creation is announced once");
@@ -2206,4 +2232,84 @@ fn download_failures_say_why() {
     assert!(download_failure("000", Some(6)).contains("cannot reach"));
     assert!(download_failure("", Some(35)).contains("exit 35"));
     assert!(download_failure("", None).contains("interrupted"));
+}
+
+#[test]
+fn chain_of_command_orders_ranks_and_briefs() {
+    let mk = |name: &str, under: Option<&str>| Project {
+        name: name.into(),
+        path: PathBuf::from("/tmp"),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: under.map(Into::into),
+    };
+    // Registered out of rank order: soldier, company, platoon.
+    let p = vec![
+        mk("soldier", Some("platoon")),
+        mk("company", None),
+        mk("platoon", Some("company")),
+    ];
+    assert_eq!(display_order(&p), vec![1, 2, 0], "commander before reports");
+    assert_eq!(rank_prefix(&p, 1), "\u{2605} ");
+    assert_eq!(rank_prefix(&p, 2), "  \u{2605} ");
+    assert_eq!(rank_prefix(&p, 0), "    ");
+    assert_eq!(superior(&p, 0), Some(2));
+    assert_eq!(subordinates(&p, 1), vec![2]);
+    assert!(check_superior(&p, Kind::Agent, "COMPANY").is_ok());
+    assert!(check_superior(&p, Kind::Service, "company").is_err());
+    assert!(check_superior(&p, Kind::Agent, "nobody").is_err());
+    // A hand-edited loop neither hangs nor drops agents.
+    let looped = vec![mk("a", Some("b")), mk("b", Some("a"))];
+    assert_eq!(display_order(&looped).len(), 2);
+    let _ = rank_prefix(&looped, 0);
+    let line = crate::ledger::brief_line("platoon", Some("company"), &["soldier"]);
+    assert!(line.contains("commander is \"company\"") && line.contains("soldier"));
+    assert!(!line.contains('\n'));
+}
+
+#[test]
+fn finished_tasks_are_reported_to_the_commander_file() {
+    let dir = scratch_dir("reports");
+    // No ledger, no file.
+    crate::ledger::report(&dir, &dir, "soldier", "platoon");
+    assert!(!dir.join(".squad").exists());
+    std::fs::create_dir_all(dir.join(".squad").join("log")).unwrap();
+    std::fs::write(dir.join(".squad/log/20261108T010000Z-soldier-old.md"), "x").unwrap();
+    std::fs::write(dir.join(".squad/log/20261108T020000Z-soldier-new.md"), "x").unwrap();
+    crate::ledger::report(&dir, &dir, "soldier", "platoon");
+    crate::ledger::report(&dir, &dir, "soldier-2", "platoon");
+    let text = std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap();
+    assert_eq!(text.matches("# Reports").count(), 1, "header written once");
+    assert!(text.contains("**soldier -> platoon**"), "{text}");
+    assert!(
+        text.contains("log/20261108T020000Z-soldier-new.md"),
+        "newest SITREP named"
+    );
+    assert!(!text.contains("soldier-old"));
+}
+
+#[test]
+fn orders_reach_every_depth_below_a_commander() {
+    let mk = |name: &str, under: Option<&str>| Project {
+        name: name.into(),
+        path: PathBuf::from("/tmp"),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: under.map(Into::into),
+    };
+    let p = vec![
+        mk("company", None),
+        mk("platoon", Some("company")),
+        mk("soldier", Some("platoon")),
+        mk("other", None),
+    ];
+    assert_eq!(all_subordinates(&p, 0), vec![1, 2]);
+    assert_eq!(all_subordinates(&p, 1), vec![2]);
+    assert!(all_subordinates(&p, 3).is_empty());
+    let looped = vec![mk("a", Some("b")), mk("b", Some("a"))];
+    assert_eq!(all_subordinates(&looped, 0), vec![1]);
 }

@@ -158,8 +158,61 @@ pub fn event(project: &Path, text: &str) {
         .and_then(|mut f| f.write_all(line.as_bytes()));
 }
 
+/// Name of the newest SITREP in `project`'s log (names start with a UTC
+/// stamp, so the greatest name is the latest).
+fn newest_sitrep(project: &Path) -> Option<String> {
+    fs::read_dir(project.join(DIR).join("log"))
+        .ok()?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .max()
+}
+
+/// Record that `from` finished a task, in `REPORTS.md` of the commander's
+/// project. Squad is the only writer, so appends never collide, and nothing
+/// is typed into any terminal. Does nothing without a ledger.
+pub fn report(commander_dir: &Path, from_dir: &Path, from: &str, to: &str) {
+    let dir = commander_dir.join(DIR);
+    if !dir.is_dir() {
+        return;
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let file = dir.join("REPORTS.md");
+    let head = if file.exists() {
+        ""
+    } else {
+        "# Reports\n\nWritten by squad when an agent finishes a task. Newest last.\n\n"
+    };
+    let sitrep = newest_sitrep(from_dir).map_or("none filed".to_string(), |n| format!("log/{n}"));
+    let line = format!(
+        "{head}- {} **{from} -> {to}**: task complete. Newest SITREP: {sitrep}\n",
+        utc_stamp(secs)
+    );
+    let _ = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 /// What `b` types into an agent to point it at the ledger. No digits or
 /// other keystrokes that could answer a menu by accident.
-pub fn brief_line() -> &'static str {
-    "Report for briefing: read .squad/README.md, then the mission briefing in .squad/CONTEXT.md and the newest SITREPs in .squad/log/. Follow the standing protocol in README.md for the rest of this session."
+///
+/// Also names the agent (so SITREPs say who wrote them) and its chain of
+/// command. Orders and reports travel as SITREPs, so no new channel exists.
+pub fn brief_line(name: &str, commander: Option<&str>, subordinates: &[&str]) -> String {
+    let mut s = format!("Report for briefing: read .squad/README.md, then the mission briefing in .squad/CONTEXT.md and the newest SITREPs in .squad/log/. Follow the standing protocol in README.md for the rest of this session. You are \"{name}\": put \"{name}\" in the file name of every SITREP you file.");
+    if let Some(c) = commander {
+        s.push_str(&format!(
+            " Your commander is \"{c}\": carry out the orders in its SITREPs and report to it."
+        ));
+    }
+    if !subordinates.is_empty() {
+        s.push_str(&format!(
+            " You command {}: give them orders in a SITREP addressed to them. Squad records their finished tasks in .squad/REPORTS.md: read it for their reports.",
+            subordinates.join(", ")
+        ));
+    }
+    s
 }

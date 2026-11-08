@@ -1,4 +1,4 @@
-use crate::config::{display_order, is_bare_shell, Kind, Project};
+use crate::config::{display_order, is_bare_shell, rank_prefix, Kind, Project};
 use crate::session::Session;
 use crate::sys::Usage;
 use ratatui::{
@@ -97,6 +97,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "a          add project",
         "m          message: send a line to session",
         "b          brief the agent on .squad/ (ledger = true)",
+        "o          order: send a line to every agent under a commander",
         "s          stop session (asks to confirm)",
         "r          restart session",
         "d/Del      remove project (asks to confirm)",
@@ -506,7 +507,7 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [-- cmd]
+  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--under <commander>] [-- cmd]
                                                      Register project (path optional for services)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
@@ -516,7 +517,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · m  message (send a line) · b  brief (ledger)
+  /  filter · a  add · m  message (send a line) · b  brief (ledger) · o  order (all under a commander)
   s  stop · r  restart · d/Del  remove · S  start all
   PgUp/PgDn  scroll · q  quit · ?  help
 
@@ -595,9 +596,10 @@ pub fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
 /// and kind columns padded so they line up in a terminal.
 pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
     let order = display_order(projects);
+    let label = |i: usize| format!("{}{}", rank_prefix(projects, i), projects[i].name);
     let name_w = order
         .iter()
-        .map(|&i| projects[i].name.chars().count())
+        .map(|&i| label(i).chars().count())
         .max()
         .unwrap_or(0);
     let kind_w = order
@@ -612,7 +614,7 @@ pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
             let kind = paint_kind(&format!("{:<kind_w$}", p.kind.as_str()), p.kind, color);
             format!(
                 "{:<name_w$}  {kind}  {}  {}",
-                p.name,
+                label(i),
                 p.path.display(),
                 p.command.join(" ")
             )

@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.8.2
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.9.0
 ```
 
 To install elsewhere:
@@ -82,8 +82,9 @@ squad start my-app
 ```
 
 Project names default to the directory name for agents, and to the program
-name for services. Multiple services can share the same directory (automatically
-disambiguated as `program`, `program-2`, etc.). Names are matched
+name for services. Multiple agents and services can share the same directory
+(automatically disambiguated as `my-app`, `my-app-2`, etc.), so two agents can
+work on one project side by side. Names are matched
 case-insensitively by `remove` and `start`.
 
 ## The manager
@@ -124,6 +125,7 @@ case-insensitively by `remove` and `start`.
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `a` | Add a project without leaving the manager (form previews the registered name and offers an autostart toggle) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
+| `o` | Order: type a line into every agent under the selected commander |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
 | `r` | Restart the selected session (asks to confirm with `y` when running) |
 | `d` / `Delete` | Remove the selected project (asks to confirm with `y`; a running session is stopped, files untouched) |
@@ -148,7 +150,7 @@ an editor. squad keeps only `Ctrl+Q` (back to the manager) and
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [--autostart] [-- command args...]
+squad add [<path>] [--kind agent|service] [--autostart] [--under <commander>] [-- command args...]
                                                                    Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
@@ -221,6 +223,25 @@ An existing `.squad/` is never touched. In a git repository squad adds
 it). Press `b` on a running agent to type the order to read the log into it;
 squad never does that by itself, because typing at the wrong moment could
 answer a trust or permission dialog.
+
+### Chain of command
+
+Agents can report to other agents: `squad add C:\work\my-app --under my-app -- claude`
+registers a second agent in the same folder that reports to `my-app`
+(`reports_to = "my-app"` in the config; the add form has a "Reports to"
+field too). Anyone with agents under them is a commander (`★`), and
+commanders can report to commanders, so the chain can grow as deep as you
+need. The sidebar lists each commander above its agents, indented by level.
+
+- **Briefing:** `b` tells an agent its name, its commander and its agents.
+- **Reports:** when an agent finishes a task, squad appends a line to
+  `.squad/REPORTS.md` (who, when, and their newest SITREP). Squad is the
+  only writer and types nothing into any terminal. Commanders read the file.
+- **Orders:** `o` on a commander types one line, prefixed `Order from "<name>":`,
+  into every running agent under it, at any depth. An agent that is showing a
+  question (`?`) is skipped, so the Enter cannot answer it.
+- Give a commander and its agents the same project folder: that is where
+  `.squad/` lives.
 
 In the pane title an agent reads as `Engaged` (working), `Awaiting orders`
 (needs input), `Task complete` or `Standby`.

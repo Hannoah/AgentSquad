@@ -17,7 +17,7 @@ use std::{
 };
 
 use app::run;
-use config::{build_project, load, persist_add, persist_remove, shell, Kind};
+use config::{build_project, check_superior, load, persist_add, persist_remove, shell, Kind};
 use ui::{cli_help, empty_list_hint, list_table};
 use updater::{install_update, is_newer, latest_tag_result};
 
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--under <commander>] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -71,6 +71,7 @@ fn main() -> Result<()> {
             let mut kind = Kind::default();
             let mut autostart = false;
             let mut ledger = false;
+            let mut under: Option<String> = None;
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
             while i < tail.len() {
@@ -88,6 +89,10 @@ fn main() -> Result<()> {
                         ledger = true;
                         i += 1;
                     }
+                    "--under" => {
+                        under = Some(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
                     "--" => {
                         if i + 1 >= tail.len() {
                             bail!("Use -- before command: squad add [<path>] -- claude");
@@ -96,7 +101,7 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --under <commander> or -- command")
                     }
                 }
             }
@@ -104,6 +109,10 @@ fn main() -> Result<()> {
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
             p.ledger = ledger;
+            if let Some(u) = under {
+                p.reports_to =
+                    Some(check_superior(&c.projects, kind, &u).map_err(anyhow::Error::msg)?);
+            }
             // Re-reads the file so a running squad's own writes are not clobbered.
             persist_add(&p)?;
             println!("Registered {} ({})", p.name, kind.as_str());
