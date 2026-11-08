@@ -2194,3 +2194,16 @@ fn ledger_session_records_start_and_exit() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn download_failures_say_why() {
+    assert!(download_failure("504", Some(22)).contains("HTTP 504"));
+    assert!(download_failure("504", Some(22)).contains("their side"));
+    assert!(download_failure("503", Some(22)).contains("try again later"));
+    assert!(download_failure("404", Some(22)).contains("does not exist"));
+    assert!(download_failure("403", Some(22)).contains("HTTP 403"));
+    assert!(download_failure("000", Some(28)).contains("timed out"));
+    assert!(download_failure("000", Some(6)).contains("cannot reach"));
+    assert!(download_failure("", Some(35)).contains("exit 35"));
+    assert!(download_failure("", None).contains("interrupted"));
+}

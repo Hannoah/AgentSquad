@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.8.2 | 업데이트·설치 다운로드 실패 시 원인 표시(`GitHub answered HTTP 504; … try again later`, 404, 시간 초과, 연결 불가), 체크섬 파일을 못 받았을 때도 이유 표시 | 태그 `v0.8.2` 참고 |
 | v0.8.1 | 군대 컨셉 반영: 작전 일지 문안(Operations log, SITREP, Mission briefing), 상태 문구, 창 제목의 에이전트 상태 단어(`Engaged`, `Awaiting orders`, `Task complete`, `Standby`) | 태그 `v0.8.1` 참고 |
 | v0.8.0 | 프로젝트 단위 작전 일지(옵트인 `ledger = true` / `squad add --ledger`): 첫 시작 때 `.squad/`(README 프로토콜, CONTEXT, log/) 자동 생성, squad가 남기는 `events.log`(시작·중지·종료 코드), 저장소면 `.git/info/exclude`에 등록, `b` 키로 에이전트에게 일지 읽기 안내 입력 | 태그 `v0.8.0` 참고 |
 | v0.7.2 | 파괴적 확인창은 `y`만 허용, 우클릭이 번호 메뉴를 열고 즉시 실행하지 않음, 추가 폼 Autostart 토글, 잘린 글자 `…` 표시, 필터가 경로도 검색, 가동 시간 `1h5m`/`2d3h`, 상태줄 칩 `FOCUS`, 사이드바 표시 폭 기준 48칸, 조용한 에이전트에 `idle 5m` 표시, 마지막 선택 프로젝트 기억(`last-project`) | 태그 `v0.7.2` 참고 |

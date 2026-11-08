@@ -178,40 +178,59 @@ pub fn cleanup_old_binaries() {
         }
     }
 }
+/// Fetch `url` into `dest` with Windows' curl, failing with the reason
+/// (HTTP status or what curl could not do) instead of a bare "failed".
+fn download(url: &str, dest: &Path, timeout_secs: &str) -> Result<()> {
+    let out = quiet(system_tool("curl.exe"))
+        .args(["-fsSL", "-m", timeout_secs, "-w", "%{http_code}", "-o"])
+        .arg(dest)
+        .arg(url)
+        .output()
+        .context("Cannot run curl.exe")?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let http = String::from_utf8_lossy(&out.stdout);
+    bail!("{}", download_failure(http.trim(), out.status.code()))
+}
+/// Explain a failed download from curl's `%{http_code}` ("000" when there
+/// was no HTTP answer at all) and its exit code.
+pub fn download_failure(http: &str, curl_exit: Option<i32>) -> String {
+    match http.parse::<u16>() {
+        Ok(404) => "HTTP 404: that release file does not exist".to_string(),
+        Ok(code @ 500..=599) => {
+            format!("GitHub answered HTTP {code}; the problem is on their side, try again later")
+        }
+        Ok(code @ 400..=499) => format!("GitHub refused the download (HTTP {code})"),
+        _ => match curl_exit {
+            Some(28) => "the connection timed out".to_string(),
+            Some(6 | 7) => "cannot reach github.com (check the network or proxy)".to_string(),
+            Some(n) => format!("curl failed (exit {n})"),
+            None => "curl was interrupted".to_string(),
+        },
+    }
+}
 /// Download release `tag` into `work`, unpack it, and check that the binary
 /// really is that version. Returns the path of the verified `squad.exe`.
 pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
     let zip = work.join(ASSET);
-    let ok = quiet(system_tool("curl.exe"))
-        .args(["-fsSL", "-m", "180", "-o"])
-        .arg(&zip)
-        .arg(format!(
-            "https://github.com/{REPO}/releases/download/{tag}/{ASSET}"
-        ))
-        .stdout(Stdio::null())
-        .status()?
-        .success();
-    if !ok {
-        bail!("Download failed");
-    }
+    download(
+        &format!("https://github.com/{REPO}/releases/download/{tag}/{ASSET}"),
+        &zip,
+        "180",
+    )
+    .context("Download failed")?;
 
     // Fail closed: a missing, malformed or unreadable checksum means the
     // download cannot be verified, so it is never installed.
     let sha_asset = format!("{ASSET}.sha256");
     let sha_file = work.join(&sha_asset);
-    let sha_downloaded = quiet(system_tool("curl.exe"))
-        .args(["-fsSL", "-m", "15", "-o"])
-        .arg(&sha_file)
-        .arg(format!(
-            "https://github.com/{REPO}/releases/download/{tag}/{sha_asset}"
-        ))
-        .stdout(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !sha_downloaded {
-        bail!("Checksum file unavailable; refusing to install an unverified build");
-    }
+    download(
+        &format!("https://github.com/{REPO}/releases/download/{tag}/{sha_asset}"),
+        &sha_file,
+        "15",
+    )
+    .context("Checksum file unavailable; refusing to install an unverified build")?;
     let expected = fs::read_to_string(&sha_file)
         .ok()
         .and_then(|raw| parse_sha256(&raw))
