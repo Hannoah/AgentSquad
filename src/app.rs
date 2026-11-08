@@ -55,8 +55,8 @@ fn pane_size(a: Size) -> (u16, u16) {
 }
 
 /// A bordered, centered popup with a bold colored title.
-fn modal(f: &mut Frame, w: u16, h: u16, title: &str, color: Color, lines: Vec<Line<'static>>) {
-    let popup = centered_rect(w, h, f.area());
+fn modal(f: &mut Frame, title: &str, color: Color, lines: Vec<Line<'static>>) {
+    let popup = modal_rect(&lines, f.area());
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(
         Paragraph::new(lines).block(
@@ -574,14 +574,14 @@ impl App {
                         st = st.add_modifier(ratatui::style::Modifier::BOLD);
                     }
                     if Some(pi) == sel_pi {
-                        st = st.bg(Color::DarkGray);
+                        st = st.add_modifier(ratatui::style::Modifier::REVERSED);
                     }
                     st
                 };
                 let detail_style = if Some(pi) == sel_pi {
                     row_style
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM)
                 };
                 let prefix = format!("{mark}{n} ");
                 let status_full = if let Some(ph) = agent_phase {
@@ -601,7 +601,7 @@ impl App {
                     sel_row = Some(items.len());
                 }
                 targets.push(Some(n - 1));
-                items.push(ListItem::new(Line::from(vec![
+                let row = ListItem::new(Line::from(vec![
                     Span::styled(mark, mark_style),
                     Span::styled(format!("{n} "), row_style),
                     Span::styled(fit(&status_full, status_w), status_span_style),
@@ -615,7 +615,31 @@ impl App {
                         },
                     ),
                     Span::styled(fit(&detail, detail_w), detail_style),
-                ])));
+                ]));
+                // Selection is a full-width reversed bar, not just the text.
+                items.push(if Some(pi) == sel_pi {
+                    row.style(selected_row_style())
+                } else {
+                    row
+                });
+                // What a waiting agent is asking, so it can be answered
+                // without opening the session first.
+                if let Some(ask) = self.sessions[pi]
+                    .as_ref()
+                    .filter(|_| agent_phase == Some(AgentPhase::NeedsInput))
+                    .and_then(|s| s.prompt_hint.as_deref())
+                {
+                    targets.push(Some(n - 1));
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::raw("   "),
+                        Span::styled(
+                            fit(ask, inner_w.saturating_sub(3)),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(ratatui::style::Modifier::DIM),
+                        ),
+                    ])));
+                }
             }
             if !any {
                 targets.push(None);
@@ -977,61 +1001,77 @@ impl App {
         );
     }
 
-    fn draw_confirms(&self, f: &mut Frame) {
+    /// The confirmation popups that are open, in the order a click outside
+    /// them dismisses.
+    fn confirm_modals(&self) -> Vec<(&'static str, Color, Vec<Line<'static>>)> {
         let name_of = |pi: usize| self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+        let mut v = Vec::new();
         if let Some(pi) = self.confirm_stop {
-            modal(
-                f,
-                60,
-                30,
-                "Stop session",
-                Color::Red,
-                confirm_stop_lines(name_of(pi)),
-            );
+            v.push(("Stop session", Color::Red, confirm_stop_lines(name_of(pi))));
         }
         if let Some(pi) = self.confirm_remove {
-            modal(
-                f,
-                60,
-                30,
+            v.push((
                 "Remove project",
                 Color::Red,
                 confirm_remove_lines(name_of(pi)),
-            );
+            ));
         }
         if let Some(pi) = self.confirm_restart {
-            modal(
-                f,
-                60,
-                30,
+            v.push((
                 "Restart session",
                 Color::Red,
                 confirm_restart_lines(name_of(pi)),
-            );
-        }
-        if self.confirm_update {
-            let tag = self.update_offer.as_deref().unwrap_or("?");
-            modal(
-                f,
-                60,
-                40,
-                "Update available",
-                Color::Yellow,
-                confirm_update_lines(tag),
-            );
+            ));
         }
         if self.confirm_quit {
             let n = live_session_count(&self.sessions);
-            modal(f, 60, 30, "Quit", Color::Red, confirm_quit_lines(n));
+            v.push(("Quit", Color::Red, confirm_quit_lines(n)));
         }
         if self.confirm_start_all {
             let lines = confirm_start_all_lines(self.stopped_count());
-            modal(f, 60, 30, "Start all sessions", Color::Cyan, lines);
+            v.push(("Start all sessions", Color::Cyan, lines));
+        }
+        if self.confirm_update {
+            let tag = self.update_offer.as_deref().unwrap_or("?");
+            v.push(("Update available", Color::Yellow, confirm_update_lines(tag)));
+        }
+        v
+    }
+
+    fn draw_confirms(&self, f: &mut Frame) {
+        for (title, color, lines) in self.confirm_modals() {
+            modal(f, title, color, lines);
         }
     }
 
+    /// What the add form would register, shown while typing: the name and
+    /// whether it is already taken.
+    fn add_preview(&self) -> Option<(String, bool)> {
+        let parts = split_command(&self.add_cmd.as_str());
+        let name = preview_name(
+            &self.cfg.projects,
+            &self.add_path.as_str(),
+            self.add_kind,
+            &parts,
+        )?;
+        let taken = self.add_kind == Kind::Agent
+            && self
+                .cfg
+                .projects
+                .iter()
+                .any(|p| p.name.eq_ignore_ascii_case(&name));
+        Some((name, taken))
+    }
+
+    /// The add form's popup; its height follows the rows it shows.
+    fn add_popup(&self, area: Rect) -> Rect {
+        let rows =
+            3 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
+        fixed_rect(72, rows + 2, area)
+    }
+
     fn draw_add(&self, f: &mut Frame) {
-        let popup = centered_rect(70, 40, f.area());
+        let popup = self.add_popup(f.area());
         let modal_w = (popup.width as usize).saturating_sub(2);
         f.render_widget(ratatui::widgets::Clear, popup);
         let kind_hint = if self.add_kind == Kind::Agent {
@@ -1102,6 +1142,19 @@ impl App {
                 ));
             }
             lines.push(Line::from(row));
+        }
+        if let Some((name, taken)) = self.add_preview() {
+            lines.push(Line::from(if taken {
+                Span::styled(
+                    format!("  Name already registered: {name}"),
+                    Style::default().fg(Color::Red),
+                )
+            } else {
+                Span::styled(
+                    format!("  Registers as: {name}"),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                )
+            }));
         }
         if !self.add_err.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -1229,46 +1282,46 @@ impl App {
             }
             self.dirty = true;
         } else if m.kind == MouseEventKind::Down(MouseButton::Left) {
-            // Click landed outside a centered popup of w% x h%.
-            let outside = |w: u16, h: u16| {
-                !centered_rect(w, h, area.into())
+            // Click landed outside the open confirmation popup.
+            let outside_modal = self.confirm_modals().first().is_some_and(|(_, _, lines)| {
+                !modal_rect(lines, area.into())
                     .contains(ratatui::layout::Position::new(m.column, m.row))
-            };
+            });
             if self.mode == Mode::Help {
                 self.mode = Mode::Manager;
                 self.dirty = true;
             } else if self.confirm_stop.is_some() {
-                if outside(60, 30) {
+                if outside_modal {
                     self.confirm_stop = None;
                     self.dirty = true;
                 }
             } else if self.confirm_remove.is_some() {
-                if outside(60, 30) {
+                if outside_modal {
                     self.confirm_remove = None;
                     self.dirty = true;
                 }
             } else if self.confirm_restart.is_some() {
-                if outside(60, 30) {
+                if outside_modal {
                     self.confirm_restart = None;
                     self.dirty = true;
                 }
             } else if self.confirm_quit {
-                if outside(60, 30) {
+                if outside_modal {
                     self.confirm_quit = false;
                     self.dirty = true;
                 }
             } else if self.confirm_start_all {
-                if outside(60, 30) {
+                if outside_modal {
                     self.confirm_start_all = false;
                     self.dirty = true;
                 }
             } else if self.confirm_update {
-                if outside(60, 40) {
+                if outside_modal {
                     self.confirm_update = false;
                     self.dirty = true;
                 }
             } else if self.mode == Mode::Add {
-                let popup = centered_rect(70, 40, area.into());
+                let popup = self.add_popup(area.into());
                 let clicked = ratatui::layout::Position::new(m.column, m.row);
                 if !popup.contains(clicked) {
                     if self.add_path.is_empty() && self.add_cmd.is_empty() {

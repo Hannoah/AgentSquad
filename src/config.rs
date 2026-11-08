@@ -378,6 +378,25 @@ pub fn build_project(
         autostart: false,
     })
 }
+/// The name a new project would get, guessed from the typed text alone (no
+/// disk access, so it can run on every redraw). None while it is unknowable.
+pub fn preview_name(
+    existing: &[Project],
+    path_raw: &str,
+    kind: Kind,
+    parts: &[String],
+) -> Option<String> {
+    let trimmed = path_raw.trim().trim_matches('"').trim_matches('\'').trim();
+    let dir = Path::new(trimmed)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    match kind {
+        Kind::Agent => dir,
+        Kind::Service => program_name(parts)
+            .or(dir)
+            .map(|base| unique_name(&base, existing)),
+    }
+}
 /// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.
 fn program_stem(prog: &str) -> String {
     let base = std::path::Path::new(prog)

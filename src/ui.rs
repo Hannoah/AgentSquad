@@ -1,7 +1,6 @@
 use crate::config::{display_order, is_bare_shell, Kind, Project};
 use crate::session::Session;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
 };
@@ -381,24 +380,6 @@ pub fn empty_state_lines(has_projects: bool) -> Vec<String> {
         ]
     }
 }
-pub fn centered_rect(w_pct: u16, h_pct: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - h_pct) / 2),
-            Constraint::Percentage(h_pct),
-            Constraint::Percentage(100 - h_pct - (100 - h_pct) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - w_pct) / 2),
-            Constraint::Percentage(w_pct),
-            Constraint::Percentage(100 - w_pct - (100 - w_pct) / 2),
-        ])
-        .split(v[1])[1]
-}
 
 pub fn confirm_update_lines(tag: &str) -> Vec<Line<'static>> {
     vec![
@@ -418,6 +399,16 @@ pub fn confirm_update_lines(tag: &str) -> Vec<Line<'static>> {
     ]
 }
 /// Centered rect of an exact size, clamped to `area`.
+/// Popup sized to its text: as wide as the longest line (kept between 40 and
+/// 64 columns) and as tall as the lines, centered.
+pub fn modal_rect(lines: &[Line], area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    fixed_rect(
+        widest.saturating_add(4).clamp(40, 64),
+        lines.len() as u16 + 2,
+        area,
+    )
+}
 pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));
     ratatui::layout::Rect::new(
@@ -609,10 +600,9 @@ pub fn keep_visible(offset: usize, sel_row: usize, visible: usize) -> usize {
 /// Selected sidebar row: bright cyan on dark gray so it wins over every
 /// other hue in the row.
 pub fn selected_row_style() -> Style {
+    // Reverse video follows any terminal theme, unlike a fixed gray.
     Style::default()
-        .fg(Color::Cyan)
-        .bg(Color::DarkGray)
-        .add_modifier(ratatui::style::Modifier::BOLD)
+        .add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::REVERSED)
 }
 /// Sidebar project name: selection highlight wins; otherwise the kind
 /// hue, bright while running and dimmed while idle, so Agents and

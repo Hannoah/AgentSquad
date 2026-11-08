@@ -1852,3 +1852,65 @@ fn messages_expire_and_problems_linger_longer() {
     assert_eq!(message_ttl(Notice::Warn), message_ttl(Notice::Error));
     assert!(message_ttl(Notice::Info) >= std::time::Duration::from_secs(3));
 }
+
+#[test]
+fn modal_rect_fits_its_text_and_the_screen() {
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let short = vec![Line::from("Quit?"), Line::from("y / n")];
+    let r = modal_rect(&short, area);
+    assert_eq!(
+        (r.width, r.height),
+        (40, 4),
+        "narrow text still gets a usable width"
+    );
+    let long = vec![Line::from("x".repeat(120))];
+    assert_eq!(modal_rect(&long, area).width, 64, "wide text is capped");
+    let tiny = modal_rect(&short, ratatui::layout::Rect::new(0, 0, 30, 3));
+    assert!(
+        tiny.width <= 30 && tiny.height <= 3,
+        "never larger than the screen"
+    );
+}
+
+#[test]
+fn add_preview_name_matches_what_gets_registered() {
+    let mk = |name: &str| Project {
+        name: name.into(),
+        path: PathBuf::from("x"),
+        command: vec!["x".into()],
+        kind: Kind::Agent,
+        autostart: false,
+    };
+    let existing = vec![mk("node")];
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        preview_name(&existing, r#" "C:\work\my-app\" "#, Kind::Agent, &none),
+        Some("my-app".into())
+    );
+    assert_eq!(preview_name(&existing, "", Kind::Agent, &none), None);
+    assert_eq!(preview_name(&existing, ".", Kind::Agent, &none), None);
+    let node = vec!["node".to_string(), "server.js".to_string()];
+    assert_eq!(
+        preview_name(&existing, "", Kind::Service, &node),
+        Some("node-2".into()),
+        "services get a unique program name"
+    );
+}
+
+#[test]
+fn prompt_summary_finds_the_question() {
+    let screen = "\
+ Edit file src/lib.rs
++ let x = 1;
+
+\u{2502} Do you want to proceed? \u{2502}
+\u{2502} \u{276f} 1. Yes \u{2502}
+\u{2502}   2. No \u{2502}
+";
+    assert_eq!(
+        prompt_summary(screen).as_deref(),
+        Some("Do you want to proceed?")
+    );
+    assert_eq!(prompt_summary("only line\n").as_deref(), Some("only line"));
+    assert_eq!(prompt_summary("  \n\n"), None);
+}

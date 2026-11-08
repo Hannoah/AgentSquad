@@ -206,36 +206,38 @@ fn is_choice_line(line: &str) -> bool {
 pub fn is_needs_input(screen_text: &str) -> bool {
     !is_working_text(screen_text) && has_prompt(screen_text)
 }
+/// Phrases that mean an agent is waiting on the user.
+const STRONG: [&str; 17] = [
+    "[y/n]",
+    "(y/n)",
+    "[y/n/a]",
+    "[y/n/d]",
+    "(y/n/a)",
+    "[yes/no]",
+    "(yes/no)",
+    "(y)es / (n)o",
+    "allow once",
+    "allow always",
+    "allow tool",
+    "allow execution",
+    "esc to cancel",
+    "press enter to continue",
+    "press enter to proceed",
+    "press any key",
+    "don't ask again",
+];
+const QUESTION: [&str; 6] = [
+    "do you want to",
+    "are you sure",
+    "proceed?",
+    "approve?",
+    "confirm?",
+    "permission to",
+];
+
 /// The prompt half of `is_needs_input`, for callers that already know the
 /// agent is not working.
 fn has_prompt(screen_text: &str) -> bool {
-    const STRONG: [&str; 17] = [
-        "[y/n]",
-        "(y/n)",
-        "[y/n/a]",
-        "[y/n/d]",
-        "(y/n/a)",
-        "[yes/no]",
-        "(yes/no)",
-        "(y)es / (n)o",
-        "allow once",
-        "allow always",
-        "allow tool",
-        "allow execution",
-        "esc to cancel",
-        "press enter to continue",
-        "press enter to proceed",
-        "press any key",
-        "don't ask again",
-    ];
-    const QUESTION: [&str; 6] = [
-        "do you want to",
-        "are you sure",
-        "proceed?",
-        "approve?",
-        "confirm?",
-        "permission to",
-    ];
     let lines: Vec<String> = tail_lines(screen_text, 6)
         .into_iter()
         .filter(|l| !is_code_or_diff_line(l))
@@ -250,6 +252,34 @@ fn has_prompt(screen_text: &str) -> bool {
     }
     lines.iter().any(|l| is_choice_line(l))
         && lines.iter().any(|l| QUESTION.iter().any(|p| l.contains(p)))
+}
+
+/// The line of `screen_text` that says what the agent is asking: the newest
+/// one that reads like a question, else the newest line. Box-drawing frames
+/// around the text are dropped.
+pub fn prompt_summary(screen_text: &str) -> Option<String> {
+    let frame = |c: char| c.is_whitespace() || "│┃|╭╮╰╯─".contains(c);
+    let lines: Vec<&str> = screen_text
+        .lines()
+        .rev()
+        .map(|l| l.trim_matches(frame))
+        .filter(|l| !l.is_empty())
+        .take(6)
+        .collect();
+    let asks = |l: &str| {
+        let lower = l.to_ascii_lowercase();
+        !is_code_or_diff_line(&lower)
+            && STRONG
+                .iter()
+                .chain(QUESTION.iter())
+                .any(|p| lower.contains(p))
+    };
+    lines
+        .iter()
+        .copied()
+        .find(|l| asks(l))
+        .or_else(|| lines.first().copied())
+        .map(str::to_string)
 }
 
 /// A status line led by a spinner glyph and an ellipsis: "✻ Pondering…".
@@ -396,6 +426,8 @@ pub struct Session {
     /// Phase seen at the last check, to spot changes worth a bell.
     pub last_phase: AgentPhase,
     pub cached_needs_input: bool,
+    /// The question a waiting agent shows, for the sidebar.
+    pub prompt_hint: Option<String>,
     pub cached_working_text: bool,
     /// Program the user started inside a shell session ("jarvis").
     pub fg_name: Option<String>,
@@ -466,6 +498,7 @@ impl Session {
             dismissed_exit: false,
             last_phase: AgentPhase::Idle,
             cached_needs_input: false,
+            prompt_hint: None,
             cached_working_text: false,
             fg_name: None,
             gen: 0,
@@ -496,6 +529,11 @@ impl Session {
         let working = is_working_text(&tail);
         self.cached_working_text = working;
         self.cached_needs_input = !working && has_prompt(&tail);
+        self.prompt_hint = if self.cached_needs_input {
+            prompt_summary(&tail)
+        } else {
+            None
+        };
         self.flags_stale = false;
         self.last_flags = Instant::now();
     }

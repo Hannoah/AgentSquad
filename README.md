@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.7.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.7.1
 ```
 
 To install elsewhere:
@@ -97,6 +97,8 @@ case-insensitively by `remove` and `start`.
   (the agent and everything it spawned); CPU is a share of the entire
   machine, like Task Manager, and memory is the summed working set.
   Group headers show running/total counts (`Agents (1/2)`).
+  An agent waiting for you (`?`) gets a yellow bar, and the question it is
+  asking appears under its row.
   Service rows also show their command; agent rows show their program
   unless it is the default shell.
 - **Right:** the selected session's terminal output (full xterm emulation:
