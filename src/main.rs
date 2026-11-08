@@ -33,6 +33,27 @@ fn main() -> Result<()> {
         println!("squad {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // Needs no config, so a broken config.toml must not block updating.
+    if args.first().map(String::as_str) == Some("update") {
+        if cfg!(debug_assertions) {
+            bail!("Debug builds never self-update; install a release build first");
+        }
+        let check_only = args.get(1).map(String::as_str) == Some("--check");
+        let current = env!("CARGO_PKG_VERSION");
+        let tag = latest_tag_result()?;
+        if !is_newer(current, &tag) {
+            println!("squad v{current} is up to date (latest {tag})");
+            return Ok(());
+        }
+        println!("squad {tag} is available (you have v{current})");
+        if check_only {
+            return Ok(());
+        }
+        println!("Downloading and verifying {tag}...");
+        install_update(&tag)?;
+        println!("Updated to {tag}. Restart squad to use it.");
+        return Ok(());
+    }
     let c = load()?;
     match args.first().map(String::as_str) {
         None => run(c, None),
@@ -104,26 +125,6 @@ fn main() -> Result<()> {
                 .position(|p| p.name.eq_ignore_ascii_case(name))
                 .with_context(|| format!("Project not registered: {name}"))?;
             run(c, Some(i))
-        }
-        Some("update") => {
-            if cfg!(debug_assertions) {
-                bail!("Debug builds never self-update; install a release build first");
-            }
-            let check_only = args.get(1).map(String::as_str) == Some("--check");
-            let current = env!("CARGO_PKG_VERSION");
-            let tag = latest_tag_result()?;
-            if !is_newer(current, &tag) {
-                println!("squad v{current} is up to date (latest {tag})");
-                return Ok(());
-            }
-            println!("squad {tag} is available (you have v{current})");
-            if check_only {
-                return Ok(());
-            }
-            println!("Downloading and verifying {tag}...");
-            install_update(&tag)?;
-            println!("Updated to {tag}. Restart squad to use it.");
-            Ok(())
         }
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
     }

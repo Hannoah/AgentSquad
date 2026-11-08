@@ -15,6 +15,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Tag matches Cargo.toml version
+        # squad update refuses a build whose --version differs from the tag.
+        run: |
+          $want = "v" + ((Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value)
+          if ("${{ github.ref_name }}" -ne $want) { throw "Tag ${{ github.ref_name }} does not match Cargo.toml version $want" }
       - name: Run tests
         run: cargo test --locked
       - name: Build release
