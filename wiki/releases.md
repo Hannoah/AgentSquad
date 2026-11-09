@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.13.0 | 추가 폼 Path 칸 아래에 하위 폴더 목록을 입력하는 즉시 표시(앞부분 일치, 끝의 `\`는 폴더 안 전체). `↑`/`↓`로 고르고 `Enter` 또는 클릭으로 채우면 그 폴더의 하위 폴더가 이어서 나와 트리를 따라 내려갈 수 있음. 마지막 행에서 `↓`는 다음 필드로 이동. 기존 `Alt+1`–`Alt+9` 선택은 이 목록으로 대체. 붙여넣기 때도 목록과 경로 검사 갱신 | 태그 `v0.13.0` 참고 |
 | v0.12.0 | 터미널 패널에서 `Shift` 없이 마우스 드래그로 텍스트를 선택하고, 버튼을 놓으면 클립보드로 자동 복사(`Ctrl+C`는 선택이 있을 때만 복사, 없으면 세션으로 전달). 끝난 세션은 드래그 없이 클릭했을 때만 재시작해 마지막 출력을 복사할 수 있음 | 태그 `v0.12.0` 참고 |
 | v0.11.1 | 릴리스 워크플로에 SignPath 코드 서명 단계 추가(저장소 변수 `SIGNPATH_ORGANIZATION_ID`를 설정하기 전에는 건너뛰므로 이 릴리스는 서명 없음), 릴리스 잡에서 `rust-cache` 제거, `.signpath/artifact-configuration.xml`과 설정 절차 문서 추가. 바이너리 동작 변화 없음 | 태그 `v0.11.1` 참고 |
 | v0.11.0 | 추가 폼 경로 탐색: Path 칸에서 `Tab` 폴더 자동완성(대소문자 무시, 공통 접두사, 후보 목록), 빈 칸에 기존 프로젝트의 부모 폴더 제안, `Alt+1`–`Alt+9`로 후보 선택, 입력 즉시 `✓ folder`/`✗ not found`/`✗ not a folder` 표시(칸 이동은 `↓`/`Shift+Tab`). 창 제목에 선택한 프로젝트 이름(`squad - name`)을 표시하고 종료 시 복원. README에 백신(AhnLab MDP)이 `powershell.exe`를 막을 때의 대처 추가 | 태그 `v0.11.0` 참고 |
@@ -24,7 +25,8 @@
 | v0.6.5 | 깨진 `config.toml`이 `squad update`를 막던 문제 수정(update는 설정을 읽지 않음), 릴리스 워크플로가 태그와 `Cargo.toml` 버전 불일치를 거부 | 태그 `v0.6.5` 참고 |
 | v0.6.4 | `app::run()`을 `App` 구조체와 `draw_*`, `on_*`, `key_*` 메서드로 분할(동작 변화 없는 리팩터링), 확인 모달 공통화 | 태그 `v0.6.4` 참고 |
 | v0.6.3 | 업데이트 중 종료 차단(squad.exe 유실 방지), 빈 `command` 설정이 패닉 대신 에러, 실행 중 세션 `r` 재시작에 확인창, 삭제는 저장 성공 후에만 세션 정리, 설정 임시 파일명에 pid 추가 | 태그 `v0.6.3` 참고 |
-| v0.6.2 | 설치 스크립트 SHA256 검증을 fail-closed로 변경, 설정 마이그레이션을 `version` 필드로 파일당 1회만 실행(의도적 `cmd.exe` 유지), `m`(Send)이 Enter(``)로 전송, CLI `add`/`remove`가 저장 직전 재읽기(`persist_add`/`persist_remove`), 셸 서비스가 `node`/`python` 스크립트를 패키지·스크립트 이름(`jarvis-cli`)으로 표시(프로세스 명령줄 읽기) | 태그 `v0.6.2` 참고 |
+| v0.6.2 | 설치 스크립트 SHA256 검증을 fail-closed로 변경, 설정 마이그레이션을 `version` 필드로 파일당 1회만 실행(의도적 `cmd.exe` 유지), `m`(Send)이 Enter(`
+`)로 전송, CLI `add`/`remove`가 저장 직전 재읽기(`persist_add`/`persist_remove`), 셸 서비스가 `node`/`python` 스크립트를 패키지·스크립트 이름(`jarvis-cli`)으로 표시(프로세스 명령줄 읽기) | 태그 `v0.6.2` 참고 |
 | v0.6.1 | 기존 `config.toml`에 저장된 `command = ["cmd.exe"]` 항목을 로드 시 자동으로 PowerShell(`shell()`)로 마이그레이션하고, 기본 셸 Service가 `"cmd"`로 표시되던 문제 수정 | 태그 `v0.6.1` 참고 |
 | v0.6.0 | 기본 셸을 PowerShell(`pwsh.exe`/`powershell.exe -NoLogo`)로 변경, 셸 기반 Service의 실시간 포그라운드 프로세스 이름 감지(`jarvis` 등), 작업 중 `?`(`NeedsInput`) 오탐 방지(Working 우선순위 및 코드/diff 필터링), 백그라운드 주기적 업데이트 감시(15분) 및 상태바 `⬆ (U)` 배지·`squad update` CLI 추가, SHA256 fail-closed 검증, `SessionStatus` enum 도입, 터미널 `RenderCache` 및 하단 12줄 쓰로틀 스캔, 병렬 세션 시작(`start_sessions`) 및 일괄 트리 종료(`shutdown_all`) | 태그 `v0.6.0` 참고 |
 | v0.5.9 | 모드 불리언 5개를 `Mode` enum 하나로 통합(포커스 중 상태바 칩 클릭 시 도움말이 키를 가져가도록 수정), SHA256 코드를 `as_chunks`로 바꿔 최신 clippy `-D warnings` 통과 | 태그 `v0.5.9` 참고 |

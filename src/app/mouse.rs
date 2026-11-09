@@ -42,7 +42,7 @@ impl App {
                     input.insert(ch);
                 }
             }
-            self.add_err.clear();
+            self.add_edited();
         }
     }
 
@@ -208,7 +208,14 @@ impl App {
                             self.add_autostart = !self.add_autostart;
                         }
                         4 => self.add_field = 4,
-                        _ => {}
+                        // The folder list: click fills the path with that row.
+                        r => {
+                            let (top, win) = (self.add_list_top(), self.add_pick_window());
+                            let row = usize::from(r.saturating_sub(top));
+                            if r >= top && row < win.len() {
+                                self.pick_path(win.start + row);
+                            }
+                        }
                     }
                 }
                 self.dirty = true;

@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.12.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.13.0
 ```
 
 To install elsewhere:
@@ -123,7 +123,7 @@ case-insensitively by `remove` and `start`.
 | `1`–`9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
-| `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; `Tab` in the Path field completes folders, `↓` moves to the next field) |
+| `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
@@ -143,12 +143,15 @@ case-insensitively by `remove` and `start`.
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.
 
-**Picking a path in the add form.** An empty Path field lists the folders your
-projects already live in (`Alt+1`–`Alt+9` picks one; `Tab` takes the first).
-`Tab` completes the last segment against the disk, case-insensitively, and
-fills in the part all matches share; when several match they are listed and
-`Alt+1`–`Alt+9` picks one. A line under the fields says `✓ folder`,
-`✗ not found` or `✗ not a folder` right away.
+**Picking a path in the add form.** The folders under the Path field are
+listed as you type: the subfolders matching the last segment (a trailing `\`
+lists everything inside), or the folders your projects already live in while
+the field is empty. `↓` / `↑` highlight a row, `Enter` (or a click) fills it in
+and lists *its* subfolders, so you can walk down the tree; past the last row
+`↓` moves to the next field, and `Enter` with nothing highlighted saves.
+`Tab` completes the last segment against the disk, case-insensitively, up to
+the part all matches share (or takes the highlighted row). A line under the
+fields says `✓ folder`, `✗ not found` or `✗ not a folder` right away.
 
 **Selecting and copying terminal text.** Drag in a terminal pane (no `Shift`
 needed): the text is highlighted and copied when you release the button, and

@@ -317,7 +317,7 @@ fn hint_text_matches_legacy_strings() {
     );
     assert_eq!(
         mode_hints(Mode::Add),
-        "Tab complete path | Alt+1-9 pick | ↓ next field | Enter save | Esc cancel"
+        "Tab complete path | ↑↓ pick folder | Enter save | Esc cancel"
     );
     assert_eq!(mode_hints(Mode::Help), "?/Esc closes");
 }

@@ -219,15 +219,22 @@ impl App {
         }
     }
 
-    /// The Path field changed: re-check it and drop stale matches and errors.
-    fn path_edited(&mut self) {
-        self.add_picks.clear();
-        self.add_state = pathpick::check(&self.add_path.as_str());
+    /// The Path field changed: re-check it, relist the folders under it and
+    /// drop stale errors.
+    pub(super) fn path_edited(&mut self) {
+        let text = self.add_path.as_str();
+        self.add_picks = if text.is_empty() {
+            pathpick::roots(&self.cfg.projects)
+        } else {
+            pathpick::suggest(&text)
+        };
+        self.add_sel = None;
+        self.add_state = pathpick::check(&text);
         self.add_err.clear();
     }
 
     /// A text field of the form changed.
-    fn add_edited(&mut self) {
+    pub(super) fn add_edited(&mut self) {
         if self.add_field == 0 {
             self.path_edited();
         } else {
@@ -240,39 +247,52 @@ impl App {
         self.path_edited();
     }
 
-    /// What `Alt+1..9` picks: the usual parent folders while Path is empty,
-    /// otherwise the matches of the last Tab.
-    pub(super) fn add_candidates(&self) -> Vec<Pick> {
-        if self.add_path.is_empty() {
-            pathpick::roots(&self.cfg.projects)
-        } else {
-            self.add_picks.clone()
+    /// Fill the Path field with list row `i`; its subfolders then list, so
+    /// repeating this walks down the tree.
+    pub(super) fn pick_path(&mut self, i: usize) {
+        if let Some((_, text)) = self.add_picks.get(i) {
+            let text = text.clone();
+            self.set_path(&text);
         }
     }
 
-    /// Tab in the Path field: an empty field takes the most used parent
-    /// folder; otherwise complete the last segment against the disk.
+    /// Tab in the Path field: take the highlighted folder; otherwise an
+    /// empty field takes the first suggested parent and a typed one completes
+    /// its last segment against the disk.
     fn complete_path(&mut self) {
-        let text = self.add_path.as_str();
-        let root = text
-            .is_empty()
-            .then(|| pathpick::roots(&self.cfg.projects).into_iter().next())
-            .flatten();
-        if let Some((_, text)) = root {
-            return self.set_path(&text);
+        if let Some(i) = self.add_sel {
+            return self.pick_path(i);
         }
-        match pathpick::complete(&text) {
-            Some(c) => {
-                self.set_path(&c.text);
-                self.add_picks = c.picks;
-            }
+        if self.add_path.is_empty() {
+            return self.pick_path(0);
+        }
+        match pathpick::complete(&self.add_path.as_str()) {
+            Some(text) => self.set_path(&text),
             None => self.add_err = "No folder matches".into(),
+        }
+    }
+
+    /// Down/Up in the Path field step through the folder list; past either
+    /// end they move to the neighbouring field.
+    fn step_path_list(&mut self, down: bool) {
+        let n = self.add_picks.len();
+        match (down, self.add_sel) {
+            (true, None) if n > 0 => self.add_sel = Some(0),
+            (true, Some(i)) if i + 1 < n => self.add_sel = Some(i + 1),
+            (false, Some(0)) => self.add_sel = None,
+            (false, Some(i)) => self.add_sel = Some(i - 1),
+            (true, _) => self.add_field = 1,
+            (false, None) => self.add_field = 4,
         }
     }
 
     pub(super) fn key_add(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Esc => self.mode = Mode::Manager,
+            // A highlighted folder fills the path instead of saving.
+            KeyCode::Enter if self.add_field == 0 && self.add_sel.is_some() => {
+                self.pick_path(self.add_sel.unwrap_or(0));
+            }
             KeyCode::Enter => {
                 self.add_err.clear();
                 // A new project must be visible, so drop any filter.
@@ -339,6 +359,8 @@ impl App {
             }
             KeyCode::Tab if self.add_field == 0 => self.complete_path(),
             KeyCode::Tab => self.add_field = (self.add_field + 1) % 5,
+            KeyCode::Up if self.add_field == 0 => self.step_path_list(false),
+            KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
             KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
             KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
             KeyCode::Backspace => {
@@ -377,17 +399,6 @@ impl App {
             KeyCode::End => {
                 if let Some(input) = self.add_input() {
                     input.move_end();
-                }
-            }
-            KeyCode::Char(d @ '1'..='9')
-                if k.modifiers.contains(KeyModifiers::ALT) && self.add_field == 0 =>
-            {
-                let pick = self
-                    .add_candidates()
-                    .into_iter()
-                    .nth(d as usize - '1' as usize);
-                if let Some((_, text)) = pick {
-                    self.set_path(&text);
                 }
             }
             KeyCode::Char(' ') if self.add_field == 1 => {

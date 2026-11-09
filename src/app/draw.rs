@@ -22,6 +22,9 @@ fn modal(f: &mut Frame, title: &str, color: Color, lines: Vec<Line<'static>>) {
     );
 }
 
+/// Folder rows the add form shows at once; the list scrolls past this.
+const PICK_ROWS: usize = 6;
+
 impl App {
     pub(super) fn draw(&mut self, f: &mut Frame) {
         let sidebar = sidebar_width(f.area().width);
@@ -730,32 +733,30 @@ impl App {
         Some(Line::from(spans))
     }
 
-    /// Pickable paths as `[1] name  [2] name` lines (at most 3), wrapped to
-    /// the popup. Only the Path field offers them.
-    fn add_pick_lines(&self) -> Vec<String> {
+    /// The rows of `add_picks` on screen: at most `PICK_ROWS`, scrolled so the
+    /// highlighted one stays visible. Only the Path field lists folders.
+    pub(super) fn add_pick_window(&self) -> std::ops::Range<usize> {
         if self.add_field != 0 {
-            return Vec::new();
+            return 0..0;
         }
-        let mut lines = vec![String::from("  ")];
-        for (i, (label, _)) in self.add_candidates().iter().enumerate() {
-            let item = format!("[{}] {label}  ", i + 1);
-            let cur = lines.last_mut().expect("never empty");
-            if cur.trim().is_empty() || cur.chars().count() + item.chars().count() <= 68 {
-                cur.push_str(&item);
-            } else {
-                lines.push(format!("  {item}"));
-            }
-        }
-        lines.retain(|l| !l.trim().is_empty());
-        lines.truncate(3);
-        lines
+        let n = self.add_picks.len();
+        let start = self
+            .add_sel
+            .map_or(0, |s| (s + 1).saturating_sub(PICK_ROWS));
+        start..(start + PICK_ROWS).min(n)
+    }
+
+    /// Popup row (inside the border) where the first folder row is drawn.
+    pub(super) fn add_list_top(&self) -> u16 {
+        5 + u16::from(self.add_status().is_some()) + 1
     }
 
     /// The add form's popup; its height follows the rows it shows.
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
+        let list = self.add_pick_window().len();
         let rows = 5
             + u16::from(self.add_status().is_some())
-            + self.add_pick_lines().len() as u16
+            + if list > 0 { list as u16 + 1 } else { 0 }
             + u16::from(!self.add_err.is_empty());
         fixed_rect(72, rows + 2, area)
     }
@@ -841,10 +842,27 @@ impl App {
             lines.push(Line::from(row));
         }
         lines.extend(self.add_status());
-        for l in self.add_pick_lines() {
+        let win = self.add_pick_window();
+        if !win.is_empty() {
             lines.push(Line::from(Span::styled(
-                l,
-                Style::default().fg(Color::Cyan),
+                format!(
+                    "  {} folders · ↑↓ choose · Enter fills",
+                    self.add_picks.len()
+                ),
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            )));
+        }
+        for i in win {
+            let (label, _) = &self.add_picks[i];
+            let on = self.add_sel == Some(i);
+            let style = if on {
+                Style::default().bg(Color::Cyan).fg(Color::Black)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {} {label}", if on { "▸" } else { " " }),
+                style,
             )));
         }
         if !self.add_err.is_empty() {

@@ -204,8 +204,7 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
         ],
         Mode::Add => &[
             ("Tab", "complete path"),
-            ("Alt+1-9", "pick"),
-            ("↓", "next field"),
+            ("↑↓", "pick folder"),
             ("Enter", "save"),
             ("Esc", "cancel"),
         ],
@@ -244,7 +243,7 @@ pub fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("Enter", "save"),
             ("Esc", "cancel"),
             ("Tab", "complete"),
-            ("↓", "next"),
+            ("↑↓", "pick"),
         ],
         _ => &[],
     }

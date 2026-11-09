@@ -16,35 +16,50 @@ fn tree(tag: &str) -> PathBuf {
 fn tab_completes_one_match_and_the_shared_prefix_of_many() {
     let root = tree("pp-complete");
     let r = root.display();
-    let one = complete(&format!("{r}{S}oth")).unwrap();
-    assert_eq!(one.text, format!("{r}{S}Other{S}"), "case follows the disk");
-    assert!(one.picks.is_empty());
-
-    let many = complete(&format!("{r}{S}WO")).unwrap();
     assert_eq!(
-        many.text,
+        complete(&format!("{r}{S}oth")).unwrap(),
+        format!("{r}{S}Other{S}"),
+        "case follows the disk"
+    );
+    assert_eq!(
+        complete(&format!("{r}{S}WO")).unwrap(),
         format!("{r}{S}work-"),
         "folders only, never workfile"
     );
-    assert_eq!(many.picks.len(), 2);
-    assert_eq!(many.picks[0].0, format!("work-a{S}"));
-    assert_eq!(many.picks[1].1, format!("{r}{S}work-b{S}"));
-
     assert!(complete(&format!("{r}{S}zzz")).is_none());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn completion_hides_dot_folders_until_asked_and_keeps_quotes() {
-    let root = tree("pp-dot");
+fn suggest_lists_matching_subfolders_and_hides_dot_folders_until_asked() {
+    let root = tree("pp-suggest");
     let r = root.display();
-    let all = complete(&format!("{r}{S}")).unwrap();
-    assert_eq!(all.picks.len(), 3, "Other, work-a, work-b; not .hidden");
-    assert_eq!(all.text, format!("{r}{S}"));
-    let dot = complete(&format!("{r}{S}.h")).unwrap();
-    assert_eq!(dot.text, format!("{r}{S}.hidden{S}"));
-    let quoted = complete(&format!("\"{r}{S}oth")).unwrap();
-    assert_eq!(quoted.text, format!("\"{r}{S}Other{S}"));
+    let all = suggest(&format!("{r}{S}"));
+    let labels: Vec<_> = all.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            format!("Other{S}"),
+            format!("work-a{S}"),
+            format!("work-b{S}")
+        ]
+    );
+    assert_eq!(
+        all[1].1,
+        format!("{r}{S}work-a{S}"),
+        "a pick fills the full path"
+    );
+    assert_eq!(suggest(&format!("{r}{S}WO")).len(), 2, "prefix, any case");
+    assert_eq!(
+        suggest(&format!("{r}{S}.h"))[0].1,
+        format!("{r}{S}.hidden{S}")
+    );
+    assert_eq!(
+        suggest(&format!("\"{r}{S}oth"))[0].1,
+        format!("\"{r}{S}Other{S}"),
+        "an opening quote is kept"
+    );
+    assert!(suggest(&format!("{r}{S}zzz")).is_empty());
     let _ = fs::remove_dir_all(root);
 }
 

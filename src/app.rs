@@ -107,8 +107,11 @@ struct App {
     add_err: String,
     /// What the Path field points at (checked on edits, not per frame).
     add_state: PathState,
-    /// Matches from the last Tab, pickable with Alt+1..9.
+    /// The folders listed under the Path field: the parents your projects live in
+    /// while it is empty, otherwise the subfolders matching what is typed.
     add_picks: Vec<Pick>,
+    /// The highlighted row of `add_picks`; None until the user steps into the list.
+    add_sel: Option<usize>,
     /// Text being selected (or just copied) in the terminal pane.
     sel: Option<Selection>,
     confirm_stop: Option<usize>,
@@ -198,6 +201,7 @@ impl App {
             add_err: String::new(),
             add_state: PathState::Blank,
             add_picks: Vec::new(),
+            add_sel: None,
             sel: None,
             confirm_stop: None,
             confirm_remove: None,
@@ -489,7 +493,7 @@ impl App {
         self.add_autostart = false;
         self.add_err.clear();
         self.add_state = PathState::Blank;
-        self.add_picks.clear();
+        self.path_edited();
     }
 
     fn stopped_count(&self) -> usize {

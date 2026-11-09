@@ -1,4 +1,4 @@
-//! Path helpers for the add form: Tab completion, folder suggestions and a
+//! Path helpers for the add form: Tab completion, the live subfolder list and a
 //! live check. Pure functions over the typed text, so they test without a UI.
 
 use crate::config::{clean_path, Project};
@@ -6,8 +6,8 @@ use std::{fs, path::MAIN_SEPARATOR};
 
 /// A pickable path: (short label shown in the form, full text it fills in).
 pub type Pick = (String, String);
-/// Most candidates the form lists; `Alt+1`..`Alt+9` pick them.
-const MAX_PICKS: usize = 9;
+/// Most subfolders the form lists (it shows a few at a time and scrolls).
+const MAX_PICKS: usize = 50;
 /// Most suggested parent folders shown for an empty Path field.
 const MAX_ROOTS: usize = 6;
 
@@ -60,18 +60,20 @@ pub fn roots(projects: &[Project]) -> Vec<Pick> {
         .collect()
 }
 
-/// Result of one Tab press.
-pub struct Completion {
-    /// The new field text: a single match, or the longest shared prefix.
-    pub text: String,
-    /// Every match when there are several (each full text ends with a separator).
-    pub picks: Vec<Pick>,
+/// The folders matching the last segment of the typed text.
+struct Scan {
+    quote: &'static str,
+    /// Typed text up to and including the last separator.
+    dir: String,
+    sep: char,
+    /// Matching folder names, sorted case-insensitively. Never empty.
+    names: Vec<String>,
 }
 
-/// Complete the last segment of `text` against the folders on disk. None
-/// when nothing matches. Matching ignores case (Windows paths do); dot
-/// folders only show once the prefix starts with a dot.
-pub fn complete(text: &str) -> Option<Completion> {
+/// Look the last segment of `text` up on disk. None when nothing matches.
+/// Matching ignores case (Windows paths do); dot folders only show once the
+/// prefix starts with a dot.
+fn scan(text: &str) -> Option<Scan> {
     let (quote, rest) = match text.strip_prefix('"') {
         Some(r) => ("\"", r),
         None => ("", text),
@@ -97,14 +99,51 @@ pub fn complete(text: &str) -> Option<Completion> {
             n.to_lowercase().starts_with(&want) && (prefix.starts_with('.') || !n.starts_with('.'))
         })
         .collect();
-    names.sort_by_key(|n| n.to_lowercase());
-    let first: Vec<char> = names.first()?.chars().collect();
-    if names.len() == 1 {
-        return Some(Completion {
-            text: format!("{quote}{dir}{}{sep}", names[0]),
-            picks: Vec::new(),
-        });
+    if names.is_empty() {
+        return None;
     }
+    names.sort_by_key(|n| n.to_lowercase());
+    Some(Scan {
+        quote,
+        dir: dir.to_string(),
+        sep,
+        names,
+    })
+}
+
+/// The folders to list under the Path field for the typed text; a trailing
+/// separator lists that folder's subfolders. Empty when nothing matches.
+pub fn suggest(text: &str) -> Vec<Pick> {
+    scan(text).map_or_else(
+        Vec::new,
+        |Scan {
+             quote,
+             dir,
+             sep,
+             names,
+         }| {
+            names
+                .iter()
+                .take(MAX_PICKS)
+                .map(|n| (format!("{n}{sep}"), format!("{quote}{dir}{n}{sep}")))
+                .collect()
+        },
+    )
+}
+
+/// Tab: complete the last segment to the single match or the longest shared
+/// prefix. None when nothing matches.
+pub fn complete(text: &str) -> Option<String> {
+    let Scan {
+        quote,
+        dir,
+        sep,
+        names,
+    } = scan(text)?;
+    if names.len() == 1 {
+        return Some(format!("{quote}{dir}{}{sep}", names[0]));
+    }
+    let first: Vec<char> = names[0].chars().collect();
     let shared: String = (0..first.len())
         .take_while(|&i| {
             names.iter().all(|n| {
@@ -115,12 +154,5 @@ pub fn complete(text: &str) -> Option<Completion> {
         })
         .map(|i| first[i])
         .collect();
-    Some(Completion {
-        text: format!("{quote}{dir}{shared}"),
-        picks: names
-            .iter()
-            .take(MAX_PICKS)
-            .map(|n| (format!("{n}{sep}"), format!("{quote}{dir}{n}{sep}")))
-            .collect(),
-    })
+    Some(format!("{quote}{dir}{shared}"))
 }
