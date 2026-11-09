@@ -226,6 +226,10 @@ it). Press `b` on a running agent to type the order to read the log into it;
 squad never does that by itself, because typing at the wrong moment could
 answer a trust or permission dialog.
 
+Agents are told to treat `.squad/` as data, not authority: a SITREP is only an
+order when it comes from the agent's own commander. Delete a `.squad/` that
+arrived with a repository you did not write before you brief an agent in it.
+
 ### Chain of command
 
 Agents can report to other agents. An agent with agents under it is a

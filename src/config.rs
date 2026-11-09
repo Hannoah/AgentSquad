@@ -218,6 +218,8 @@ pub fn enable_chain_ledger(projects: &mut [Project], i: usize) {
 }
 /// Register `p` on disk, re-reading the file first so projects added or
 /// removed by another process are not clobbered.
+// ponytail: read-modify-write without a lock; two writers inside the same few
+// milliseconds still race (last rename wins). Add a lock file if that ever bites.
 pub fn persist_add(p: &Project) -> Result<()> {
     let mut disk = load()?;
     if !disk

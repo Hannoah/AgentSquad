@@ -660,13 +660,16 @@ impl Session {
         let output_streaming = self
             .last_output
             .is_some_and(|t| t.elapsed() < NEEDS_INPUT_QUIET);
-        // Active work (spinner/busy hint on screen, streaming output, or live CPU load)
-        // always takes precedence over a prompt match so an agent never flashes `?` mid-run.
-        if self.cached_working_text || output_streaming || cpu_active {
+        // Screen evidence beats a prompt match so an agent never flashes `?` mid-run.
+        if self.cached_working_text || output_streaming {
             return AgentPhase::Working;
         }
         if !user_just_typed && self.cached_needs_input {
             return AgentPhase::NeedsInput;
+        }
+        // CPU is whole-tree: check it after the prompt so a dev server cannot hide a question.
+        if cpu_active {
+            return AgentPhase::Working;
         }
         let recent_output = self
             .last_output

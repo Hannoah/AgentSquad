@@ -241,6 +241,27 @@ fn pty_smoke() {
     );
 }
 #[test]
+fn tree_cpu_does_not_hide_a_waiting_prompt() {
+    let p = Project {
+        name: "cpu".into(),
+        path: env::current_dir().unwrap(),
+        command: shell(),
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+    };
+    let mut s = Session::spawn(&p, 24, 80).unwrap();
+    s.usage = Some(Usage { cpu: 50.0, mem: 0 });
+    assert_eq!(s.phase(), AgentPhase::Working, "busy tree, no prompt");
+    s.cached_needs_input = true;
+    assert_eq!(
+        s.phase(),
+        AgentPhase::NeedsInput,
+        "quiet prompt wins over tree CPU"
+    );
+}
+#[test]
 fn stop_selects_live_session() {
     // `s` stops the selected project, but only while it actually
     // holds a session.
