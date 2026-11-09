@@ -11,6 +11,7 @@ fn config_roundtrip() {
             autostart: false,
             ledger: false,
             reports_to: None,
+            pinned: false,
         }],
         scrollback: None,
         ..Default::default()
@@ -45,6 +46,7 @@ fn order_groups_agents_first() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let ps = vec![mk(Kind::Service), mk(Kind::Agent), mk(Kind::Service)];
     assert_eq!(display_order(&ps), vec![1, 0, 2]);
@@ -126,6 +128,7 @@ fn filter_matches_name_and_command() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let ps = vec![
         mk("api", &["node", "server.js"], Kind::Service),
@@ -198,6 +201,7 @@ fn persist_helpers_keep_other_writers_projects() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
     // no other test reads it.
@@ -219,12 +223,16 @@ fn persist_helpers_keep_other_writers_projects() {
     persist_remove("A").unwrap();
     persist_add(&mk("d")).unwrap();
     persist_add(&mk("D")).unwrap();
-    let names: Vec<String> = load_from(&file)
-        .unwrap()
-        .projects
-        .into_iter()
-        .map(|p| p.name)
-        .collect();
+    persist_pin("C", true).unwrap();
+    persist_edit("c", vec!["zsh".into(), "-l".into()], true).unwrap();
+    let after = load_from(&file).unwrap().projects;
+    let names: Vec<String> = after.iter().map(|p| p.name.clone()).collect();
+    let c = after.iter().find(|p| p.name == "c").unwrap();
+    assert!(
+        c.pinned && c.autostart && c.command == ["zsh", "-l"],
+        "pin and edit saved"
+    );
+    assert!(persist_pin("nobody", true).is_err());
     env::remove_var("AGENTSQUAD_CONFIG");
     std::fs::remove_file(&file).ok();
     assert_eq!(names, ["b", "c", "d"]);
@@ -241,6 +249,7 @@ fn remove_unregisters_project() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut projects = vec![mk("a"), mk("b")];
     let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
@@ -278,6 +287,7 @@ fn remove_persists_to_config_file() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
@@ -306,6 +316,7 @@ fn merge_appends_missing_projects() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut c = Config {
         projects: vec![mk("a")],
@@ -383,6 +394,7 @@ fn service_naming_looks_through_shells_and_live_foreground() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     assert_eq!(live_name(&p, None), "my-dir");
     assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
@@ -460,6 +472,7 @@ fn empty_command_errors_instead_of_panicking() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -515,6 +528,7 @@ fn add_preview_name_matches_what_gets_registered() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let existing = vec![mk("node")];
     let none: Vec<String> = Vec::new();
@@ -542,6 +556,7 @@ fn filter_matches_path_too() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let projects = vec![mk("web", "/work/my-api"), mk("other", "/work/site")];
     assert_eq!(apply_filter(&projects, "my-api"), vec![0]);
@@ -558,6 +573,7 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     // Config order: svc, a1, a2. Sidebar order: agents first, so a1, a2, svc.
     let projects = vec![
@@ -592,6 +608,7 @@ fn chain_of_command_orders_ranks_and_briefs() {
         autostart: false,
         ledger: false,
         reports_to: under.map(Into::into),
+        pinned: false,
     };
     // Registered out of rank order: company, soldier, platoon.
     let p = vec![
@@ -627,6 +644,7 @@ fn orders_reach_every_depth_below_a_commander() {
         autostart: false,
         ledger: false,
         reports_to: under.map(Into::into),
+        pinned: false,
     };
     let p = vec![
         mk("company", None),
@@ -650,6 +668,7 @@ fn agent_in(name: &str, dir: &str, under: Option<&str>) -> Project {
         autostart: false,
         ledger: false,
         reports_to: under.map(Into::into),
+        pinned: false,
     }
 }
 
@@ -758,4 +777,35 @@ fn joining_a_commander_turns_the_ledger_on_for_both() {
     p[1].reports_to = None;
     enable_chain_ledger(&mut p, 1);
     assert!(p[0].ledger && p[1].ledger);
+}
+#[test]
+fn pinned_projects_list_first_within_their_group() {
+    let mk = |name: &str, kind, pinned| Project {
+        name: name.into(),
+        path: PathBuf::from("x"),
+        command: vec!["sh".into()],
+        kind,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned,
+    };
+    let ps = vec![
+        mk("a", Kind::Agent, false),
+        mk("b", Kind::Agent, true),
+        mk("svc1", Kind::Service, false),
+        mk("svc2", Kind::Service, true),
+    ];
+    // Agents stay above services; inside each group the pinned one leads.
+    assert_eq!(display_order(&ps), vec![1, 0, 3, 2]);
+}
+#[test]
+fn join_command_round_trips_through_split_command() {
+    for parts in [
+        vec!["claude".to_string()],
+        vec!["npm".into(), "run".into(), "dev".into()],
+        vec!["C:/Program Files/x.exe".into(), "a b".into(), "".into()],
+    ] {
+        assert_eq!(split_command(&join_command(&parts)), parts);
+    }
 }

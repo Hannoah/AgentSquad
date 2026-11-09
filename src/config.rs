@@ -58,6 +58,9 @@ pub struct Project {
     /// subordinates is a commander; commanders may report to commanders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reports_to: Option<String>,
+    /// Listed first in its group (`f` in the manager).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
 }
 /// Bump when `load_from` gains a one-time migration. A file stamped with
 /// this version is left exactly as the user wrote it.
@@ -255,6 +258,45 @@ pub fn persist_under(name: &str, under: Option<&str>) -> Result<()> {
     disk.projects[i].reports_to = stored;
     enable_chain_ledger(&mut disk.projects, i);
     save(&disk)
+}
+/// Pin or unpin `name` on disk, re-reading the file first (see `persist_add`).
+pub fn persist_pin(name: &str, pinned: bool) -> Result<()> {
+    let mut disk = load()?;
+    let p = disk
+        .projects
+        .iter_mut()
+        .find(|q| q.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))?;
+    p.pinned = pinned;
+    save(&disk)
+}
+/// Change the command and autostart of `name` on disk, re-reading the file
+/// first (see `persist_add`). An empty command means the default shell.
+pub fn persist_edit(name: &str, command: Vec<String>, autostart: bool) -> Result<()> {
+    let mut disk = load()?;
+    let p = disk
+        .projects
+        .iter_mut()
+        .find(|q| q.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))?;
+    p.command = if command.is_empty() { shell() } else { command };
+    p.autostart = autostart;
+    save(&disk)
+}
+/// Inverse of `split_command`: quote the words that hold spaces (or are
+/// empty) so the line splits back into the same words.
+pub fn join_command(parts: &[String]) -> String {
+    parts
+        .iter()
+        .map(|w| {
+            if w.is_empty() || w.contains(char::is_whitespace) {
+                format!("\"{w}\"")
+            } else {
+                w.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 /// Drop the Windows verbatim prefix `fs::canonicalize` adds, so stored
 /// paths read `C:\x` instead of `\\?\C:\x` (many tools choke on the latter).
@@ -509,7 +551,13 @@ pub fn display_order(projects: &[Project]) -> Vec<usize> {
     }
     let mut order = Vec::with_capacity(projects.len());
     let agents = || (0..projects.len()).filter(|&i| projects[i].kind == Kind::Agent);
-    for i in agents().filter(|&i| superior(projects, i).is_none()) {
+    // Pinned commanders (and services) come first; the sort is stable, so
+    // everything else keeps its registration order.
+    let mut roots: Vec<usize> = agents()
+        .filter(|&i| superior(projects, i).is_none())
+        .collect();
+    roots.sort_by_key(|&i| !projects[i].pinned);
+    for i in roots {
         push_tree(projects, i, &mut order);
     }
     // ponytail: a hand-edited reporting loop is listed flat rather than lost.
@@ -518,7 +566,11 @@ pub fn display_order(projects: &[Project]) -> Vec<usize> {
             order.push(i);
         }
     }
-    order.extend((0..projects.len()).filter(|&i| projects[i].kind == Kind::Service));
+    let mut services: Vec<usize> = (0..projects.len())
+        .filter(|&i| projects[i].kind == Kind::Service)
+        .collect();
+    services.sort_by_key(|&i| !projects[i].pinned);
+    order.extend(services);
     order
 }
 /// Find a unique project name by appending `-2`, `-3`, ... when `base` is taken.
@@ -587,6 +639,7 @@ pub fn build_project(
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     // An explicit --under / Reports to replaces this default afterwards.
     p.reports_to = default_superior(existing, &p);

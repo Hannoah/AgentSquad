@@ -104,6 +104,8 @@ struct App {
     add_cmd: LineInput,
     add_under: LineInput,
     add_autostart: bool,
+    /// Name of the project the form is editing; None when it adds one.
+    add_edit: Option<String>,
     add_err: String,
     /// What the Path field points at (checked on edits, not per frame).
     add_state: PathState,
@@ -207,6 +209,7 @@ impl App {
             add_cmd: LineInput::new(),
             add_under: LineInput::new(),
             add_autostart: false,
+            add_edit: None,
             add_err: String::new(),
             add_state: PathState::Blank,
             add_picks: Vec::new(),
@@ -535,7 +538,29 @@ impl App {
         }
     }
 
+    /// `e`: the add form, filled with the selected project. Only the command
+    /// and autostart can change here; path, kind and chain of command keep
+    /// their own keys (`u`) so names and logs never go stale.
+    fn open_edit(&mut self) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        let p = self.cfg.projects[pi].clone();
+        self.open_add();
+        self.add_edit = Some(p.name);
+        self.add_path.set(&p.path.display().to_string());
+        self.add_kind = p.kind;
+        if !is_bare_shell(&p.command) {
+            self.add_cmd.set(&join_command(&p.command));
+        }
+        self.add_under.set(p.reports_to.as_deref().unwrap_or(""));
+        self.add_autostart = p.autostart;
+        self.add_field = 2;
+        self.path_edited();
+    }
+
     fn open_add(&mut self) {
+        self.add_edit = None;
         self.mode = Mode::Add;
         self.add_field = 0;
         self.add_path.clear();

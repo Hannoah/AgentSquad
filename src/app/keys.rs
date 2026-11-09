@@ -292,7 +292,17 @@ impl App {
 
     pub(super) fn key_add(&mut self, k: KeyEvent) {
         match k.code {
-            KeyCode::Esc => self.mode = Mode::Manager,
+            KeyCode::Esc => {
+                self.add_edit = None;
+                self.mode = Mode::Manager;
+            }
+            KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
+            // Editing only reaches Command and Autostart.
+            KeyCode::Tab | KeyCode::Down | KeyCode::Up | KeyCode::BackTab
+                if self.add_edit.is_some() =>
+            {
+                self.add_field = if self.add_field == 2 { 3 } else { 2 };
+            }
             // A highlighted folder fills the path instead of saving.
             KeyCode::Enter if self.add_field == 0 && self.add_sel.is_some() => {
                 self.pick_path(self.add_sel.unwrap_or(0));
@@ -494,6 +504,8 @@ impl App {
             }
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('h') if !self.order.is_empty() => self.open_history(),
+            KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
+            KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             // Open the update prompt on demand; it also pops up by
             // itself whenever the manager has the keyboard.

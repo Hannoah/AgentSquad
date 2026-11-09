@@ -168,7 +168,8 @@ impl App {
                     .as_ref()
                     .and_then(|s| s.fg_name.as_deref());
                 let tree = rank_prefix(&self.cfg.projects, pi);
-                let shown = format!("{tree}{}", live_name(p, fg));
+                let pin = if p.pinned { "*" } else { "" };
+                let shown = format!("{tree}{}{pin}", live_name(p, fg));
                 let shown_name: &str = &shown;
                 let mut detail = String::new();
                 if status == "Running" {
@@ -768,6 +769,9 @@ impl App {
 
     /// The name the add form would register, shown while typing.
     pub(super) fn add_preview(&self) -> Option<String> {
+        if self.add_edit.is_some() {
+            return None; // an edit keeps its name
+        }
         let parts = split_command(&self.add_cmd.as_str());
         preview_name(
             &self.cfg.projects,
@@ -883,10 +887,12 @@ impl App {
         let popup = self.add_popup(f.area());
         let modal_w = (popup.width as usize).saturating_sub(2);
         f.render_widget(ratatui::widgets::Clear, popup);
-        let kind_hint = if self.add_kind == Kind::Agent {
-            "agent (Space toggles)"
-        } else {
-            "service (Space toggles)"
+        let editing = self.add_edit.is_some();
+        let kind_hint = match (self.add_kind == Kind::Agent, editing) {
+            (true, false) => "agent (Space toggles)",
+            (false, false) => "service (Space toggles)",
+            (true, true) => "agent (fixed)",
+            (false, true) => "service (fixed)",
         };
         let cmd_text = if self.add_cmd.is_empty() {
             "(default shell)".to_string()
@@ -1000,7 +1006,11 @@ impl App {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(Line::from(Span::styled(
-                        "Add project (Enter save, Esc cancel)",
+                        if editing {
+                            "Edit project: command, autostart (Enter save, Esc cancel)"
+                        } else {
+                            "Add project (Enter save, Esc cancel)"
+                        },
                         Style::default()
                             .fg(Color::Blue)
                             .add_modifier(ratatui::style::Modifier::BOLD),

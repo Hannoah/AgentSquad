@@ -81,6 +81,7 @@ fn ledger_session_records_start_and_exit() {
         autostart: false,
         ledger: true,
         reports_to: None,
+        pinned: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let (msg, _) = s.ledger_note.take().expect("creation is announced once");
@@ -132,6 +133,7 @@ fn joining_a_commander_files_a_report_in_with_the_head_count() {
         autostart: false,
         ledger: true,
         reports_to: under.map(Into::into),
+        pinned: false,
     };
     let reports = || std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap_or_default();
     // Two agents join "lead": each report-in carries the new head count.
@@ -183,6 +185,7 @@ fn report_in_opens_the_ledger_when_there_is_none() {
         autostart: false,
         ledger: false,
         reports_to: under.map(Into::into),
+        pinned: false,
     };
     assert!(!dir.join(".squad").exists());
     crate::ledger::report_transfer(&[mk("lead", None), mk("a", Some("lead"))], "a", None);

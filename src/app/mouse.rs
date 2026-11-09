@@ -210,6 +210,19 @@ impl App {
                     let rel_y = m.row.saturating_sub(popup.y + 1);
                     // The folder list sits between the Path row and Kind.
                     let list_h = self.add_list_h();
+                    if self.add_edit.is_some() {
+                        // Editing reaches only Command (row 2) and Autostart (row 3).
+                        match rel_y {
+                            2 => self.add_field = 2,
+                            3 => {
+                                self.add_field = 3;
+                                self.add_autostart = !self.add_autostart;
+                            }
+                            _ => {}
+                        }
+                        self.dirty = true;
+                        return;
+                    }
                     match rel_y {
                         0 => self.add_field = 0,
                         // Header is row 1; click on a folder row fills the path.

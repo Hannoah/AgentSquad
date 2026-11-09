@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.2
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.3
 ```
 
 To install elsewhere:
@@ -131,6 +131,8 @@ case-insensitively by `remove` and `start`.
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `h` | History: read the selected project's SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
+| `e` | Edit the selected project's command and autostart (path, kind and name stay; `u` sets whom it reports to). A running session keeps the old command until you restart it |
+| `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |

@@ -95,6 +95,59 @@ impl App {
         }
     }
 
+    /// Enter in the edit form: save the new command and autostart.
+    pub(super) fn save_edit(&mut self) {
+        let Some(name) = self.add_edit.clone() else {
+            return;
+        };
+        let cmd = split_command(&self.add_cmd.as_str());
+        if let Err(e) = persist_edit(&name, cmd.clone(), self.add_autostart) {
+            self.add_err = format!("Save failed: {e:#}");
+            return;
+        }
+        let autostart = self.add_autostart;
+        let Some(pi) = self
+            .cfg
+            .projects
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(&name))
+        else {
+            return;
+        };
+        let p = &mut self.cfg.projects[pi];
+        p.command = if cmd.is_empty() { shell() } else { cmd };
+        p.autostart = autostart;
+        self.add_edit = None;
+        self.mode = Mode::Manager;
+        let note = if slot_running(&self.sessions, pi) {
+            "; restart it to use the new command"
+        } else {
+            ""
+        };
+        self.message = (format!("Saved {name}{note}"), Notice::Info);
+    }
+
+    /// `f`: pin or unpin the selected project. Pinned ones list first in
+    /// their group; the selection stays on the same project.
+    pub(super) fn toggle_pin(&mut self) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        let (name, pinned) = {
+            let p = &self.cfg.projects[pi];
+            (p.name.clone(), !p.pinned)
+        };
+        if let Err(e) = persist_pin(&name, pinned) {
+            self.message = (format!("Save failed: {e:#}"), Notice::Error);
+            return;
+        }
+        self.cfg.projects[pi].pinned = pinned;
+        self.order = display_order(&self.cfg.projects);
+        self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
+        let what = if pinned { "Pinned" } else { "Unpinned" };
+        self.message = (format!("{what} {name}"), Notice::Info);
+    }
+
     /// `h`: read the selected project's SITREPs without leaving squad.
     pub(super) fn open_history(&mut self) {
         let Some(p) = self

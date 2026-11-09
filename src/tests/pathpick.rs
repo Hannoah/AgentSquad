@@ -88,6 +88,7 @@ fn roots_rank_parent_folders_by_use() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let projects = [
         mk(r"C:\one\a"),

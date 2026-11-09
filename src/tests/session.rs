@@ -73,6 +73,7 @@ fn stop_kills_process_tree() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -127,6 +128,7 @@ fn stop_kills_orphaned_grandchildren() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -177,6 +179,7 @@ fn session_sampling_tracks_a_live_tree() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pid");
@@ -225,6 +228,7 @@ fn pty_smoke() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..100 {
@@ -250,6 +254,7 @@ fn tree_cpu_does_not_hide_a_waiting_prompt() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     s.usage = Some(Usage { cpu: 50.0, mem: 0 });
@@ -341,6 +346,7 @@ fn start_session_starts_and_reports() {
             autostart: false,
             ledger: false,
             reports_to: None,
+            pinned: false,
         },
         Project {
             name: "bad".into(),
@@ -350,6 +356,7 @@ fn start_session_starts_and_reports() {
             autostart: false,
             ledger: false,
             reports_to: None,
+            pinned: false,
         },
     ];
     let mut sessions: Vec<Option<Session>> = vec![None, None];

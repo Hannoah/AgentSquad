@@ -151,6 +151,7 @@ fn pane_title_name_prefers_service_command() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     assert_eq!(pane_title_name(&agent), "my-agent");
 
@@ -162,6 +163,7 @@ fn pane_title_name_prefers_service_command() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     assert_eq!(pane_title_name(&service), "npm run dev");
 }
@@ -239,6 +241,7 @@ fn list_table_aligns_columns() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     // Registration order is service-first; output is agents-first.
     let projects = vec![
@@ -526,6 +529,7 @@ fn agent_tag_shows_program() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     assert_eq!(
         agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
@@ -582,6 +586,7 @@ fn group_counts_split_by_kind() {
         autostart: false,
         ledger: false,
         reports_to: None,
+        pinned: false,
     };
     let projects = vec![
         mk("a1", Kind::Agent),
