@@ -62,6 +62,13 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
 }
+impl Project {
+    /// Agents always keep an operations log (their work history lives in it);
+    /// `ledger = true` only matters for a service.
+    pub fn has_ledger(&self) -> bool {
+        self.ledger || self.kind == Kind::Agent
+    }
+}
 /// Bump when `load_from` gains a one-time migration. A file stamped with
 /// this version is left exactly as the user wrote it.
 pub const CONFIG_VERSION: u32 = 1;

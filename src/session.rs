@@ -439,6 +439,9 @@ pub struct Session {
     /// A finished task the user has already looked at, so the window title
     /// stops counting it.
     pub acked: bool,
+    /// When the current task began working; set at Working, taken at Done
+    /// (or when the session ends mid-task) to file the work history entry.
+    pub work_started: Option<std::time::SystemTime>,
     /// Project folder whose ledger gets this session's events, if enabled.
     ledger: Option<std::path::PathBuf>,
     /// One-time message for the status bar (ledger created, or why not).
@@ -464,7 +467,7 @@ impl Session {
         let Some(program) = p.command.first() else {
             anyhow::bail!("Project '{}' has an empty command", p.name);
         };
-        let (ledger, ledger_note) = if p.ledger {
+        let (ledger, ledger_note) = if p.has_ledger() {
             match ledger::ensure(&p.path) {
                 Ok(created) => {
                     let note = created.then(|| {
@@ -557,6 +560,7 @@ impl Session {
             dismissed_exit: false,
             last_phase: AgentPhase::Idle,
             acked: false,
+            work_started: None,
             ledger,
             ledger_note,
             cached_needs_input: false,
@@ -570,24 +574,29 @@ impl Session {
             render: RefCell::new(None),
         })
     }
-    /// Rescan the bottom of the live screen for prompt/working text. Only
-    /// the last rows are read: that is all the detectors look at, and a
-    /// full-screen text dump per output chunk was the hot spot.
-    pub fn refresh_screen_flags(&mut self) {
+    /// The last `n` rows of the live screen (whatever the scroll position)
+    /// as text.
+    pub fn tail_text(&mut self, n: u16) -> String {
         let scrolled = self.parser.screen().scrollback();
         if scrolled != 0 {
             self.parser.screen_mut().set_scrollback(0);
         }
-        let tail = {
+        let text = {
             let screen = self.parser.screen();
             let (rows, cols) = screen.size();
             let (rows, cols) = (rows.get(), cols.get());
-            let start = rows.saturating_sub(12);
-            screen.contents_between(start, 0, rows - 1, cols)
+            screen.contents_between(rows.saturating_sub(n), 0, rows - 1, cols)
         };
         if scrolled != 0 {
             self.parser.screen_mut().set_scrollback(scrolled);
         }
+        text
+    }
+    /// Rescan the bottom of the live screen for prompt/working text. Only
+    /// the last rows are read: that is all the detectors look at, and a
+    /// full-screen text dump per output chunk was the hot spot.
+    pub fn refresh_screen_flags(&mut self) {
+        let tail = self.tail_text(12);
         let working = is_working_text(&tail);
         self.cached_working_text = working;
         self.cached_needs_input = !working && has_prompt(&tail);

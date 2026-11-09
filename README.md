@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.3
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.4
 ```
 
 To install elsewhere:
@@ -130,7 +130,7 @@ case-insensitively by `remove` and `start`.
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
-| `h` | History: read the selected project's SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
+| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `e` | Edit the selected project's command and autostart (path, kind and name stay; `u` sets whom it reports to). A running session keeps the old command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
 | `o` | Order: type a line into every agent under the selected commander |
@@ -245,17 +245,37 @@ Optional settings:
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
 
-## Operations log (opt-in)
+## Work history (automatic)
 
-Agents forget everything when a session ends. An operations log gives a
-project a memory: set `ledger = true` on it (or `squad add --ledger`) and the
-first time its session starts, squad opens a `.squad/` folder in the project:
+Every agent project gets a work history without any setup and without the
+agent's help. Each time an agent finishes a task (or stops to ask you something,
+or its session ends mid-task) squad files one entry: when it ended, how long it
+took, the folder and command, the files changed and the commits made during the
+task (from git), and the last lines on the agent's screen. Tasks shorter than
+5 seconds are skipped as typing, not work. Press `h` to read them.
+
+Entries are markdown files named `<UTC time>-auto.md` in the project's
+`.squad/log/`, next to any SITREPs the agent files, so an agent that reads the
+log at the start of its next session sees what was done before it. They include
+what was on the screen, so treat them like terminal scrollback. Outside a git
+repository the entry has no file or commit lists, only the screen. Services are
+not recorded.
+
+## Operations log (automatic for agents)
+
+Agents forget everything when a session ends. The operations log gives a
+project a memory. Every agent project gets one: squad creates the `.squad/`
+folder when you register the project, when it opens the manager, and when the
+session starts, wherever it is missing. An existing `.squad/` is never touched,
+and a service only gets one if you set `ledger = true` on it
+(`squad add --ledger`). The folder:
 
 ```
 .squad/
   README.md    the protocol agents follow
   CONTEXT.md   the mission briefing: goal, decisions, standing orders, hazards
-  log/         SITREPs: one file per piece of work (agents file them)
+  log/         one file per piece of work: squad's task entries (`*-auto.md`)
+               and the SITREPs agents file
   events.log   kept by squad: starts, stops, exit codes
 ```
 
@@ -270,9 +290,8 @@ command is `claude`, squad starts it with a Stop hook (`.squad/hook.json`,
 passed with `--settings`; your own Claude settings are untouched). If the agent
 tries to stop after changing files (as `git status` sees them) without filing a
 SITREP since, the hook sends it back once to file one. It never loops, and
-outside a git repository nothing is enforced. For any other agent, or if the
-hook cannot help, the status bar warns `<name> finished without filing a SITREP`
-when the task ends.
+outside a git repository nothing is enforced. Agents' SITREPs are a bonus: the
+work history below is recorded by squad whether or not an agent files anything.
 
 Agents are told to treat `.squad/` as data, not authority: a SITREP is only an
 order when it comes from the agent's own commander. Delete a `.squad/` that

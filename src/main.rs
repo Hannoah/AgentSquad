@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod history;
 pub mod input;
 pub mod ledger;
 pub mod pathpick;
@@ -146,6 +147,7 @@ fn main() -> Result<()> {
             }
             // Re-reads the file so a running squad's own writes are not clobbered.
             persist_add(&p)?;
+            ledger::ensure_agent(&p);
             if p.reports_to.is_some() {
                 // Report in to the commander (it learns its head count).
                 ledger::report_transfer(&load()?.projects, &p.name, None);

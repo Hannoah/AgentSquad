@@ -22,10 +22,11 @@ use std::{
     io::{self, IsTerminal, Write},
     sync::mpsc,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::config::*;
+use crate::history;
 use crate::input::*;
 use crate::ledger;
 use crate::pathpick::{self, PathState, Pick};
@@ -456,19 +457,32 @@ impl App {
                                 &projects[c].name,
                             );
                         }
-                        // Reaches here when the Stop hook did not (not Claude
-                        // Code, hook off, or not a git repository it can read).
-                        if projects[pi].ledger && ledger::unrecorded(&projects[pi].path) {
-                            self.message = (
-                                format!("{} finished without filing a SITREP", projects[pi].name),
-                                Notice::Warn,
-                            );
-                            self.dirty = true;
-                        }
+                    }
+                    // The work history: squad files it, whatever the agent does.
+                    if phase_now == AgentPhase::Working {
+                        s.work_started.get_or_insert_with(SystemTime::now);
+                    } else if matches!(phase_now, AgentPhase::Done | AgentPhase::NeedsInput) {
+                        // A task ends when the agent finishes or stops to ask.
+                        let how = if phase_now == AgentPhase::Done {
+                            "task complete"
+                        } else {
+                            "waiting for your input"
+                        };
+                        file_history(s, &self.cfg.projects[pi], how.into());
                     }
                     s.last_phase = phase_now;
                 }
                 let label = s.status.label();
+                if was_running
+                    && !s.status.is_running()
+                    && self.cfg.projects[pi].kind == Kind::Agent
+                {
+                    file_history(
+                        s,
+                        &self.cfg.projects[pi],
+                        format!("session ended ({label})"),
+                    );
+                }
                 if let Some(note) = exit_notice(
                     &self.cfg.projects[pi].name,
                     was_running,
@@ -600,6 +614,27 @@ impl App {
 
 /// Run the manager; when an update was installed and the user chose to
 /// restart, start the new build in this console once the screen is restored.
+/// File the work history entry for the task `s` just finished, or was cut off
+/// in. Nothing when no task was running or it was only a blip.
+fn file_history(s: &mut Session, p: &Project, outcome: String) {
+    let Some(started) = s.work_started.take() else {
+        return;
+    };
+    let took = started.elapsed().unwrap_or_default();
+    if took < history::MIN_TASK {
+        return;
+    }
+    history::record(history::Task {
+        project: p.name.clone(),
+        path: p.path.clone(),
+        command: join_command(&p.command),
+        started,
+        took,
+        outcome,
+        tail: s.tail_text(20),
+    });
+}
+
 /// A project's SITREPs open for reading: the list, the picked one's text and
 /// how far it is scrolled.
 struct History {
@@ -649,6 +684,8 @@ pub fn run(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<()> 
 
 fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Option<Vec<String>>> {
     let _ = install_path(); // remember the path before an update renames the file
+                            // Every agent project keeps a `.squad/`; add it where it is missing.
+    c.projects.iter().for_each(ledger::ensure_agent);
     if !io::stdin().is_terminal() {
         bail!("squad needs an interactive terminal");
     }

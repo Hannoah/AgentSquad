@@ -106,6 +106,15 @@ pub fn utc_stamp(secs: u64) -> String {
     )
 }
 
+/// Give an agent project its `.squad/` when it has none, so its work history
+/// has a home. An existing folder is never touched; services (nothing to
+/// record) and folders that are gone are skipped.
+pub fn ensure_agent(p: &Project) {
+    if p.kind == Kind::Agent && p.path.is_dir() {
+        let _ = ensure(&p.path);
+    }
+}
+
 /// Create the ledger in `project` unless one exists. Returns whether it was
 /// created. An existing folder is never touched, so a ledger people have
 /// written to is safe.
@@ -209,16 +218,20 @@ pub fn write_rosters(projects: &[Project]) {
     }
 }
 
-/// Files git reports as changed in `project`, relative to it. None when git is
-/// missing or `project` is not a repository.
-fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
+/// stdout of `git <args>` run in `project`; None when git is missing or fails.
+pub fn git(project: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
-    cmd.args(["status", "--porcelain", "-z", "-uall"])
-        .current_dir(project);
+    cmd.args(args).current_dir(project);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // no console flash
     let out = cmd.output().ok().filter(|o| o.status.success())?;
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Files git reports as changed in `project`, relative to it. None when git is
+/// missing or `project` is not a repository.
+pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
+    let text = git(project, &["status", "--porcelain", "-z", "-uall"])?;
     let mut files = Vec::new();
     let mut entries = text.split('\0').filter(|e| e.len() > 3);
     while let Some(e) = entries.next() {
@@ -313,8 +326,12 @@ fn newest_sitrep(project: &Path) -> Option<String> {
 /// The SITREPs filed in `project`, newest first, as (file name, path). Empty
 /// when there is no ledger.
 pub fn sitreps(project: &Path) -> Vec<(String, PathBuf)> {
-    let log = project.join(DIR).join("log");
-    let mut v: Vec<(String, PathBuf)> = fs::read_dir(&log)
+    list_entries(&project.join(DIR).join("log"))
+}
+
+/// The files in `dir`, newest first, as (file name, path).
+pub fn list_entries(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .filter_map(|e| {

@@ -352,6 +352,7 @@ impl App {
                                     self.add_err = format!("Save failed: {e:#}");
                                 }
                                 Ok(()) => {
+                                    self.cfg.projects.last().map(ledger::ensure_agent);
                                     self.order = display_order(&self.cfg.projects);
                                     self.selected = self
                                         .order

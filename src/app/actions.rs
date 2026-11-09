@@ -157,16 +157,13 @@ impl App {
         else {
             return;
         };
+        // Agent-written SITREPs and squad's own entries, newest first.
         let items = ledger::sitreps(&p.path);
-        self.message = if items.is_empty() {
-            (
-                format!("No SITREPs in {} yet (needs ledger = true)", p.name),
-                Notice::Warn,
-            )
+        if items.is_empty() {
+            self.message = (format!("No history in {} yet", p.name), Notice::Warn);
         } else {
             self.history = Some(History::open(&p.name, items));
-            return;
-        };
+        }
     }
 
     pub(super) fn key_history(&mut self, k: KeyEvent) {
@@ -409,7 +406,7 @@ impl App {
         let Some(p) = self.cfg.projects.get(pi) else {
             return;
         };
-        self.message = if !p.ledger {
+        self.message = if !p.has_ledger() {
             (
                 format!(
                     "Operations log is off for {}: set ledger = true in its config entry",

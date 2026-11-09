@@ -20,6 +20,7 @@ use crate::ui::*;
 use crate::updater::*;
 
 mod config;
+mod history;
 mod input;
 mod ledger;
 mod pathpick;
