@@ -690,10 +690,58 @@ impl App {
         )
     }
 
+    /// The line under the fields: does the path exist, and the name it would
+    /// get. None while there is nothing to say.
+    fn add_status(&self) -> Option<Line<'static>> {
+        let (mark, color) = match self.add_state {
+            PathState::Folder => ("✓ folder", Color::Green),
+            PathState::Missing => ("✗ not found", Color::Red),
+            PathState::NotFolder => ("✗ not a folder", Color::Red),
+            PathState::Blank => ("", Color::Reset),
+        };
+        let name = self.add_preview();
+        if mark.is_empty() && name.is_none() {
+            return None;
+        }
+        let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled(mark, Style::default().fg(color)),
+        ];
+        if let Some(n) = name {
+            let gap = if mark.is_empty() { "" } else { " · " };
+            spans.push(Span::styled(format!("{gap}Registers as: {n}"), dim));
+        }
+        Some(Line::from(spans))
+    }
+
+    /// Pickable paths as `[1] name  [2] name` lines (at most 3), wrapped to
+    /// the popup. Only the Path field offers them.
+    fn add_pick_lines(&self) -> Vec<String> {
+        if self.add_field != 0 {
+            return Vec::new();
+        }
+        let mut lines = vec![String::from("  ")];
+        for (i, (label, _)) in self.add_candidates().iter().enumerate() {
+            let item = format!("[{}] {label}  ", i + 1);
+            let cur = lines.last_mut().expect("never empty");
+            if cur.trim().is_empty() || cur.chars().count() + item.chars().count() <= 68 {
+                cur.push_str(&item);
+            } else {
+                lines.push(format!("  {item}"));
+            }
+        }
+        lines.retain(|l| !l.trim().is_empty());
+        lines.truncate(3);
+        lines
+    }
+
     /// The add form's popup; its height follows the rows it shows.
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
-        let rows =
-            5 + u16::from(self.add_preview().is_some()) + u16::from(!self.add_err.is_empty());
+        let rows = 5
+            + u16::from(self.add_status().is_some())
+            + self.add_pick_lines().len() as u16
+            + u16::from(!self.add_err.is_empty());
         fixed_rect(72, rows + 2, area)
     }
 
@@ -777,10 +825,11 @@ impl App {
             }
             lines.push(Line::from(row));
         }
-        if let Some(name) = self.add_preview() {
+        lines.extend(self.add_status());
+        for l in self.add_pick_lines() {
             lines.push(Line::from(Span::styled(
-                format!("  Registers as: {name}"),
-                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                l,
+                Style::default().fg(Color::Cyan),
             )));
         }
         if !self.add_err.is_empty() {

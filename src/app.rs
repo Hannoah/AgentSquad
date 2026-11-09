@@ -28,6 +28,7 @@ use std::{
 use crate::config::*;
 use crate::input::*;
 use crate::ledger;
+use crate::pathpick::{self, PathState, Pick};
 use crate::session::*;
 use crate::sys::*;
 use crate::ui::*;
@@ -38,7 +39,8 @@ mod draw;
 mod keys;
 mod mouse;
 
-pub struct ScreenGuard;
+/// Restores the terminal on exit, including the title it found at start.
+pub struct ScreenGuard(Option<String>);
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
@@ -48,6 +50,9 @@ impl Drop for ScreenGuard {
             DisableMouseCapture,
             crossterm::cursor::Show
         );
+        if let Some(title) = self.0.take() {
+            let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(title));
+        }
     }
 }
 
@@ -99,6 +104,10 @@ struct App {
     add_under: LineInput,
     add_autostart: bool,
     add_err: String,
+    /// What the Path field points at (checked on edits, not per frame).
+    add_state: PathState,
+    /// Matches from the last Tab, pickable with Alt+1..9.
+    add_picks: Vec<Pick>,
     confirm_stop: Option<usize>,
     confirm_remove: Option<usize>,
     confirm_restart: Option<usize>,
@@ -184,6 +193,8 @@ impl App {
             add_under: LineInput::new(),
             add_autostart: false,
             add_err: String::new(),
+            add_state: PathState::Blank,
+            add_picks: Vec::new(),
             confirm_stop: None,
             confirm_remove: None,
             confirm_restart: None,
@@ -217,6 +228,21 @@ impl App {
             autostart_pending: true,
             quit: false,
         }
+    }
+
+    /// Title for the terminal window: the selected project, named as the
+    /// sidebar names it (a shell service reads as the program inside it).
+    fn window_title(&self) -> String {
+        let pi = self.order.get(self.selected).copied();
+        let name = pi.and_then(|pi| {
+            let fg = self
+                .sessions
+                .get(pi)?
+                .as_ref()
+                .and_then(|s| s.fg_name.as_deref());
+            Some(live_name(self.cfg.projects.get(pi)?, fg))
+        });
+        window_title(name)
     }
 
     /// Remember the selected project so the next launch opens on it.
@@ -458,6 +484,8 @@ impl App {
         self.add_under.clear();
         self.add_autostart = false;
         self.add_err.clear();
+        self.add_state = PathState::Blank;
+        self.add_picks.clear();
     }
 
     fn stopped_count(&self) -> usize {
@@ -478,7 +506,7 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
     if let Some(lines) = c.scrollback {
         set_scrollback_limit(lines);
     }
-    let _guard = ScreenGuard;
+    let _guard = ScreenGuard(console_title());
     execute!(
         io::stdout(),
         EnterAlternateScreen,
@@ -488,6 +516,7 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
     let stdout = io::BufWriter::new(io::stdout());
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(c, initial);
+    let mut title = String::new();
     loop {
         let area = terminal.size()?;
         let (rows, cols) = pane_size(area);
@@ -500,6 +529,12 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
             let _ = backend.flush();
         }
         if app.dirty {
+            // Selection and the program a shell runs both mark the app dirty.
+            let now = app.window_title();
+            if now != title {
+                let _ = execute!(terminal.backend_mut(), crossterm::terminal::SetTitle(&now));
+                title = now;
+            }
             let _ = terminal.backend_mut().write_all(b"\x1b[?2026h");
             terminal.draw(|f| app.draw(f))?;
             let backend = terminal.backend_mut();

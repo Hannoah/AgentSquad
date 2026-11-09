@@ -208,6 +208,57 @@ impl App {
         }
     }
 
+    /// The Path field changed: re-check it and drop stale matches and errors.
+    fn path_edited(&mut self) {
+        self.add_picks.clear();
+        self.add_state = pathpick::check(&self.add_path.as_str());
+        self.add_err.clear();
+    }
+
+    /// A text field of the form changed.
+    fn add_edited(&mut self) {
+        if self.add_field == 0 {
+            self.path_edited();
+        } else {
+            self.add_err.clear();
+        }
+    }
+
+    fn set_path(&mut self, text: &str) {
+        self.add_path.set(text);
+        self.path_edited();
+    }
+
+    /// What `Alt+1..9` picks: the usual parent folders while Path is empty,
+    /// otherwise the matches of the last Tab.
+    pub(super) fn add_candidates(&self) -> Vec<Pick> {
+        if self.add_path.is_empty() {
+            pathpick::roots(&self.cfg.projects)
+        } else {
+            self.add_picks.clone()
+        }
+    }
+
+    /// Tab in the Path field: an empty field takes the most used parent
+    /// folder; otherwise complete the last segment against the disk.
+    fn complete_path(&mut self) {
+        let text = self.add_path.as_str();
+        let root = text
+            .is_empty()
+            .then(|| pathpick::roots(&self.cfg.projects).into_iter().next())
+            .flatten();
+        if let Some((_, text)) = root {
+            return self.set_path(&text);
+        }
+        match pathpick::complete(&text) {
+            Some(c) => {
+                self.set_path(&c.text);
+                self.add_picks = c.picks;
+            }
+            None => self.add_err = "No folder matches".into(),
+        }
+    }
+
     pub(super) fn key_add(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Esc => self.mode = Mode::Manager,
@@ -275,6 +326,7 @@ impl App {
                     }
                 }
             }
+            KeyCode::Tab if self.add_field == 0 => self.complete_path(),
             KeyCode::Tab => self.add_field = (self.add_field + 1) % 5,
             KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
             KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
@@ -282,13 +334,13 @@ impl App {
                 if let Some(input) = self.add_input() {
                     input.backspace();
                 }
-                self.add_err.clear();
+                self.add_edited();
             }
             KeyCode::Delete => {
                 if let Some(input) = self.add_input() {
                     input.delete();
                 }
-                self.add_err.clear();
+                self.add_edited();
             }
             KeyCode::Left | KeyCode::Right => {
                 let left = k.code == KeyCode::Left;
@@ -316,6 +368,17 @@ impl App {
                     input.move_end();
                 }
             }
+            KeyCode::Char(d @ '1'..='9')
+                if k.modifiers.contains(KeyModifiers::ALT) && self.add_field == 0 =>
+            {
+                let pick = self
+                    .add_candidates()
+                    .into_iter()
+                    .nth(d as usize - '1' as usize);
+                if let Some((_, text)) = pick {
+                    self.set_path(&text);
+                }
+            }
             KeyCode::Char(' ') if self.add_field == 1 => {
                 self.add_kind = self.add_kind.toggled();
             }
@@ -329,7 +392,7 @@ impl App {
                 if let Some(input) = self.add_input() {
                     input.insert(ch);
                 }
-                self.add_err.clear();
+                self.add_edited();
             }
             _ => {}
         }

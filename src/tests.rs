@@ -22,6 +22,7 @@ use crate::updater::*;
 mod config;
 mod input;
 mod ledger;
+mod pathpick;
 mod session;
 mod sys;
 mod ui;

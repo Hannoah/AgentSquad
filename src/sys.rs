@@ -494,3 +494,17 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
         labels,
     }
 }
+
+/// The console window's current title, so it can be put back on exit.
+#[cfg(windows)]
+pub fn console_title() -> Option<String> {
+    use windows_sys::Win32::System::Console::GetConsoleTitleW;
+    let mut buf = [0u16; 1024];
+    // SAFETY: `buf` is a live buffer of the stated length.
+    let n = unsafe { GetConsoleTitleW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    (n > 0).then(|| String::from_utf16_lossy(&buf[..n.min(buf.len())]))
+}
+#[cfg(not(windows))]
+pub fn console_title() -> Option<String> {
+    None
+}

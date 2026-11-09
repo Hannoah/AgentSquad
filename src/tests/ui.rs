@@ -317,7 +317,7 @@ fn hint_text_matches_legacy_strings() {
     );
     assert_eq!(
         mode_hints(Mode::Add),
-        "Tab next | Space toggle | Enter save | Esc cancel"
+        "Tab complete path | Alt+1-9 pick | ↓ next field | Enter save | Esc cancel"
     );
     assert_eq!(mode_hints(Mode::Help), "?/Esc closes");
 }
@@ -686,4 +686,14 @@ fn context_menu_lines_match_click_mapping() {
             .collect();
         assert!(hint.contains("Esc"), "last row tells how to cancel");
     }
+}
+#[test]
+fn window_title_names_the_selected_project() {
+    assert_eq!(window_title(Some("my-app")), "squad - my-app");
+    assert_eq!(window_title(None), "squad");
+}
+#[test]
+fn console_title_reads_without_panicking() {
+    // A test run may have no console; either answer is fine, a crash is not.
+    let _ = console_title();
 }

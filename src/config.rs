@@ -538,6 +538,10 @@ pub fn unique_name(base: &str, existing: &[Project]) -> String {
         i += 1;
     }
 }
+/// Typed or pasted path text without surrounding spaces and quotes.
+pub fn clean_path(raw: &str) -> &str {
+    raw.trim().trim_matches('"').trim_matches('\'').trim()
+}
 /// Build and validate a project from user inputs, without touching disk state.
 ///
 /// Services take their name from the program being run and can share a directory
@@ -549,7 +553,7 @@ pub fn build_project(
     kind: Kind,
     parts: Vec<String>,
 ) -> Result<Project, String> {
-    let trimmed = path_raw.trim().trim_matches('"').trim_matches('\'').trim();
+    let trimmed = clean_path(path_raw);
     if trimmed.is_empty() && kind != Kind::Service {
         return Err("Path is empty.".into());
     }
@@ -596,7 +600,7 @@ pub fn preview_name(
     kind: Kind,
     parts: &[String],
 ) -> Option<String> {
-    let trimmed = path_raw.trim().trim_matches('"').trim_matches('\'').trim();
+    let trimmed = clean_path(path_raw);
     let dir = Path::new(trimmed)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());

@@ -31,6 +31,11 @@ impl LineInput {
         self.text.insert(self.cursor.min(self.text.len()), ch);
         self.cursor = (self.cursor + 1).min(self.text.len());
     }
+    /// Replace the text, cursor at the end.
+    pub fn set(&mut self, s: &str) {
+        self.text = s.chars().collect();
+        self.cursor = self.text.len();
+    }
     pub fn backspace(&mut self) {
         if self.cursor > 0 && !self.text.is_empty() {
             self.cursor -= 1;

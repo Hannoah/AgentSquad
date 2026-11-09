@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.10.3
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.11.0
 ```
 
 To install elsewhere:
@@ -123,7 +123,7 @@ case-insensitively by `remove` and `start`.
 | `1`–`9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
-| `a` | Add a project without leaving the manager (form previews the registered name and offers an autostart toggle) |
+| `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; `Tab` in the Path field completes folders, `↓` moves to the next field) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
@@ -141,6 +141,16 @@ case-insensitively by `remove` and `start`.
 
 Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
 for cursor-aware editing.
+
+**Picking a path in the add form.** An empty Path field lists the folders your
+projects already live in (`Alt+1`–`Alt+9` picks one; `Tab` takes the first).
+`Tab` completes the last segment against the disk, case-insensitively, and
+fills in the part all matches share; when several match they are listed and
+`Alt+1`–`Alt+9` picks one. A line under the fields says `✓ folder`,
+`✗ not found` or `✗ not a folder` right away.
+
+The terminal window title follows the selected project (`squad - my-app`) and
+is restored when squad exits.
 
 Inside a terminal, every key reaches the session, including `Esc` and
 `Ctrl+G`, which agents such as Claude Code use to interrupt, rewind or open
@@ -302,6 +312,15 @@ process-tree kill). Releases are built by GitHub Actions on every `v*` tag
   binary (e.g. `claude`, `node`) is on your `PATH` and the project path exists.
 - **`Exited (1)` right after start:** the process ran and exited; select it
   and read the terminal pane for its own error message.
+- **Antivirus blocks `powershell.exe` when a session starts** (AhnLab V3 /
+  Safe Transaction reports `Execution/MDP.Powershell.M1201`, "process
+  creation"): a default-shell session is `powershell.exe` started by
+  `squad.exe`, and behavior rules distrust an unsigned program that launches
+  PowerShell. Every release is a new unknown file, so it can return after an
+  update. Add the install folder `%LOCALAPPDATA%\AgentSquadin` (or
+  `squad.exe`) to the product's trusted/exclusion list **by path**, not by
+  hash, so updates stay covered, and report the false positive to the vendor.
+  squad does not try to hide its child processes from the scanner.
 - **Wrong project starts with `squad start`:** names match case-insensitively;
   make sure the name is unique.
 

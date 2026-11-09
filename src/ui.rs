@@ -25,6 +25,14 @@ pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦'
 pub fn spinner_frame(tick: u64) -> char {
     SPINNER[(tick as usize) % SPINNER.len()]
 }
+/// Terminal window title: which project the manager has selected, so the
+/// window reads as "squad - my-app" in the taskbar and tab strip.
+pub fn window_title(selected: Option<&str>) -> String {
+    match selected {
+        Some(name) => format!("squad - {name}"),
+        None => "squad".to_string(),
+    }
+}
 pub fn status_glyph(status: &str, tick: u64) -> char {
     if status == "Running" {
         spinner_frame(tick)
@@ -195,8 +203,9 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("Esc", "clears"),
         ],
         Mode::Add => &[
-            ("Tab", "next"),
-            ("Space", "toggle"),
+            ("Tab", "complete path"),
+            ("Alt+1-9", "pick"),
+            ("↓", "next field"),
             ("Enter", "save"),
             ("Esc", "cancel"),
         ],
@@ -234,8 +243,8 @@ pub fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
         Mode::Add => &[
             ("Enter", "save"),
             ("Esc", "cancel"),
-            ("Tab", "next"),
-            ("Space", "toggle"),
+            ("Tab", "complete"),
+            ("↓", "next"),
         ],
         _ => &[],
     }
