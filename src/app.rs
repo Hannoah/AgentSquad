@@ -29,6 +29,7 @@ use crate::config::*;
 use crate::input::*;
 use crate::ledger;
 use crate::pathpick::{self, PathState, Pick};
+use crate::select::Selection;
 use crate::session::*;
 use crate::sys::*;
 use crate::ui::*;
@@ -108,6 +109,8 @@ struct App {
     add_state: PathState,
     /// Matches from the last Tab, pickable with Alt+1..9.
     add_picks: Vec<Pick>,
+    /// Text being selected (or just copied) in the terminal pane.
+    sel: Option<Selection>,
     confirm_stop: Option<usize>,
     confirm_remove: Option<usize>,
     confirm_restart: Option<usize>,
@@ -195,6 +198,7 @@ impl App {
             add_err: String::new(),
             add_state: PathState::Blank,
             add_picks: Vec::new(),
+            sel: None,
             confirm_stop: None,
             confirm_remove: None,
             confirm_restart: None,

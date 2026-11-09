@@ -23,6 +23,7 @@ mod config;
 mod input;
 mod ledger;
 mod pathpick;
+mod select;
 mod session;
 mod sys;
 mod ui;

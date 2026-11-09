@@ -333,4 +333,27 @@ impl App {
             }
         };
     }
+
+    /// Copy the selected pane text to the clipboard and say so in the status bar.
+    pub(super) fn copy_selection(&mut self) {
+        let Some(sel) = self.sel else { return };
+        let ((r1, c1), (r2, c2)) = sel.span();
+        let Some(Some(s)) = self.sessions.get(sel.pi) else {
+            return;
+        };
+        let text = s.parser.screen().contents_between(r1, c1, r2, c2 + 1);
+        let text = text.trim_end();
+        self.message = if text.is_empty() {
+            ("Nothing to copy".to_string(), Notice::Warn)
+        } else {
+            match set_clipboard(text) {
+                Ok(()) => (
+                    format!("Copied {} characters", text.chars().count()),
+                    Notice::Info,
+                ),
+                Err(e) => (format!("Copy failed: {e}"), Notice::Error),
+            }
+        };
+        self.dirty = true;
+    }
 }

@@ -96,7 +96,7 @@ pub fn pane_usage_note(u: Usage) -> String {
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
-        "Click      select a project / focus its terminal",
+        "Click/drag select a project, focus a terminal; drag copies text",
         "Right-click  open quick actions for a project",
         "j/k, arrows  select project",
         "1-9        jump to project",

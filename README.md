@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.11.1
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.12.0
 ```
 
 To install elsewhere:
@@ -133,7 +133,8 @@ case-insensitively by `remove` and `start`.
 | `S` | Start all stopped sessions |
 | `U` | Open the update prompt when a new release has been detected |
 | `PgUp` / `PgDn` | Scroll the selected terminal (`Shift+PgUp` / `Shift+PgDn` while inside it; `Shift+End` or typing returns to live) |
-| Mouse wheel | Scroll the selected terminal (hold `Shift` to select text for copy) |
+| Drag | Select text in a terminal pane; it is copied to the clipboard when you let go (`Ctrl+C` copies a selection too) |
+| Mouse wheel | Scroll the selected terminal |
 | `Ctrl+Q`, middle-click | Back to the manager (from inside a terminal; clicking the project list works too) |
 | `Alt+1`–`Alt+9` | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
 | `?` | Toggle the help popup |
@@ -148,6 +149,15 @@ projects already live in (`Alt+1`–`Alt+9` picks one; `Tab` takes the first).
 fills in the part all matches share; when several match they are listed and
 `Alt+1`–`Alt+9` picks one. A line under the fields says `✓ folder`,
 `✗ not found` or `✗ not a folder` right away.
+
+**Selecting and copying terminal text.** Drag in a terminal pane (no `Shift`
+needed): the text is highlighted and copied when you release the button, and
+the status bar says how much was copied. Any key or click drops the highlight.
+`Ctrl+C` with a selection copies it instead of reaching the session; with
+nothing selected it goes to the session as usual. A click without a drag still
+focuses the session, and clicking a stopped session restarts it only if you do
+not drag, so you can select text from a finished session's output first. The
+terminal's own `Shift`+drag selection still works too.
 
 The terminal window title follows the selected project (`squad - my-app`) and
 is restored when squad exits.

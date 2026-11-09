@@ -4,6 +4,7 @@ use super::*;
 
 impl App {
     pub(super) fn on_resize(&mut self, a: Size) {
+        self.sel = None;
         let (rows, cols) = pane_size(a);
         for s in self.sessions.iter_mut().flatten() {
             if let Err(e) = s.resize(rows, cols) {
@@ -45,7 +46,19 @@ impl App {
         }
     }
 
+    /// The pane cell under the pointer, clamped to the pane so a drag that
+    /// leaves it still extends the selection to the edge.
+    fn pane_cell(&self, m: MouseEvent) -> (u16, u16) {
+        let inner = self.pane_rect.inner(ratatui::layout::Margin::new(1, 1));
+        let row = m.row.max(inner.y).min(inner.bottom().saturating_sub(1));
+        let col = m.column.max(inner.x).min(inner.right().saturating_sub(1));
+        (row.saturating_sub(inner.y), col.saturating_sub(inner.x))
+    }
+
     pub(super) fn on_mouse(&mut self, m: MouseEvent, area: Size, rows: u16, cols: u16) {
+        if matches!(m.kind, MouseEventKind::Down(_)) || wheel_lines(m.kind).is_some() {
+            self.sel = None; // the cells would no longer match the text
+        }
         if let Some(lines) = wheel_lines(m.kind) {
             let over_sidebar = self.mode != Mode::Focus
                 && self.side_rect.width > 0
@@ -240,16 +253,20 @@ impl App {
                 .pane_rect
                 .contains(ratatui::layout::Position::new(m.column, m.row))
             {
-                // Clicking terminal pane: start if stopped, focus if running
+                // Pressing in the terminal pane focuses a live session and may
+                // start a drag-selection. A session that is not running keeps
+                // its last output on screen (to copy from) and restarts only
+                // when released without a drag.
                 if let Some(&pi) = self.order.get(self.selected) {
-                    let live = self
-                        .sessions
-                        .get(pi)
-                        .and_then(|o| o.as_ref())
-                        .is_some_and(|s| s.status.is_running());
+                    let slot = self.sessions.get(pi).is_some_and(|o| o.is_some());
+                    let live = slot && slot_running(&self.sessions, pi);
+                    let inner = self.pane_rect.inner(ratatui::layout::Margin::new(1, 1));
+                    if slot && inner.contains(ratatui::layout::Position::new(m.column, m.row)) {
+                        self.sel = Some(Selection::new(pi, self.pane_cell(m)));
+                    }
                     if live {
                         self.mode = Mode::Focus;
-                    } else {
+                    } else if !slot {
                         match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
                         {
                             None => self.mode = Mode::Focus,
@@ -267,6 +284,35 @@ impl App {
                 };
                 self.dirty = true;
             }
+        } else if m.kind == MouseEventKind::Drag(MouseButton::Left) {
+            let at = self.pane_cell(m);
+            if let Some(sel) = self.sel.as_mut() {
+                sel.drag_to(at);
+                self.dirty = true;
+            }
+        } else if m.kind == MouseEventKind::Up(MouseButton::Left) {
+            match self.sel {
+                // A drag copies the moment the button comes up.
+                Some(sel) if sel.moved => self.copy_selection(),
+                // A plain click on a session that is not running restarts it.
+                Some(sel) => {
+                    self.sel = None;
+                    if !slot_running(&self.sessions, sel.pi) {
+                        match start_session(
+                            &mut self.sessions,
+                            &self.cfg.projects,
+                            sel.pi,
+                            rows,
+                            cols,
+                        ) {
+                            None => self.mode = Mode::Focus,
+                            Some(e) => self.message = (e, Notice::Error),
+                        }
+                    }
+                }
+                None => {}
+            }
+            self.dirty = true;
         } else if m.kind == MouseEventKind::Down(MouseButton::Middle) && self.mode == Mode::Focus {
             // Mouse twin of Ctrl+Q: leave the terminal without a key.
             self.mode = Mode::Manager;

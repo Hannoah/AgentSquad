@@ -5,6 +5,17 @@ use super::*;
 impl App {
     pub(super) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         self.dirty = true;
+        // Any key drops the highlight. Ctrl+C on a selection copies it and is
+        // not sent on; with nothing selected it reaches the session as before.
+        if self.sel.is_some_and(|s| s.moved)
+            && k.code == KeyCode::Char('c')
+            && k.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.copy_selection();
+            self.sel = None;
+            return;
+        }
+        self.sel = None;
         match self.mode {
             Mode::Focus => self.key_focus(k, rows),
             Mode::Send => self.key_send(k, rows, cols),

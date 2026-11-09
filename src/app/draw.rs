@@ -375,6 +375,21 @@ impl App {
         if let Some(s) = sel_pi.and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref())) {
             let screen = s.parser.screen();
             s.paint(f.buffer_mut(), inner);
+            if let Some(sel) = self.sel.filter(|x| x.moved && Some(x.pi) == sel_pi) {
+                // Drawn over the cached paint, so selecting never rebuilds it.
+                let hit = Style::default().bg(Color::Blue).fg(Color::White);
+                for row in 0..inner.height {
+                    for col in 0..inner.width {
+                        if sel.contains(row, col) {
+                            if let Some(cell) =
+                                f.buffer_mut().cell_mut((inner.x + col, inner.y + row))
+                            {
+                                cell.set_style(hit);
+                            }
+                        }
+                    }
+                }
+            }
             let scrollback_len = screen.scrollback_len();
             if scrollback_len > 0 {
                 let mut scrollbar_state = ScrollbarState::new(scrollback_len)

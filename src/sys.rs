@@ -508,3 +508,50 @@ pub fn console_title() -> Option<String> {
 pub fn console_title() -> Option<String> {
     None
 }
+
+/// Put `text` on the Windows clipboard as Unicode text.
+#[cfg(windows)]
+pub fn set_clipboard(text: &str) -> Result<(), String> {
+    use windows_sys::Win32::{
+        Foundation::GlobalFree,
+        System::{
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+        },
+    };
+    const CF_UNICODETEXT: u32 = 13;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: the clipboard is opened and closed here; the global block is
+    // sized for `wide`, filled while locked, and handed to the system only
+    // when SetClipboardData succeeds (otherwise it is freed).
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err("the clipboard is in use by another program".into());
+        }
+        let result = (|| {
+            EmptyClipboard();
+            let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2);
+            if mem.is_null() {
+                return Err("out of memory".to_string());
+            }
+            let dst = GlobalLock(mem).cast::<u16>();
+            if dst.is_null() {
+                GlobalFree(mem);
+                return Err("cannot lock clipboard memory".to_string());
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
+            GlobalUnlock(mem);
+            if SetClipboardData(CF_UNICODETEXT, mem).is_null() {
+                GlobalFree(mem);
+                return Err("the clipboard refused the text".to_string());
+            }
+            Ok(())
+        })();
+        CloseClipboard();
+        result
+    }
+}
+#[cfg(not(windows))]
+pub fn set_clipboard(_text: &str) -> Result<(), String> {
+    Err("copying is only supported on Windows".into())
+}

@@ -3,6 +3,7 @@ pub mod config;
 pub mod input;
 pub mod ledger;
 pub mod pathpick;
+pub mod select;
 pub mod session;
 pub mod sys;
 pub mod ui;
