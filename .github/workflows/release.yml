@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # No rust-cache here: SignPath origin verification wants a clean build.
       - name: Tag matches Cargo.toml version
         # squad update refuses a build whose --version differs from the tag.
         run: |
@@ -24,6 +24,35 @@ jobs:
         run: cargo test --locked
       - name: Build release
         run: cargo build --release --locked
+      # Code signing (SignPath Foundation). Runs only once the repository variable
+      # SIGNPATH_ORGANIZATION_ID is set; until then releases ship unsigned as before.
+      # Once it is set, any failure here fails the release instead of shipping unsigned.
+      - name: Upload unsigned exe for signing
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: squad-unsigned
+          path: target/release/squad.exe
+      - name: Sign with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - name: Check the signature
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        run: |
+          if (-not (Test-Path signed/squad.exe)) { throw "SignPath returned no signed/squad.exe" }
+          $sig = Get-AuthenticodeSignature signed/squad.exe
+          if ($sig.Status -ne 'Valid') { throw "squad.exe signature is $($sig.Status)" }
+          Copy-Item signed/squad.exe target/release/squad.exe -Force
       - name: Package
         run: |
           Compress-Archive -Path target/release/squad.exe -DestinationPath squad-windows-x86_64.zip

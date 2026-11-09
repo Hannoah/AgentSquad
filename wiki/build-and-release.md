@@ -26,6 +26,29 @@
 이 PC에는 `gh`가 없어서 공개 API로 확인했다:
 `https://api.github.com/repos/Hannoah/AgentSquad/actions/runs` 와 `.../releases/tags/vX.Y.Z`.
 
+## 코드 서명 (SignPath Foundation)
+
+`release.yml`은 저장소 변수 `SIGNPATH_ORGANIZATION_ID`가 있을 때만 `squad.exe`를 서명한다. 변수가 없으면 지금처럼 서명 없이 릴리스한다. 변수를 설정한 뒤에는 서명이 실패하면 릴리스 자체가 실패한다(서명 없는 파일이 조용히 나가지 않는다).
+
+배경: 서명 없는 `squad.exe`가 `powershell.exe`를 띄울 때 AhnLab MDP(`Execution/MDP.Powershell.M1201`)가 막는다. 릴리스마다 새 파일이라 평판이 쌓이지 않는다. 서명이 근본 해결이다.
+
+준비(사용자가 직접):
+
+1. SignPath Foundation(signpath.org)에 오픈소스 프로젝트로 신청한다. 자격과 절차는 그쪽 페이지 기준이고 이 저장소에서는 확인하지 못했다.
+2. SignPath에서 조직에 `GitHub.com` 신뢰 빌드 시스템을 추가하고 프로젝트에 연결한다. 프로젝트에 저장소 URL을 넣는다(출처 검증).
+3. 아티팩트 구성에 `.signpath/artifact-configuration.xml` 내용을 붙여 넣는다. 서명 정책은 릴리스 서명용으로 만들고, 제출자는 CI 사용자로 한다.
+4. GitHub 저장소 Settings > Secrets and variables > Actions에 등록한다.
+   - Secret: `SIGNPATH_API_TOKEN` (제출 권한이 있는 사용자의 토큰)
+   - Variables: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG`
+
+흐름: 빌드 → `squad.exe`를 아티팩트로 업로드(GitHub가 zip으로 묶음) → SignPath 제출과 대기 → `signed/squad.exe`가 있고 서명 상태가 `Valid`인지 확인 → 서명된 파일로 zip과 `.sha256`을 만든다. 체크섬은 서명된 zip 기준이라 설치 스크립트와 `squad update` 검증은 그대로 동작한다.
+
+주의:
+
+- 릴리스 잡에서 `rust-cache`를 뺐다. SignPath 출처 검증이 이전 빌드 캐시를 쓰지 않는 깨끗한 빌드를 요구한다. 릴리스가 조금 느려진다.
+- 첫 서명 릴리스에서 `signed/squad.exe` 경로가 맞는지 확인하지 못했다(문서에 출력 폴더 구조가 명시되지 않음). 다르면 `Check the signature` 단계가 실패하니 그 로그를 보고 경로를 고친다.
+- 문서 기준 액션 버전은 `signpath/github-action-submit-signing-request@v3`, 업로드는 `actions/upload-artifact@v7`이다.
+
 ## 자동 업데이트 (다음 릴리스부터)
 
 - 시작할 때 백그라운드 스레드가 새 버전을 확인한다. 화면과 입력은 기다리지 않는다. `https://github.com/Hannoah/AgentSquad/releases/latest`가 `/releases/tag/<태그>`로 리다이렉트되는 점을 이용해 `curl.exe`의 최종 URL만 읽는다(API 호출, 속도 제한, JSON 없음).
