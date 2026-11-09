@@ -15,7 +15,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use std::{
     env,
-    io::{self, IsTerminal},
+    io::{self, IsTerminal, Read},
 };
 
 use app::run;
@@ -57,6 +57,21 @@ fn main() -> Result<()> {
         println!("Downloading and verifying {tag}...");
         install_update(&tag)?;
         println!("Updated to {tag}. Restart squad to use it.");
+        return Ok(());
+    }
+    // Claude Code's Stop hook (see ledger::stop_hook); needs no config either.
+    if args.first().map(String::as_str) == Some("hook") {
+        if args.get(1).map(String::as_str) != Some("stop") {
+            bail!("Usage: squad hook stop (run by Claude Code, not by hand)");
+        }
+        let mut input = String::new();
+        let _ = io::stdin().read_to_string(&mut input);
+        if let Some(out) = env::current_dir()
+            .ok()
+            .and_then(|d| ledger::stop_hook(&input, &d))
+        {
+            println!("{out}");
+        }
         return Ok(());
     }
     let c = load()?;

@@ -14,7 +14,8 @@ use anyhow::Result;
 use std::{
     fs,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -51,7 +52,9 @@ order, a hazard). Keep it short: it is read at the start of every session.
 
 ## Rules
 
-- `events.log`, `ROSTER.md` and `REPORTS.md` are kept by squad. Do not edit them.
+- `events.log`, `ROSTER.md`, `REPORTS.md` and `hook.json` are kept by squad. Do not edit them.
+- If you change files and try to stop without filing a SITREP, squad's Stop
+  hook sends you back once to file it. Do it, then finish.
 - Write in the language the user uses with you.
 - Never put secrets (keys, tokens, passwords) in this folder.
 ";
@@ -204,6 +207,98 @@ pub fn write_rosters(projects: &[Project]) {
             let _ = fs::write(file, text);
         }
     }
+}
+
+/// Files git reports as changed in `project`, relative to it. None when git is
+/// missing or `project` is not a repository.
+fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
+    let mut cmd = Command::new("git");
+    cmd.args(["status", "--porcelain", "-z", "-uall"])
+        .current_dir(project);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // no console flash
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut files = Vec::new();
+    let mut entries = text.split('\0').filter(|e| e.len() > 3);
+    while let Some(e) = entries.next() {
+        files.push(PathBuf::from(&e[3..]));
+        // A rename or copy is followed by its old path, with no status prefix.
+        if matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C') {
+            entries.next();
+        }
+    }
+    Some(files)
+}
+
+/// When the agent last filed: the newest SITREP, else the last thing squad
+/// logged in this ledger.
+fn last_filed(ledger: &Path) -> Option<SystemTime> {
+    let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
+    fs::read_dir(ledger.join("log"))
+        .ok()?
+        .filter_map(|e| mtime(&e.ok()?.path()))
+        .max()
+        .or_else(|| mtime(&ledger.join("events.log")))
+}
+
+/// Did the agent change files since it last filed a SITREP? False when that
+/// cannot be told (no ledger, not a git repository).
+// ponytail: git is the change detector, so outside a repo nothing is enforced;
+// a deleted file has no mtime and is not seen.
+pub fn unrecorded(project: &Path) -> bool {
+    let Some(since) = last_filed(&project.join(DIR)) else {
+        return false;
+    };
+    changed_files(project).is_some_and(|files| {
+        files.iter().any(|f| {
+            !f.starts_with(DIR)
+                && fs::metadata(project.join(f))
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t > since)
+        })
+    })
+}
+
+/// What the Claude Code Stop hook prints: a block that sends the agent back to
+/// file a SITREP, or None to let it stop. `input` is the hook's JSON from
+/// stdin; `stop_hook_active` means we already sent it back once, so never loop.
+pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
+    if input
+        .split_whitespace()
+        .collect::<String>()
+        .contains("\"stop_hook_active\":true")
+    {
+        return None;
+    }
+    // The agent may have changed into a subfolder of its project.
+    let project = cwd.ancestors().find(|a| a.join(DIR).is_dir())?;
+    unrecorded(project).then(|| {
+        r#"{"decision":"block","reason":"You changed files since your last SITREP. Before you stop, file ONE SITREP in .squad/log/ as .squad/README.md describes (Situation, Action, Result, Next), then finish."}"#.to_string()
+    })
+}
+
+/// Claude Code settings that run `squad hook stop` when the agent finishes a
+/// turn. Pinned to PowerShell (always on Windows): Claude Code otherwise picks
+/// the shell itself, and a quoted path alone is a syntax error in PowerShell.
+fn hook_settings(exe: &Path) -> String {
+    let exe = exe
+        .display()
+        .to_string()
+        .replace('\\', "/")
+        .replace('\'', "''");
+    format!(
+        r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","shell":"powershell","command":"& '{exe}' hook stop"}}]}}]}}}}"#
+    )
+}
+
+/// Write the hook settings into the ledger and return their path, for
+/// `claude --settings`. A file, not inline JSON: a `claude.cmd` shim would
+/// mangle the quotes.
+pub fn write_hook_settings(project: &Path) -> Option<PathBuf> {
+    let file = project.join(DIR).join("hook.json");
+    fs::write(&file, hook_settings(&crate::updater::install_path()?)).ok()?;
+    Some(file)
 }
 
 /// Name of the newest SITREP in `project`'s log (names start with a UTC

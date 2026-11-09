@@ -32,6 +32,8 @@ impl App {
             self.key_context_menu(k, rows, cols);
         } else if self.confirm_update {
             self.key_confirm_update(k);
+        } else if self.confirm_apply {
+            self.key_confirm_apply(k);
         } else if self.confirm_quit {
             self.key_confirm_quit(k);
         } else if self.confirm_start_all {

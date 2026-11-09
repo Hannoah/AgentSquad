@@ -95,6 +95,30 @@ impl App {
         }
     }
 
+    /// The update is installed: `y` restarts squad into it (stopping the
+    /// sessions), `n` keeps the old build running until the next launch.
+    pub(super) fn key_confirm_apply(&mut self, k: KeyEvent) {
+        match update_key(k.code) {
+            Some(true) => {
+                self.confirm_apply = false;
+                self.relaunch = true;
+                self.quit = true;
+            }
+            Some(false) => self.dismiss_apply(),
+            None => {}
+        }
+    }
+
+    pub(super) fn dismiss_apply(&mut self) {
+        self.confirm_apply = false;
+        if let Some(tag) = self.applied.take() {
+            self.message = (
+                format!("{tag} is installed; it runs the next time you start squad."),
+                Notice::Info,
+            );
+        }
+    }
+
     pub(super) fn key_confirm_quit(&mut self, k: KeyEvent) {
         match confirm_destructive_key(k.code) {
             Some(true) => {

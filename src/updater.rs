@@ -149,6 +149,13 @@ pub fn watch_for_updates(tx: Sender<UpdateMsg>) {
         thread::sleep(Duration::from_secs(CHECK_COOLDOWN_SECS + 5));
     }
 }
+/// Where squad.exe lives, read once at startup. After a self-update the OS
+/// reports the renamed old file as the running exe, so later calls must not
+/// ask `current_exe()` again.
+pub fn install_path() -> Option<PathBuf> {
+    static EXE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| env::current_exe().ok()).clone()
+}
 /// Replace `current` with `new`. Windows lets a running exe be renamed but
 /// not overwritten, so move it aside first and put it back if the copy fails.
 pub fn swap_binary(new: &Path, current: &Path) -> Result<()> {
@@ -262,7 +269,7 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
 /// Fetch release `tag` and swap it in for the running binary.
 /// Slow: call from a worker thread.
 pub fn install_update(tag: &str) -> Result<()> {
-    let exe = env::current_exe()?;
+    let exe = install_path().context("Cannot find squad.exe")?;
     let work = env::temp_dir().join(format!("squad-update-{}", std::process::id()));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;

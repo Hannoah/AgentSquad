@@ -480,9 +480,28 @@ pub fn confirm_update_lines(tag: &str) -> Vec<Line<'static>> {
                 .add_modifier(ratatui::style::Modifier::BOLD),
         )),
         Line::from("Download and install it now?"),
-        Line::from("Running sessions keep running; restart squad to switch."),
+        Line::from("Running sessions keep running; you choose when to restart."),
         Line::from(""),
         Line::from(hint_spans(&[("y", "updates"), ("n / Esc", "later")])),
+    ]
+}
+/// After an update is installed: restart now to use it, or keep going.
+pub fn confirm_apply_lines(tag: &str, running: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            format!("squad {tag} is installed."),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
+        Line::from("Restart squad now to use it?"),
+        Line::from(if running == 0 {
+            "No sessions are running.".to_string()
+        } else {
+            format!("{} will be stopped.", plural_sessions(running))
+        }),
+        Line::from(""),
+        Line::from(hint_spans(&[("y", "restarts"), ("n / Esc", "later")])),
     ]
 }
 /// Centered rect of an exact size, clamped to `area`.

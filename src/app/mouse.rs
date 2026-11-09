@@ -159,6 +159,11 @@ impl App {
                     self.confirm_update = false;
                     self.dirty = true;
                 }
+            } else if self.confirm_apply {
+                if outside_modal {
+                    self.dismiss_apply();
+                    self.dirty = true;
+                }
             } else if let Some(pi) = self.context_menu {
                 // Quick-action menu is open: a click outside closes it,
                 // a click on a numbered row runs that action.
@@ -337,6 +342,7 @@ impl App {
             && self.confirm_remove.is_none()
             && self.confirm_restart.is_none()
             && !self.confirm_update
+            && !self.confirm_apply
         {
             // Right-click on a sidebar row opens its quick-action menu.
             // Manager-only, so typing in a terminal is never stolen, and

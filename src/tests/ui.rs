@@ -704,3 +704,15 @@ fn console_title_reads_without_panicking() {
     // A test run may have no console; either answer is fine, a crash is not.
     let _ = console_title();
 }
+#[test]
+fn confirm_apply_lines_say_what_a_restart_costs() {
+    let text = |n| {
+        confirm_apply_lines("v9.9.9", n)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(text(0).contains("v9.9.9") && text(0).contains("No sessions are running"));
+    assert!(text(2).contains("2 sessions will be stopped"));
+}

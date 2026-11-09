@@ -48,6 +48,7 @@ impl App {
             || self.confirm_remove.is_some()
             || self.confirm_restart.is_some()
             || self.confirm_update
+            || self.confirm_apply
             || self.confirm_quit
             || self.confirm_start_all
             || self.context_menu.is_some();
@@ -687,6 +688,15 @@ impl App {
         if self.confirm_update {
             let tag = self.update_offer.as_deref().unwrap_or("?");
             v.push(("Update available", Color::Yellow, confirm_update_lines(tag)));
+        }
+        if self.confirm_apply {
+            let tag = self.applied.as_deref().unwrap_or("?");
+            let n = live_session_count(&self.sessions);
+            v.push((
+                "Update installed",
+                Color::Green,
+                confirm_apply_lines(tag, n),
+            ));
         }
         v
     }

@@ -17,6 +17,7 @@
 
 `v*` 태그를 푸시하면 `release.yml`이 테스트, release 빌드, `squad-windows-x86_64.zip` 생성, GitHub Release 생성과 업로드를 한다.
 
+0. **버전 규칙**: 기본은 패치(`0.0.1`) 단위로 올린다(v0.13.0 → v0.13.1). 간단한 변경(UI 다듬기, 버그 수정, 문서)은 모두 여기에 해당한다. 마이너(`0.1.0`)는 사용자가 쓰는 새 기능이나 동작 변화가 클 때만, 사용자가 정할 때 올린다.
 1. `Cargo.toml`의 `version`을 올린다. `Cargo.lock`은 cargo가 갱신한다(워크플로가 `--locked`라서 lock 파일도 반드시 같이 커밋).
 2. README의 `-Version vX.Y.Z` 예시를 새 버전으로 맞춘다.
 3. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `tools\cargo-windows.ps1 test --locked`.
@@ -53,7 +54,7 @@
 
 - 시작할 때 백그라운드 스레드가 새 버전을 확인한다. 화면과 입력은 기다리지 않는다. `https://github.com/Hannoah/AgentSquad/releases/latest`가 `/releases/tag/<태그>`로 리다이렉트되는 점을 이용해 `curl.exe`의 최종 URL만 읽는다(API 호출, 속도 제한, JSON 없음).
 - 새 버전이 있으면 매니저에서 확인창을 띄운다. 포커스, 입력, 다른 확인창이 있으면 기다렸다가 키보드가 비었을 때 띄운다. 승인은 `y`만(`Enter`는 아님. 막 누르려던 Enter로 다운로드가 시작되는 사고를 막기 위해).
-- 승인하면 백그라운드에서 `curl.exe`로 zip을 받고 `System32\tar.exe`(bsdtar)로 풀고, 새 바이너리의 `--version`이 태그와 같은지 확인한 뒤 교체한다. 실행 중인 세션은 그대로이고 다음 실행부터 새 버전을 쓴다.
+- 승인하면 백그라운드에서 `curl.exe`로 zip을 받고 `System32\tar.exe`(bsdtar)로 풀고, 새 바이너리의 `--version`이 태그와 같은지 확인한 뒤 교체한다. 설치가 끝나면 지금 재시작할지 묻는다(`y`: 세션을 멈추고 새 squad를 같은 콘솔에서 띄워 기다림, `n`: 세션은 그대로이고 다음 실행부터 새 버전). 재시작 경로는 시작 시점에 보관한 `install_path()`다(업데이트 뒤 `current_exe()`는 이름이 바뀐 옛 파일을 가리킨다).
 - `tar.exe`는 PATH 대신 `System32` 전체 경로로 부른다. 이 PC는 Git의 GNU tar가 먼저 잡히는데 GNU tar는 zip을 못 푼다.
 - 교체 방식: 실행 중인 exe는 이름 변경은 되지만 덮어쓰기와 삭제는 안 된다(이 PC에서 직접 확인). 그래서 `squad.exe`를 `squad.exe.old-<pid>`로 옮기고 새 파일을 복사한다. 복사가 실패하면 되돌린다. 옛 파일은 다음 실행 때 지운다(다른 창이 아직 쓰는 것은 못 지우고 남는다).
 - 끄기: 환경 변수 `AGENTSQUAD_NO_UPDATE_CHECK=1`. 디버그 빌드는 확인도 교체도 하지 않는다(`cargo run`이 자기 자신을 덮어쓰지 않도록).

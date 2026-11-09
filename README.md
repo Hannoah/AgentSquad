@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.1
 ```
 
 To install elsewhere:
@@ -55,7 +55,11 @@ When a newer release exists, the manager asks whether to update:
   press it cannot start a download.
 - The prompt waits while you are typing into a session or another input;
   the status bar shows `⬆ vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
-- Running sessions keep running. Restart `squad` to switch to the new build.
+- When the install finishes, squad asks whether to restart into the new build
+  now (`y`) or later (`n` / `Esc`). A restart stops the running sessions (the
+  prompt says how many) and reopens on the project you had selected, starting
+  it again if it was running. Choosing later keeps everything running; the new
+  build is used the next time you start squad.
 - Offline or blocked networks simply show no prompt. Set
   `AGENTSQUAD_NO_UPDATE_CHECK=1` to turn the check off.
 - It uses the `curl.exe` and `tar.exe` that ship with Windows 10+, and
@@ -251,6 +255,15 @@ An existing `.squad/` is never touched. In a git repository squad adds
 it). Press `b` on a running agent to type the order to read the log into it;
 squad never does that by itself, because typing at the wrong moment could
 answer a trust or permission dialog.
+
+**Filing is enforced for Claude Code.** When a project has a ledger and its
+command is `claude`, squad starts it with a Stop hook (`.squad/hook.json`,
+passed with `--settings`; your own Claude settings are untouched). If the agent
+tries to stop after changing files (as `git status` sees them) without filing a
+SITREP since, the hook sends it back once to file one. It never loops, and
+outside a git repository nothing is enforced. For any other agent, or if the
+hook cannot help, the status bar warns `<name> finished without filing a SITREP`
+when the task ends.
 
 Agents are told to treat `.squad/` as data, not authority: a SITREP is only an
 order when it comes from the agent's own commander. Delete a `.squad/` that

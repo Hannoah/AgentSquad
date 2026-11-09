@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -143,6 +143,11 @@ struct App {
     upd_rx: mpsc::Receiver<UpdateMsg>,
     update_offer: Option<String>,
     confirm_update: bool,
+    /// An installed update waiting for the decision to restart into it.
+    applied: Option<String>,
+    confirm_apply: bool,
+    /// Restart squad into the new build once the manager has shut down.
+    relaunch: bool,
     updating: bool,
     tick: u64,
     last_anim_tick: Instant,
@@ -228,6 +233,9 @@ impl App {
             upd_rx,
             update_offer: None,
             confirm_update: false,
+            applied: None,
+            confirm_apply: false,
+            relaunch: false,
             updating: false,
             tick: 0,
             last_anim_tick: Instant::now(),
@@ -371,6 +379,8 @@ impl App {
                         ),
                         Notice::Info,
                     );
+                    // The prompt below asks whether to restart into it now.
+                    self.applied = Some(tag);
                 }
                 UpdateMsg::Failed(e) => {
                     self.updating = false;
@@ -390,6 +400,10 @@ impl App {
             || self.confirm_restart.is_some());
         if keyboard_free && !self.updating && !self.confirm_update && self.update_offer.is_some() {
             self.confirm_update = true;
+            self.dirty = true;
+        }
+        if keyboard_free && !self.confirm_update && !self.confirm_apply && self.applied.is_some() {
+            self.confirm_apply = true;
             self.dirty = true;
         }
         for (pi, slot) in self.sessions.iter_mut().enumerate() {
@@ -424,6 +438,15 @@ impl App {
                                 &projects[pi].name,
                                 &projects[c].name,
                             );
+                        }
+                        // Reaches here when the Stop hook did not (not Claude
+                        // Code, hook off, or not a git repository it can read).
+                        if projects[pi].ledger && ledger::unrecorded(&projects[pi].path) {
+                            self.message = (
+                                format!("{} finished without filing a SITREP", projects[pi].name),
+                                Notice::Warn,
+                            );
+                            self.dirty = true;
                         }
                     }
                     s.last_phase = phase_now;
@@ -503,10 +526,34 @@ impl App {
             .count()
     }
 
+    /// Arguments for the new squad after an update restart: reopen on the
+    /// selected project and, if it was running, start it again.
+    fn relaunch_args(&self) -> Vec<String> {
+        match self.order.get(self.selected) {
+            Some(&pi) if slot_running(&self.sessions, pi) => {
+                vec!["start".into(), self.cfg.projects[pi].name.clone()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     // ---- drawing ----
 }
 
+/// Run the manager; when an update was installed and the user chose to
+/// restart, start the new build in this console once the screen is restored.
 pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
+    if let Some(args) = run_ui(c, initial)? {
+        let exe = install_path().context("Cannot find squad.exe to restart")?;
+        // Wait for it: the new squad owns this console until it exits.
+        let status = std::process::Command::new(exe).args(args).status()?;
+        std::process::exit(status.code().unwrap_or(0));
+    }
+    Ok(())
+}
+
+fn run_ui(c: Config, initial: Option<usize>) -> Result<Option<Vec<String>>> {
+    let _ = install_path(); // remember the path before an update renames the file
     if !io::stdin().is_terminal() {
         bail!("squad needs an interactive terminal");
     }
@@ -572,7 +619,8 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
             break;
         }
     }
+    let relaunch = app.relaunch.then(|| app.relaunch_args());
     app.remember_selection();
     shutdown_all(&mut app.sessions);
-    Ok(())
+    Ok(relaunch)
 }

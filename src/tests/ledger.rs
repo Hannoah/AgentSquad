@@ -189,3 +189,71 @@ fn report_in_opens_the_ledger_when_there_is_none() {
     let text = std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap();
     assert!(text.contains("**a -> lead**: reporting in"), "{text}");
 }
+
+#[test]
+fn stop_hook_sends_the_agent_back_until_it_files() {
+    use crate::ledger;
+    use std::{fs, thread::sleep, time::Duration};
+    let dir = scratch_dir("hook");
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git init");
+    ledger::ensure(&dir).unwrap();
+    ledger::event(&dir, "start t");
+    assert!(
+        ledger::stop_hook("{}", &dir).is_none(),
+        "nothing changed yet"
+    );
+
+    sleep(Duration::from_millis(50));
+    fs::write(dir.join("a.txt"), "work").unwrap();
+    let out = ledger::stop_hook("{}", &dir).expect("changed files are blocked");
+    assert!(out.contains(r#""decision":"block""#));
+    assert!(
+        ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir).is_none(),
+        "sent back once, never in a loop"
+    );
+    fs::create_dir(dir.join("sub")).unwrap();
+    assert!(
+        ledger::stop_hook("{}", &dir.join("sub")).is_some(),
+        "found from a subfolder"
+    );
+
+    sleep(Duration::from_millis(50));
+    fs::write(dir.join(".squad").join("log").join("x.md"), "sitrep").unwrap();
+    assert!(
+        ledger::stop_hook("{}", &dir).is_none(),
+        "filed, so it may stop"
+    );
+    assert!(!ledger::unrecorded(&dir));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stop_hook_ignores_folders_without_ledger_or_git() {
+    use crate::ledger;
+    let dir = scratch_dir("hook-none");
+    assert!(ledger::stop_hook("{}", &dir).is_none(), "no ledger");
+    ledger::ensure(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    // Not a repository (scratch dir lives in temp): nothing to compare, so no block.
+    assert!(ledger::stop_hook("{}", &dir).is_none(), "no git");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hook_settings_file_runs_squad_hook_stop() {
+    use crate::ledger;
+    let dir = scratch_dir("hook-file");
+    ledger::ensure(&dir).unwrap();
+    let file = ledger::write_hook_settings(&dir).unwrap();
+    let text = std::fs::read_to_string(file).unwrap();
+    assert!(text.contains(r#""Stop""#) && text.contains(r#""shell":"powershell""#));
+    assert!(text.contains("' hook stop"), "{text}");
+    assert!(!text.contains(r"\U"), "forward slashes only: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -460,24 +460,9 @@ impl Session {
         let Some(program) = p.command.first() else {
             anyhow::bail!("Project '{}' has an empty command", p.name);
         };
-        let pair = native_pty_system().openpty(size(rows, cols))?;
-        let mut cmd = CommandBuilder::new(program);
-        cmd.args(&p.command[1..]);
-        cmd.cwd(&p.path);
-        for (k, v) in pty_env() {
-            cmd.env(k, v);
-        }
-        let mut reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .with_context(|| format!("Cannot start {program}"))?;
-        drop(pair.slave);
         let (ledger, ledger_note) = if p.ledger {
             match ledger::ensure(&p.path) {
                 Ok(created) => {
-                    ledger::event(&p.path, &format!("start {}", p.name));
                     let note = created.then(|| {
                         (
                             format!(
@@ -500,6 +485,36 @@ impl Session {
         } else {
             (None, None)
         };
+        // Claude Code agents with a ledger get a Stop hook that sends them
+        // back to file a SITREP; anything else (or an own --settings) is left alone.
+        let is_claude = std::path::Path::new(program)
+            .file_stem()
+            .is_some_and(|s| s.eq_ignore_ascii_case("claude"));
+        let hook =
+            (is_claude && p.kind == Kind::Agent && !p.command.iter().any(|a| a == "--settings"))
+                .then(|| ledger.as_deref().and_then(ledger::write_hook_settings))
+                .flatten();
+        let pair = native_pty_system().openpty(size(rows, cols))?;
+        let mut cmd = CommandBuilder::new(program);
+        if let Some(file) = &hook {
+            cmd.arg("--settings");
+            cmd.arg(file);
+        }
+        cmd.args(&p.command[1..]);
+        cmd.cwd(&p.path);
+        for (k, v) in pty_env() {
+            cmd.env(k, v);
+        }
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .with_context(|| format!("Cannot start {program}"))?;
+        drop(pair.slave);
+        if ledger.is_some() {
+            ledger::event(&p.path, &format!("start {}", p.name));
+        }
         // Bounded queue: at most 32 * 16 KiB of pending output per session.
         let (tx, rx) = mpsc::sync_channel(32);
         thread::spawn(move || {
