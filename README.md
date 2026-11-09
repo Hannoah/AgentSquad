@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.13.0
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.0
 ```
 
 To install elsewhere:
@@ -150,8 +150,11 @@ the field is empty. `↓` / `↑` highlight a row, `Enter` (or a click) fills it
 and lists *its* subfolders, so you can walk down the tree; past the last row
 `↓` moves to the next field, and `Enter` with nothing highlighted saves.
 `Tab` completes the last segment against the disk, case-insensitively, up to
-the part all matches share (or takes the highlighted row). A line under the
-fields says `✓ folder`, `✗ not found` or `✗ not a folder` right away.
+the part all matches share (or takes the highlighted row). The list sits right
+under the Path row with a header naming the folder it lists (the part you typed
+is bold), and the popup keeps a fixed height while you type. `✓ folder`,
+`✗ not found` or `✗ not a folder` shows at the right end of the Path row right
+away; a long path is shortened in the middle when you are not editing it.
 
 **Selecting and copying terminal text.** Drag in a terminal pane (no `Shift`
 needed): the text is highlighted and copied when you release the button, and

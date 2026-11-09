@@ -708,29 +708,34 @@ impl App {
         )
     }
 
-    /// The line under the fields: does the path exist, and the name it would
-    /// get. None while there is nothing to say.
-    fn add_status(&self) -> Option<Line<'static>> {
-        let (mark, color) = match self.add_state {
+    /// Does the typed path exist? Shown at the right end of the Path row.
+    fn add_mark(&self) -> (&'static str, Color) {
+        match self.add_state {
             PathState::Folder => ("✓ folder", Color::Green),
             PathState::Missing => ("✗ not found", Color::Red),
             PathState::NotFolder => ("✗ not a folder", Color::Red),
             PathState::Blank => ("", Color::Reset),
-        };
-        let name = self.add_preview();
-        if mark.is_empty() && name.is_none() {
-            return None;
         }
-        let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
-        let mut spans = vec![
-            Span::raw("  "),
-            Span::styled(mark, Style::default().fg(color)),
-        ];
-        if let Some(n) = name {
-            let gap = if mark.is_empty() { "" } else { " · " };
-            spans.push(Span::styled(format!("{gap}Registers as: {n}"), dim));
+    }
+
+    /// The line under the fields: the name the project would get.
+    fn add_status(&self) -> Option<Line<'static>> {
+        let name = self.add_preview()?;
+        Some(Line::from(Span::styled(
+            format!("  Registers as: {name}"),
+            Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        )))
+    }
+
+    /// Rows the folder list takes under the Path row: a header plus
+    /// `PICK_ROWS`, reserved even when fewer match so the popup never jumps.
+    /// Zero when another field is active.
+    pub(super) fn add_list_h(&self) -> u16 {
+        if self.add_field == 0 {
+            1 + PICK_ROWS as u16
+        } else {
+            0
         }
-        Some(Line::from(spans))
     }
 
     /// The rows of `add_picks` on screen: at most `PICK_ROWS`, scrolled so the
@@ -746,19 +751,63 @@ impl App {
         start..(start + PICK_ROWS).min(n)
     }
 
-    /// Popup row (inside the border) where the first folder row is drawn.
-    pub(super) fn add_list_top(&self) -> u16 {
-        5 + u16::from(self.add_status().is_some()) + 1
-    }
-
     /// The add form's popup; its height follows the rows it shows.
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
-        let list = self.add_pick_window().len();
         let rows = 5
+            + self.add_list_h()
             + u16::from(self.add_status().is_some())
-            + if list > 0 { list as u16 + 1 } else { 0 }
             + u16::from(!self.add_err.is_empty());
         fixed_rect(72, rows + 2, area)
+    }
+
+    /// The folder list under the Path row: a header naming the folder it lists,
+    /// then the visible rows (typed prefix in bold), padded to `add_list_h`.
+    fn add_list_lines(&self, modal_w: usize) -> Vec<Line<'static>> {
+        let h = usize::from(self.add_list_h());
+        if h == 0 {
+            return Vec::new();
+        }
+        let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
+        let typed = self.add_path.as_str();
+        let n = self.add_picks.len();
+        let header = match self.add_picks.first() {
+            None => String::new(),
+            Some(_) if typed.is_empty() => format!("  your project folders · {n} · ↑↓ Enter"),
+            Some((label, full)) => {
+                let dir = full.strip_suffix(label.as_str()).unwrap_or("");
+                let dir = shorten_middle(dir.trim_start_matches('"'), modal_w.saturating_sub(34));
+                format!("  in {dir} · {n} folders · ↑↓ Enter")
+            }
+        };
+        let mut out = vec![Line::from(Span::styled(header, dim))];
+        let prefix = typed
+            .rsplit(['\\', '/'])
+            .next()
+            .map_or(0, |s| s.chars().count());
+        for i in self.add_pick_window() {
+            let (label, _) = &self.add_picks[i];
+            let on = self.add_sel == Some(i);
+            let style = if on {
+                Style::default().bg(Color::Cyan).fg(Color::Black)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            // Parent suggestions are whole paths; subfolders drop their `\`.
+            let name = if typed.is_empty() {
+                label.as_str()
+            } else {
+                label.trim_end_matches(['\\', '/'])
+            };
+            let head: String = name.chars().take(prefix).collect();
+            let tail: String = name.chars().skip(prefix).collect();
+            out.push(Line::from(vec![
+                Span::styled(format!("  {} ", if on { "▸" } else { " " }), style),
+                Span::styled(head, style.add_modifier(ratatui::style::Modifier::BOLD)),
+                Span::styled(tail, style),
+            ]));
+        }
+        out.resize(h, Line::from(""));
+        out
     }
 
     pub(super) fn draw_add(&self, f: &mut Frame) {
@@ -792,6 +841,12 @@ impl App {
             ("Autostart", autostart_hint),
             ("Reports to", self.add_under.as_str()),
         ];
+        let (path_mark, path_mark_color) = self.add_mark();
+        let mark_w = if path_mark.is_empty() {
+            0
+        } else {
+            path_mark.chars().count() + 1
+        };
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
@@ -801,7 +856,12 @@ impl App {
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-            let mut row = vec![Span::styled(format!("{mark} {label}: "), label_style)];
+            let label_text = format!("{mark} {label}: ");
+            let label_w = label_text.chars().count();
+            // The Path row keeps its right end for the ✓/✗ mark.
+            let avail = modal_w.saturating_sub(label_w + if i == 0 { mark_w } else { 0 });
+            let mut used = label_w;
+            let mut row = vec![Span::styled(label_text, label_style)];
             let editing = active && matches!(i, 0 | 2 | 4);
             if editing {
                 let input = match i {
@@ -810,9 +870,8 @@ impl App {
                     _ => &self.add_under,
                 };
                 let (left, cur, right) = input.render_parts();
-                let label_w = format!("{mark} {label}: ").chars().count();
-                let (left, cur, right) =
-                    input_window(&left, cur, &right, modal_w.saturating_sub(label_w));
+                let (left, cur, right) = input_window(&left, cur, &right, avail);
+                used += left.chars().count() + 1 + right.chars().count();
                 let value_style = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
                 row.push(Span::styled(left, value_style));
                 row.push(Span::styled(
@@ -830,8 +889,15 @@ impl App {
                     ));
                 }
             } else {
+                // A path too long for its row keeps both ends.
+                let shown = if i == 0 {
+                    shorten_middle(val, avail)
+                } else {
+                    val.clone()
+                };
+                used += shown.chars().count();
                 row.push(Span::styled(
-                    val.clone(),
+                    shown,
                     if active {
                         Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                     } else {
@@ -839,32 +905,20 @@ impl App {
                     },
                 ));
             }
+            if i == 0 && mark_w > 0 {
+                let pad = modal_w.saturating_sub(used + mark_w - 1).max(1);
+                row.push(Span::raw(" ".repeat(pad)));
+                row.push(Span::styled(
+                    path_mark,
+                    Style::default().fg(path_mark_color),
+                ));
+            }
             lines.push(Line::from(row));
+            if i == 0 {
+                lines.extend(self.add_list_lines(modal_w));
+            }
         }
         lines.extend(self.add_status());
-        let win = self.add_pick_window();
-        if !win.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "  {} folders · ↑↓ choose · Enter fills",
-                    self.add_picks.len()
-                ),
-                Style::default().add_modifier(ratatui::style::Modifier::DIM),
-            )));
-        }
-        for i in win {
-            let (label, _) = &self.add_picks[i];
-            let on = self.add_sel == Some(i);
-            let style = if on {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
-            } else {
-                Style::default().fg(Color::Cyan)
-            };
-            lines.push(Line::from(Span::styled(
-                format!("  {} {label}", if on { "▸" } else { " " }),
-                style,
-            )));
-        }
         if !self.add_err.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("Error: {}", self.add_err),

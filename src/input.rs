@@ -98,6 +98,19 @@ pub fn input_window(before: &str, at: char, after: &str, width: usize) -> (Strin
         full[rel + start + 1..end].iter().collect(),
     )
 }
+/// Fit `s` into `width` chars by replacing the middle with `…`, so a long path
+/// keeps its drive/root and its last folder.
+pub fn shorten_middle(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n <= width || width < 3 {
+        return s.to_string();
+    }
+    let head = (width - 1) / 3;
+    let tail = width - 1 - head;
+    let start: String = s.chars().take(head).collect();
+    let end: String = s.chars().skip(n - tail).collect();
+    format!("{start}…{end}")
+}
 /// Status-bar input row: prompt + editable text with a block cursor + hint.
 pub fn input_line(
     prompt: String,

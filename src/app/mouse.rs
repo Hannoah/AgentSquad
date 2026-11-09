@@ -196,26 +196,31 @@ impl App {
                     }
                 } else {
                     let rel_y = m.row.saturating_sub(popup.y + 1);
+                    // The folder list sits between the Path row and Kind.
+                    let list_h = self.add_list_h();
                     match rel_y {
                         0 => self.add_field = 0,
-                        1 => {
-                            self.add_field = 1;
-                            self.add_kind = self.add_kind.toggled();
-                        }
-                        2 => self.add_field = 2,
-                        3 => {
-                            self.add_field = 3;
-                            self.add_autostart = !self.add_autostart;
-                        }
-                        4 => self.add_field = 4,
-                        // The folder list: click fills the path with that row.
-                        r => {
-                            let (top, win) = (self.add_list_top(), self.add_pick_window());
-                            let row = usize::from(r.saturating_sub(top));
-                            if r >= top && row < win.len() {
+                        // Header is row 1; click on a folder row fills the path.
+                        r if r <= list_h => {
+                            let win = self.add_pick_window();
+                            let row = usize::from(r.saturating_sub(2));
+                            if r >= 2 && row < win.len() {
                                 self.pick_path(win.start + row);
                             }
                         }
+                        r => match r - list_h {
+                            1 => {
+                                self.add_field = 1;
+                                self.add_kind = self.add_kind.toggled();
+                            }
+                            2 => self.add_field = 2,
+                            3 => {
+                                self.add_field = 3;
+                                self.add_autostart = !self.add_autostart;
+                            }
+                            4 => self.add_field = 4,
+                            _ => {}
+                        },
                     }
                 }
                 self.dirty = true;

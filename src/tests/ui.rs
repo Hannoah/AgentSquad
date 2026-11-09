@@ -397,6 +397,13 @@ fn input_window_keeps_cursor_visible() {
     );
 }
 #[test]
+fn shorten_middle_keeps_both_ends() {
+    assert_eq!(shorten_middle("C:\\work", 20), "C:\\work");
+    let s = shorten_middle("C:\\Users\\kornah\\Work\\AgentSquad", 16);
+    assert_eq!(s.chars().count(), 16);
+    assert!(s.starts_with("C:\\") && s.ends_with("Squad") && s.contains('…'));
+}
+#[test]
 fn plural_sessions_counts_nouns() {
     assert_eq!(plural_sessions(0), "0 sessions");
     assert_eq!(plural_sessions(1), "1 session");
