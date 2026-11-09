@@ -76,7 +76,19 @@ fn main() -> Result<()> {
     }
     let c = load()?;
     match args.first().map(String::as_str) {
-        None => run(c, None),
+        None => run(c, None, Vec::new()),
+        // Used by the update restart: start these sessions again, stay in the manager.
+        Some("resume") => {
+            let idx = args[1..]
+                .iter()
+                .filter_map(|n| {
+                    c.projects
+                        .iter()
+                        .position(|p| p.name.eq_ignore_ascii_case(n))
+                })
+                .collect();
+            run(c, None, idx)
+        }
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
@@ -190,7 +202,7 @@ fn main() -> Result<()> {
                 .iter()
                 .position(|p| p.name.eq_ignore_ascii_case(name))
                 .with_context(|| format!("Project not registered: {name}"))?;
-            run(c, Some(i))
+            run(c, Some(i), Vec::new())
         }
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
     }

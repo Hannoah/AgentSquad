@@ -30,6 +30,8 @@ impl App {
     pub(super) fn key_manager_or_confirm(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         if self.context_menu.is_some() {
             self.key_context_menu(k, rows, cols);
+        } else if self.history.is_some() {
+            self.key_history(k);
         } else if self.confirm_update {
             self.key_confirm_update(k);
         } else if self.confirm_apply {
@@ -491,6 +493,7 @@ impl App {
                 }
             }
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
+            KeyCode::Char('h') if !self.order.is_empty() => self.open_history(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             // Open the update prompt on demand; it also pops up by
             // itself whenever the manager has the keyboard.

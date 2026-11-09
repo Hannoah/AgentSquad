@@ -696,8 +696,9 @@ fn context_menu_lines_match_click_mapping() {
 }
 #[test]
 fn window_title_names_the_selected_project() {
-    assert_eq!(window_title(Some("my-app")), "squad - my-app");
-    assert_eq!(window_title(None), "squad");
+    assert_eq!(window_title(Some("my-app"), 0), "squad - my-app");
+    assert_eq!(window_title(None, 0), "squad");
+    assert_eq!(window_title(Some("my-app"), 2), "(2) squad - my-app");
 }
 #[test]
 fn console_title_reads_without_panicking() {

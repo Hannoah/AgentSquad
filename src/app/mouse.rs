@@ -121,7 +121,14 @@ impl App {
                 !modal_rect(lines, area.into())
                     .contains(ratatui::layout::Position::new(m.column, m.row))
             });
-            if self.mode == Mode::Help {
+            if self.history.is_some() {
+                if !history_popup(area.into())
+                    .contains(ratatui::layout::Position::new(m.column, m.row))
+                {
+                    self.history = None;
+                }
+                self.dirty = true;
+            } else if self.mode == Mode::Help {
                 // Clicks inside the popup (e.g. selecting text) keep it open.
                 if !help_popup(area.into())
                     .contains(ratatui::layout::Position::new(m.column, m.row))
@@ -343,6 +350,7 @@ impl App {
             && self.confirm_restart.is_none()
             && !self.confirm_update
             && !self.confirm_apply
+            && self.history.is_none()
         {
             // Right-click on a sidebar row opens its quick-action menu.
             // Manager-only, so typing in a terminal is never stolen, and

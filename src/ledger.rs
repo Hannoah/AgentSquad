@@ -310,6 +310,39 @@ fn newest_sitrep(project: &Path) -> Option<String> {
         .max()
 }
 
+/// The SITREPs filed in `project`, newest first, as (file name, path). Empty
+/// when there is no ledger.
+pub fn sitreps(project: &Path) -> Vec<(String, PathBuf)> {
+    let log = project.join(DIR).join("log");
+    let mut v: Vec<(String, PathBuf)> = fs::read_dir(&log)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().into_string().ok()?;
+            (e.path().is_file()).then(|| (name, e.path()))
+        })
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0)); // names start with a UTC stamp
+    v
+}
+
+/// `20261108T061200Z-add-auth.md` as `11-08 06:12 add-auth` (UTC); any other
+/// name is shown as it is.
+pub fn sitrep_label(name: &str) -> String {
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let b = stem.as_bytes();
+    if b.len() > 16 && b[8] == b'T' && b[15] == b'Z' && stem.is_char_boundary(16) {
+        let (d, t, slug) = (&stem[..8], &stem[9..15], stem[16..].trim_start_matches('-'));
+        if d.bytes().chain(t.bytes()).all(|c| c.is_ascii_digit()) {
+            return format!("{}-{} {}:{} {slug}", &d[4..6], &d[6..8], &t[..2], &t[2..4])
+                .trim_end()
+                .to_string();
+        }
+    }
+    stem.to_string()
+}
+
 /// Record that `from` finished a task, in `REPORTS.md` of the commander's
 /// project. Squad is the only writer, so appends never collide, and nothing
 /// is typed into any terminal. Does nothing without a ledger.

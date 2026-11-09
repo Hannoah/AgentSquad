@@ -35,7 +35,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.1
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.14.2
 ```
 
 To install elsewhere:
@@ -57,9 +57,10 @@ When a newer release exists, the manager asks whether to update:
   the status bar shows `⬆ vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
 - When the install finishes, squad asks whether to restart into the new build
   now (`y`) or later (`n` / `Esc`). A restart stops the running sessions (the
-  prompt says how many) and reopens on the project you had selected, starting
-  it again if it was running. Choosing later keeps everything running; the new
-  build is used the next time you start squad.
+  prompt says how many), starts the new build on the project you had selected
+  and starts every session that was running again (conversations of agents
+  that cannot resume are lost). Choosing later keeps everything running; the
+  new build is used the next time you start squad.
 - Offline or blocked networks simply show no prompt. Set
   `AGENTSQUAD_NO_UPDATE_CHECK=1` to turn the check off.
 - It uses the `curl.exe` and `tar.exe` that ship with Windows 10+, and
@@ -129,6 +130,7 @@ case-insensitively by `remove` and `start`.
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
+| `h` | History: read the selected project's SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
@@ -230,8 +232,13 @@ Optional settings:
 - `autostart = true` on a project starts its session when the manager opens
   (`squad add --autostart` sets it too).
 - `bell = false` at the top level silences the terminal bell. By default squad
-  rings it once (at most every 3 seconds) when an agent you are not typing
-  into starts waiting for input (`?`) or finishes (`✔`).
+  rings it (at most once every 10 seconds) only when an agent you are not
+  typing into starts waiting for input (`?`). A finished task never rings; it
+  shows up as a count in the window title instead, e.g. `(2) squad - my-app`
+  (agents waiting plus finished tasks you have not opened yet), which you can
+  see on the tab or the taskbar. To keep the bell but make it silent, set
+  Windows Terminal's `bellStyle` to `["window", "taskbar"]`: it then flashes
+  instead of beeping.
 - `scrollback = 5000` sets the lines kept per session (default 2000).
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.

@@ -257,3 +257,29 @@ fn hook_settings_file_runs_squad_hook_stop() {
     assert!(!text.contains(r"\U"), "forward slashes only: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sitreps_list_newest_first_with_readable_labels() {
+    use crate::ledger::{sitrep_label, sitreps};
+    assert_eq!(
+        sitrep_label("20261108T061200Z-add-auth.md"),
+        "11-08 06:12 add-auth"
+    );
+    assert_eq!(
+        sitrep_label("notes.md"),
+        "notes",
+        "unstamped names pass through"
+    );
+    let dir = scratch_dir("sitreps");
+    assert!(sitreps(&dir).is_empty(), "no ledger, no entries");
+    crate::ledger::ensure(&dir).unwrap();
+    let log = dir.join(".squad").join("log");
+    std::fs::write(log.join("20261108T061200Z-old.md"), "a").unwrap();
+    std::fs::write(log.join("20261109T010000Z-new.md"), "b").unwrap();
+    let names: Vec<String> = sitreps(&dir).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(
+        names,
+        ["20261109T010000Z-new.md", "20261108T061200Z-old.md"]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

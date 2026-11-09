@@ -117,10 +117,11 @@ pub enum AgentPhase {
     Idle,
 }
 
-/// Should the bell ring for this change? Yes when an agent starts waiting
-/// for input, or finishes after working.
-pub fn rings_bell(prev: AgentPhase, now: AgentPhase) -> bool {
-    now == AgentPhase::NeedsInput || (now == AgentPhase::Done && prev == AgentPhase::Working)
+/// Should the bell ring when an agent enters `now`? Only when it starts
+/// waiting for you; a finished task shows in the title and sidebar instead,
+/// so the bell stays rare.
+pub fn rings_bell(now: AgentPhase) -> bool {
+    now == AgentPhase::NeedsInput
 }
 
 impl AgentPhase {
@@ -435,6 +436,9 @@ pub struct Session {
     pub dismissed_exit: bool,
     /// Phase seen at the last check, to spot changes worth a bell.
     pub last_phase: AgentPhase,
+    /// A finished task the user has already looked at, so the window title
+    /// stops counting it.
+    pub acked: bool,
     /// Project folder whose ledger gets this session's events, if enabled.
     ledger: Option<std::path::PathBuf>,
     /// One-time message for the status bar (ledger created, or why not).
@@ -552,6 +556,7 @@ impl Session {
             had_activity: false,
             dismissed_exit: false,
             last_phase: AgentPhase::Idle,
+            acked: false,
             ledger,
             ledger_note,
             cached_needs_input: false,

@@ -95,6 +95,44 @@ impl App {
         }
     }
 
+    /// `h`: read the selected project's SITREPs without leaving squad.
+    pub(super) fn open_history(&mut self) {
+        let Some(p) = self
+            .order
+            .get(self.selected)
+            .and_then(|&pi| self.cfg.projects.get(pi))
+        else {
+            return;
+        };
+        let items = ledger::sitreps(&p.path);
+        self.message = if items.is_empty() {
+            (
+                format!("No SITREPs in {} yet (needs ledger = true)", p.name),
+                Notice::Warn,
+            )
+        } else {
+            self.history = Some(History::open(&p.name, items));
+            return;
+        };
+    }
+
+    pub(super) fn key_history(&mut self, k: KeyEvent) {
+        let Some(h) = self.history.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => self.history = None,
+            KeyCode::Down | KeyCode::Char('j') => h.select(h.sel + 1),
+            KeyCode::Up | KeyCode::Char('k') => h.select(h.sel.saturating_sub(1)),
+            KeyCode::PageDown | KeyCode::Char(' ') => h.scroll = h.scroll.saturating_add(10),
+            KeyCode::PageUp => h.scroll = h.scroll.saturating_sub(10),
+            KeyCode::Home => h.select(0),
+            KeyCode::End => h.select(usize::MAX),
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
     /// The update is installed: `y` restarts squad into it (stopping the
     /// sessions), `n` keeps the old build running until the next launch.
     pub(super) fn key_confirm_apply(&mut self, k: KeyEvent) {

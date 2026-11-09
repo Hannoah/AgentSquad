@@ -156,6 +156,10 @@ struct App {
     last_bell: Option<Instant>,
     /// Projects with `autostart` start once, on the first loop pass.
     autostart_pending: bool,
+    /// Sessions to start again after an update restart (`squad resume`).
+    resume: Vec<usize>,
+    /// The SITREP reader (`h`), open over the manager.
+    history: Option<History>,
     quit: bool,
 }
 
@@ -242,6 +246,8 @@ impl App {
             bell: false,
             last_bell: None,
             autostart_pending: true,
+            resume: Vec::new(),
+            history: None,
             quit: false,
         }
     }
@@ -258,7 +264,7 @@ impl App {
                 .and_then(|s| s.fg_name.as_deref());
             Some(live_name(self.cfg.projects.get(pi)?, fg))
         });
-        window_title(name)
+        window_title(name, self.attention_count())
     }
 
     /// Remember the selected project so the next launch opens on it.
@@ -292,9 +298,12 @@ impl App {
     fn start_initial(&mut self, rows: u16, cols: u16) {
         if self.autostart_pending {
             self.autostart_pending = false;
-            let pis: Vec<usize> = (0..self.cfg.projects.len())
+            let mut pis: Vec<usize> = (0..self.cfg.projects.len())
                 .filter(|&i| self.cfg.projects[i].autostart)
                 .collect();
+            pis.append(&mut self.resume);
+            pis.sort_unstable();
+            pis.dedup();
             if !pis.is_empty() {
                 let (n, failed) =
                     start_sessions(&mut self.sessions, &self.cfg.projects, &pis, rows, cols);
@@ -393,6 +402,7 @@ impl App {
         // Ask only when nothing else owns the keyboard, so a prompt never
         // swallows keystrokes meant for a session or another input.
         let keyboard_free = !(self.mode != Mode::Manager
+            || self.history.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()
@@ -420,6 +430,10 @@ impl App {
                 // frame unless that icon or the status changed.
                 let selected = self.order.get(self.selected) == Some(&pi);
                 let phase_now = s.phase();
+                // Opening a finished task counts as seeing it; new work resets it.
+                let acked = phase_now == AgentPhase::Done && (s.acked || selected);
+                self.dirty |= acked != s.acked;
+                s.acked = acked;
                 self.dirty |= changed
                     && (selected
                         || phase_now != phase_before
@@ -427,7 +441,7 @@ impl App {
                 if self.cfg.projects[pi].kind == Kind::Agent && phase_now != s.last_phase {
                     // No bell for the session you are typing into.
                     let watching = selected && self.mode == Mode::Focus;
-                    self.bell |= !watching && rings_bell(s.last_phase, phase_now);
+                    self.bell |= !watching && rings_bell(phase_now);
                     // A finished task is reported to the commander's REPORTS.md.
                     if phase_now == AgentPhase::Done && s.last_phase == AgentPhase::Working {
                         let projects = &self.cfg.projects;
@@ -469,13 +483,28 @@ impl App {
         }
     }
 
+    /// Agents waiting for you (`?`) plus finished tasks you have not opened:
+    /// the number shown in the window title, a silent way to get noticed.
+    fn attention_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .flatten()
+            .filter(|s| s.status.is_running())
+            .filter(|s| match s.last_phase {
+                AgentPhase::NeedsInput => true,
+                AgentPhase::Done => !s.acked,
+                _ => false,
+            })
+            .count()
+    }
+
     /// True when the terminal bell should ring now. At most one ring per
-    /// 3 s, so an agent flipping between working and done cannot buzz.
+    /// 10 s, so a flurry of questions cannot buzz.
     fn take_bell(&mut self) -> bool {
         let want = std::mem::take(&mut self.bell);
         let gap_ok = self
             .last_bell
-            .is_none_or(|t| t.elapsed() >= Duration::from_secs(3));
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
         if want && gap_ok && self.cfg.bell != Some(false) {
             self.last_bell = Some(Instant::now());
             return true;
@@ -526,15 +555,19 @@ impl App {
             .count()
     }
 
-    /// Arguments for the new squad after an update restart: reopen on the
-    /// selected project and, if it was running, start it again.
+    /// Arguments for the new squad after an update restart: `resume` every
+    /// session that was running (the selection itself is remembered on disk).
     fn relaunch_args(&self) -> Vec<String> {
-        match self.order.get(self.selected) {
-            Some(&pi) if slot_running(&self.sessions, pi) => {
-                vec!["start".into(), self.cfg.projects[pi].name.clone()]
-            }
-            _ => Vec::new(),
+        let running: Vec<String> = (0..self.cfg.projects.len())
+            .filter(|&pi| slot_running(&self.sessions, pi))
+            .map(|pi| self.cfg.projects[pi].name.clone())
+            .collect();
+        if running.is_empty() {
+            return Vec::new();
         }
+        std::iter::once("resume".to_string())
+            .chain(running)
+            .collect()
     }
 
     // ---- drawing ----
@@ -542,8 +575,45 @@ impl App {
 
 /// Run the manager; when an update was installed and the user chose to
 /// restart, start the new build in this console once the screen is restored.
-pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
-    if let Some(args) = run_ui(c, initial)? {
+/// A project's SITREPs open for reading: the list, the picked one's text and
+/// how far it is scrolled.
+struct History {
+    project: String,
+    items: Vec<(String, std::path::PathBuf)>,
+    sel: usize,
+    scroll: u16,
+    text: String,
+}
+impl History {
+    fn open(project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
+        let mut h = Self {
+            project: project.to_string(),
+            items,
+            sel: 0,
+            scroll: 0,
+            text: String::new(),
+        };
+        h.load();
+        h
+    }
+    fn load(&mut self) {
+        self.scroll = 0;
+        self.text = self.items.get(self.sel).map_or_else(String::new, |(_, p)| {
+            let t = std::fs::read_to_string(p).unwrap_or_else(|e| format!("Cannot read: {e}"));
+            t.chars().take(20_000).collect() // a runaway file must not stall drawing
+        });
+    }
+    fn select(&mut self, i: usize) {
+        let i = i.min(self.items.len().saturating_sub(1));
+        if i != self.sel {
+            self.sel = i;
+            self.load();
+        }
+    }
+}
+
+pub fn run(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<()> {
+    if let Some(args) = run_ui(c, initial, resume)? {
         let exe = install_path().context("Cannot find squad.exe to restart")?;
         // Wait for it: the new squad owns this console until it exits.
         let status = std::process::Command::new(exe).args(args).status()?;
@@ -552,7 +622,7 @@ pub fn run(c: Config, initial: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn run_ui(c: Config, initial: Option<usize>) -> Result<Option<Vec<String>>> {
+fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Option<Vec<String>>> {
     let _ = install_path(); // remember the path before an update renames the file
     if !io::stdin().is_terminal() {
         bail!("squad needs an interactive terminal");
@@ -571,6 +641,7 @@ fn run_ui(c: Config, initial: Option<usize>) -> Result<Option<Vec<String>>> {
     let stdout = io::BufWriter::new(io::stdout());
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(c, initial);
+    app.resume = resume;
     let mut title = String::new();
     loop {
         let area = terminal.size()?;

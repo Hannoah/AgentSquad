@@ -44,6 +44,7 @@ impl App {
         self.draw_pane(f, panels[1]);
         self.draw_status(f, vertical[1]);
         let has_modal = matches!(self.mode, Mode::Help | Mode::Add)
+            || self.history.is_some()
             || self.confirm_stop.is_some()
             || self.confirm_remove.is_some()
             || self.confirm_restart.is_some()
@@ -59,11 +60,69 @@ impl App {
         if self.mode == Mode::Help {
             self.draw_help(f);
         }
+        self.draw_history(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
         if self.mode == Mode::Add {
             self.draw_add(f);
         }
+    }
+
+    /// The SITREP reader: filed entries on the left, the picked one's text on
+    /// the right.
+    fn draw_history(&self, f: &mut Frame) {
+        let Some(h) = &self.history else {
+            return;
+        };
+        let popup = history_popup(f.area());
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(Span::styled(
+                format!(
+                    "History: {} ({}) ↑↓ pick · PgUp/PgDn scroll · Esc closes",
+                    h.project,
+                    h.items.len()
+                ),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(30.min(inner.width / 3)),
+                Constraint::Min(1),
+            ])
+            .split(inner);
+        let rows = usize::from(cols[0].height).max(1);
+        let start = (h.sel + 1).saturating_sub(rows);
+        let list: Vec<Line> = h
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(rows)
+            .map(|(i, (name, _))| {
+                let style = if i == h.sel {
+                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                Line::from(Span::styled(crate::ledger::sitrep_label(name), style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(list), cols[0]);
+        f.render_widget(
+            Paragraph::new(h.text.as_str())
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .scroll((h.scroll, 0))
+                .block(Block::default().borders(Borders::LEFT)),
+            cols[1],
+        );
     }
 
     pub(super) fn draw_context_menu(&self, f: &mut Frame) {

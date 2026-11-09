@@ -393,13 +393,13 @@ fn needs_input_and_working_ignore_false_positives() {
 #[test]
 fn bell_rings_for_attention_not_for_noise() {
     use AgentPhase::*;
-    assert!(rings_bell(Working, NeedsInput));
-    assert!(rings_bell(Idle, NeedsInput));
-    assert!(rings_bell(Working, Done));
-    assert!(!rings_bell(Idle, Done), "Done without work is not news");
-    assert!(!rings_bell(Done, Working));
-    assert!(!rings_bell(NeedsInput, Working));
-    assert!(!rings_bell(Working, Idle));
+    assert!(rings_bell(NeedsInput));
+    assert!(
+        !rings_bell(Done),
+        "a finished task is silent: title and sidebar show it"
+    );
+    assert!(!rings_bell(Working));
+    assert!(!rings_bell(Idle));
 }
 
 #[test]

@@ -72,8 +72,8 @@ pub struct Config {
     /// Lines of scrollback kept per session (default 2000).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
-    /// Ring the terminal bell when a background agent needs input or
-    /// finishes (default true; `bell = false` silences it).
+    /// Ring the terminal bell when a background agent starts waiting for
+    /// input (default true; `bell = false` silences it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bell: Option<bool>,
 }

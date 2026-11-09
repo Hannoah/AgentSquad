@@ -27,10 +27,17 @@ pub fn spinner_frame(tick: u64) -> char {
 }
 /// Terminal window title: which project the manager has selected, so the
 /// window reads as "squad - my-app" in the taskbar and tab strip.
-pub fn window_title(selected: Option<&str>) -> String {
+/// `(2) squad - my-app`: the number is how many agents want you (waiting for
+/// input, or finished and not yet opened), visible on a tab or the taskbar.
+pub fn window_title(selected: Option<&str>, attention: usize) -> String {
+    let count = if attention > 0 {
+        format!("({attention}) ")
+    } else {
+        String::new()
+    };
     match selected {
-        Some(name) => format!("squad - {name}"),
-        None => "squad".to_string(),
+        Some(name) => format!("{count}squad - {name}"),
+        None => format!("{count}squad"),
     }
 }
 pub fn status_glyph(status: &str, tick: u64) -> char {
@@ -99,12 +106,12 @@ pub fn help_lines() -> Vec<&'static str> {
         "Click/drag select a project, focus a terminal; drag copies text",
         "Right-click  open quick actions for a project",
         "j/k, arrows  select project",
-        "1-9        jump to project",
-        "Home/End   first / last project",
+        "1-9, Home/End  jump to a project / the first / the last",
         "/          filter projects (Esc clears)",
         "a          add project",
         "m          message: send a line to session",
         "b          brief the agent on .squad/ (ledger = true)",
+        "h          history: read the project's SITREPs",
         "o          order: send a line to every agent under a commander",
         "u          set whom the selected agent reports to",
         "s          stop session (asks to confirm)",
@@ -498,7 +505,10 @@ pub fn confirm_apply_lines(tag: &str, running: usize) -> Vec<Line<'static>> {
         Line::from(if running == 0 {
             "No sessions are running.".to_string()
         } else {
-            format!("{} will be stopped.", plural_sessions(running))
+            format!(
+                "{} will be stopped, then started again.",
+                plural_sessions(running)
+            )
         }),
         Line::from(""),
         Line::from(hint_spans(&[("y", "restarts"), ("n / Esc", "later")])),
@@ -512,6 +522,14 @@ pub fn modal_rect(lines: &[Line], area: ratatui::layout::Rect) -> ratatui::layou
     fixed_rect(
         widest.saturating_add(4).clamp(40, 64),
         lines.len() as u16 + 2,
+        area,
+    )
+}
+/// The SITREP reader: nearly the whole screen, shared by drawing and clicks.
+pub fn history_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    fixed_rect(
+        area.width.saturating_sub(6).min(130),
+        area.height.saturating_sub(4),
         area,
     )
 }
