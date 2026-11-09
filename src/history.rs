@@ -9,8 +9,9 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// Shortest task worth an entry; anything quicker is typing, not work.
@@ -102,19 +103,35 @@ pub fn gather(path: &Path, started: SystemTime) -> (Vec<String>, Vec<String>) {
     (files, commits)
 }
 
+/// Entries still being written by a worker.
+static PENDING: AtomicUsize = AtomicUsize::new(0);
+
 /// File an entry for `t`. The git lookups run on a worker so the UI never
 /// waits for them. Best effort: a failure costs the entry, never the session.
-// ponytail: a worker still running when squad quits loses its entry; join the
-// workers in shutdown if that ever shows up.
+/// `flush` before exit, or a worker still running then loses its entry.
 pub fn record(t: Task) {
+    PENDING.fetch_add(1, Ordering::SeqCst);
     thread::spawn(move || {
-        // The ledger is made when the project is registered; this covers one
-        // deleted since. A folder that is gone gets no entry.
-        if !t.path.is_dir() || crate::ledger::ensure(&t.path).is_err() {
-            return;
-        }
-        let (files, commits) = gather(&t.path, t.started);
-        let dir = t.path.join(crate::ledger::DIR).join("log");
-        write_entry(&dir, &t, &files, &commits);
+        file(&t);
+        PENDING.fetch_sub(1, Ordering::SeqCst);
     });
+}
+
+fn file(t: &Task) {
+    // The ledger is made when the project is registered; this covers one
+    // deleted since. A folder that is gone gets no entry.
+    if !t.path.is_dir() || crate::ledger::ensure(&t.path).is_err() {
+        return;
+    }
+    let (files, commits) = gather(&t.path, t.started);
+    let dir = t.path.join(crate::ledger::DIR).join("log");
+    write_entry(&dir, t, &files, &commits);
+}
+
+/// Wait (up to `limit`) for entries still being written. Call before exit.
+pub fn flush(limit: Duration) {
+    let end = Instant::now() + limit;
+    while PENDING.load(Ordering::SeqCst) > 0 && Instant::now() < end {
+        thread::sleep(Duration::from_millis(20));
+    }
 }

@@ -754,6 +754,13 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     }
     let relaunch = app.relaunch.then(|| app.relaunch_args());
     app.remember_selection();
+    // Quitting mid-task ends the task too: file it before the screen is gone.
+    for (pi, slot) in app.sessions.iter_mut().enumerate() {
+        if let Some(s) = slot.as_mut().filter(|s| s.status.is_running()) {
+            file_history(s, &app.cfg.projects[pi], "squad closed mid-task".into());
+        }
+    }
     shutdown_all(&mut app.sessions);
+    history::flush(Duration::from_secs(3));
     Ok(relaunch)
 }

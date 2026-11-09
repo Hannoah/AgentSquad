@@ -121,3 +121,21 @@ fn gather_reports_commits_and_changed_files_from_git() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&plain);
 }
+
+#[test]
+fn flush_waits_for_entries_still_being_written() {
+    let dir = scratch_dir("history-flush");
+    let t = Task {
+        path: dir.clone(),
+        ..task()
+    };
+    crate::history::record(t);
+    crate::history::flush(Duration::from_secs(10));
+    let log = dir.join(crate::ledger::DIR).join("log");
+    assert_eq!(
+        list_entries(&log).len(),
+        1,
+        "entry exists once flush returns"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
