@@ -531,7 +531,7 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
                 counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
                 let ok = GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0;
                 CloseHandle(handle);
-                ok.then(|| ProcInfo {
+                ok.then_some(ProcInfo {
                     pid,
                     name,
                     mem: counters.WorkingSetSize as u64,
