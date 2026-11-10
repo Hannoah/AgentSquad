@@ -40,4 +40,4 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 
 - github.com/Hannoah/AgentSquad (공개). CI와 릴리스는 GitHub Actions. 설치는 [build-and-release.md](build-and-release.md) 참고.
 - 지원 범위는 Windows(x86_64)와 macOS(Apple Silicon, Intel)다. CI는 `windows-latest`와 `macos-latest` 매트릭스로 돌고, 릴리스는 두 플랫폼 에셋을 올린다(macOS 지원 추가: c61110e).
-- 현재 버전: v0.15.4.
+- 현재 버전: v0.15.5.

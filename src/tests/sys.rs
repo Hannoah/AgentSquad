@@ -107,3 +107,23 @@ fn kill_refusal_protects_squad_and_system() {
     assert!(kill_refusal(std::process::id()).is_some(), "squad itself");
     assert!(kill_refusal(1).is_some(), "init/launchd");
 }
+#[test]
+fn ancestors_walk_up_and_stop_at_loops() {
+    let parents: std::collections::HashMap<u32, u32> =
+        [(5, 4), (4, 3), (3, 0), (8, 9), (9, 8)].into();
+    assert_eq!(crate::sys::ancestors_of(5, &parents), vec![4, 3]);
+    assert_eq!(
+        crate::sys::ancestors_of(8, &parents),
+        vec![9],
+        "loop ends the walk"
+    );
+    assert!(crate::sys::ancestors_of(99, &parents).is_empty());
+}
+#[test]
+fn top_processes_knows_its_own_parent() {
+    let me = top_processes(10_000)
+        .into_iter()
+        .find(|p| p.pid == std::process::id())
+        .unwrap();
+    assert!(me.ppid > 0 && me.ancestors.first() == Some(&me.ppid));
+}

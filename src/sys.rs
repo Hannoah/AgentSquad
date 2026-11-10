@@ -483,6 +483,61 @@ pub struct ProcInfo {
     pub pid: u32,
     pub name: String,
     pub mem: u64,
+    pub ppid: u32,
+    /// Name of the parent, empty when it is gone or unknown.
+    pub parent: String,
+    /// Total CPU time used, in seconds.
+    pub cpu_secs: u64,
+    /// Parent, grandparent and so on (bounded), to tell whose session it runs in.
+    pub ancestors: Vec<u32>,
+}
+/// pid -> parent pid, from a snapshot's child lists.
+#[cfg(any(windows, unix))]
+fn parent_map(children: &HashMap<u32, Vec<u32>>) -> HashMap<u32, u32> {
+    children
+        .iter()
+        .flat_map(|(&ppid, kids)| kids.iter().map(move |&k| (k, ppid)))
+        .collect()
+}
+/// Up to 32 ancestors of `pid`, nearest first; stops at a loop or the root.
+#[cfg(any(windows, unix))]
+pub(crate) fn ancestors_of(pid: u32, parents: &HashMap<u32, u32>) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut at = pid;
+    while let Some(&up) = parents.get(&at) {
+        if up == 0 || up == pid || out.contains(&up) || out.len() >= 32 {
+            break;
+        }
+        out.push(up);
+        at = up;
+    }
+    out
+}
+/// The file name of a process path, as people know it.
+#[cfg(any(windows, unix))]
+fn base_name(name: &str) -> String {
+    name.rsplit('/').next().unwrap_or(name).to_string()
+}
+/// Fill the parent fields of a process from one snapshot.
+#[cfg(any(windows, unix))]
+fn relate(
+    pid: u32,
+    name: String,
+    mem: u64,
+    cpu_secs: u64,
+    parents: &HashMap<u32, u32>,
+    names: &HashMap<u32, String>,
+) -> ProcInfo {
+    let ppid = parents.get(&pid).copied().unwrap_or(0);
+    ProcInfo {
+        pid,
+        name,
+        mem,
+        ppid,
+        parent: names.get(&ppid).map(|n| base_name(n)).unwrap_or_default(),
+        cpu_secs,
+        ancestors: ancestors_of(pid, parents),
+    }
 }
 /// The `n` biggest by RAM, ties by pid so the order never flickers.
 #[cfg(any(windows, unix))]
@@ -495,14 +550,21 @@ fn sort_top(mut all: Vec<ProcInfo>, n: usize) -> Vec<ProcInfo> {
 #[cfg(unix)]
 pub fn top_processes(n: usize) -> Vec<ProcInfo> {
     let t = snapshot_table();
+    let parents = parent_map(&t.children);
     let all = t
         .names
         .iter()
         .filter_map(|(&pid, name)| {
-            let &(_, mem) = t.usage.get(&pid)?;
+            let &(cpu, mem) = t.usage.get(&pid)?;
             // `comm` is a full path on macOS; the file name is what people know.
-            let name = name.rsplit('/').next().unwrap_or(name).to_string();
-            Some(ProcInfo { pid, name, mem })
+            Some(relate(
+                pid,
+                base_name(name),
+                mem,
+                cpu / 10_000_000,
+                &parents,
+                &t.names,
+            ))
         })
         .collect();
     sort_top(all, n)
@@ -510,17 +572,20 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
 #[cfg(windows)]
 pub fn top_processes(n: usize) -> Vec<ProcInfo> {
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, FALSE},
+        Foundation::{CloseHandle, FALSE, FILETIME},
         System::{
             ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
-            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+            Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
         },
     };
-    let all = snapshot_table()
+    let t = snapshot_table();
+    let parents = parent_map(&t.children);
+    let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let all = t
         .names
-        .into_iter()
-        .filter_map(|(pid, name)| {
-            // SAFETY: read-only query on a handle opened and closed here; a
+        .iter()
+        .filter_map(|(&pid, name)| {
+            // SAFETY: read-only queries on a handle opened and closed here; a
             // null handle only means the process is gone or out of reach.
             unsafe {
                 let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -530,12 +595,28 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
                 let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
                 counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
                 let ok = GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0;
+                let zero = FILETIME {
+                    dwLowDateTime: 0,
+                    dwHighDateTime: 0,
+                };
+                let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+                let cpu =
+                    if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user)
+                        != 0
+                    {
+                        (ticks(kernel) + ticks(user)) / 10_000_000
+                    } else {
+                        0
+                    };
                 CloseHandle(handle);
-                ok.then_some(ProcInfo {
+                ok.then_some(relate(
                     pid,
-                    name,
-                    mem: counters.WorkingSetSize as u64,
-                })
+                    name.clone(),
+                    counters.WorkingSetSize as u64,
+                    cpu,
+                    &parents,
+                    &t.names,
+                ))
             }
         })
         .collect();

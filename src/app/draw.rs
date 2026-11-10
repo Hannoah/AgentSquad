@@ -148,8 +148,18 @@ impl App {
         if inner.height == 0 {
             return;
         }
-        // The last row carries the kill question, so it never hides in a list.
-        let rows = usize::from(inner.height - 1).max(1);
+        // Detail box for the picked process, then the footer row that carries
+        // the kill question so it never hides in the list.
+        let detail_h: u16 = if inner.height >= 12 { 5 } else { 0 };
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(detail_h),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let rows = usize::from(parts[0].height).max(1);
         let start = (p.sel + 1).saturating_sub(rows);
         let name_w = usize::from(inner.width).saturating_sub(18);
         let list: Vec<Line> = p
@@ -171,8 +181,41 @@ impl App {
                 ))
             })
             .collect();
-        f.render_widget(Paragraph::new(list), inner);
-        let foot = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+        f.render_widget(Paragraph::new(list), parts[0]);
+        if let (true, Some(it)) = (detail_h > 0, p.items.get(p.sel)) {
+            let owner = match self.proc_owner(it) {
+                Some(name) => format!("squad session: {name}"),
+                None => "not a squad session".to_string(),
+            };
+            let parent = if it.parent.is_empty() {
+                it.ppid.to_string()
+            } else {
+                format!("{} ({})", it.ppid, it.parent)
+            };
+            let cmd = match &p.cmd {
+                Some((pid, Some(c))) if *pid == it.pid => c.as_str(),
+                _ => "(command line unavailable)",
+            };
+            let text = vec![
+                Line::from(format!("{} · PID {} · parent {parent}", it.name, it.pid)),
+                Line::from(format!(
+                    "RAM {} · CPU time {} · {owner}",
+                    mem_label(it.mem),
+                    uptime_label(it.cpu_secs)
+                )),
+                Line::from(Span::styled(
+                    cmd.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            f.render_widget(
+                Paragraph::new(text)
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .block(Block::default().borders(Borders::TOP)),
+                parts[1],
+            );
+        }
+        let foot = parts[2];
         let line = match &p.confirm {
             Some(t) => Line::from(Span::styled(
                 format!("Kill {} ({}) and its children? y / n", t.name, t.pid),

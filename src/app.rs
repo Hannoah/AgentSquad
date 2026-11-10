@@ -47,6 +47,19 @@ pub struct ProcList {
     items: Vec<ProcInfo>,
     sel: usize,
     confirm: Option<ProcInfo>,
+    /// Full command line of the picked process, read when the pick changes.
+    cmd: Option<(u32, Option<String>)>,
+}
+impl ProcList {
+    /// Read the picked process's command line unless it is already held.
+    fn load_cmd(&mut self) {
+        let Some(it) = self.items.get(self.sel) else {
+            return;
+        };
+        if self.cmd.as_ref().is_none_or(|(pid, _)| *pid != it.pid) {
+            self.cmd = Some((it.pid, command_line(it.pid)));
+        }
+    }
 }
 /// Rows the memory monitor lists.
 const PROC_ROWS: usize = 50;

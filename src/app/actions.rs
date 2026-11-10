@@ -204,11 +204,14 @@ impl App {
 
     /// `M`: list the processes holding the most RAM on the machine.
     pub(super) fn open_procs(&mut self) {
-        self.procs = Some(ProcList {
+        let mut p = ProcList {
             items: top_processes(PROC_ROWS),
             sel: 0,
             confirm: None,
-        });
+            cmd: None,
+        };
+        p.load_cmd();
+        self.procs = Some(p);
     }
 
     pub(super) fn key_procs(&mut self, k: KeyEvent) {
@@ -223,6 +226,7 @@ impl App {
                 self.message = (format!("Killed {} ({})", t.name, t.pid), Notice::Info);
                 p.items = top_processes(PROC_ROWS);
                 p.sel = p.sel.min(p.items.len().saturating_sub(1));
+                p.load_cmd();
             }
             return;
         }
@@ -249,6 +253,18 @@ impl App {
             }
             _ => {}
         }
+        if let Some(p) = self.procs.as_mut() {
+            p.load_cmd();
+        }
+    }
+
+    /// The squad project whose session `it` runs inside, if any.
+    pub(super) fn proc_owner(&self, it: &ProcInfo) -> Option<&str> {
+        self.sessions.iter().enumerate().find_map(|(pi, slot)| {
+            let pid = slot.as_ref()?.child.process_id()?;
+            (pid == it.pid || it.ancestors.contains(&pid))
+                .then(|| self.cfg.projects.get(pi).map(|p| p.name.as_str()))?
+        })
     }
 
     /// The update is installed: `y` restarts squad into it (stopping the
