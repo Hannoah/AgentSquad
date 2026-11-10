@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.14.5"
+version = "0.15.0"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
@@ -21,6 +21,9 @@ portable-pty = "0.8"
 vt100 = "0.18"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

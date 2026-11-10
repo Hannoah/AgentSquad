@@ -76,7 +76,11 @@ fn ledger_session_records_start_and_exit() {
     let p = Project {
         name: "led".into(),
         path: dir.clone(),
-        command: vec!["cmd.exe".into(), "/d".into(), "/c".into(), "exit 3".into()],
+        command: if cfg!(windows) {
+            vec!["cmd.exe".into(), "/d".into(), "/c".into(), "exit 3".into()]
+        } else {
+            vec!["sh".into(), "-c".into(), "exit 3".into()]
+        },
         kind: Kind::Agent,
         autostart: false,
         ledger: true,
@@ -255,7 +259,8 @@ fn hook_settings_file_runs_squad_hook_stop() {
     ledger::ensure(&dir).unwrap();
     let file = ledger::write_hook_settings(&dir).unwrap();
     let text = std::fs::read_to_string(file).unwrap();
-    assert!(text.contains(r#""Stop""#) && text.contains(r#""shell":"powershell""#));
+    let shell = if cfg!(windows) { "powershell" } else { "bash" };
+    assert!(text.contains(r#""Stop""#) && text.contains(&format!(r#""shell":"{shell}""#)));
     assert!(text.contains("' hook stop"), "{text}");
     assert!(!text.contains(r"\U"), "forward slashes only: {text}");
     let _ = std::fs::remove_dir_all(&dir);

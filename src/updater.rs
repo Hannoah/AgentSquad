@@ -9,7 +9,18 @@ use std::{
 };
 
 pub const REPO: &str = "Hannoah/AgentSquad";
+#[cfg(windows)]
 pub const ASSET: &str = "squad-windows-x86_64.zip";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const ASSET: &str = "squad-macos-aarch64.tar.gz";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const ASSET: &str = "squad-macos-x86_64.tar.gz";
+#[cfg(not(any(windows, target_os = "macos")))]
+pub const ASSET: &str = "squad-unsupported";
+/// File name of the binary inside the asset.
+const BIN: &str = if cfg!(windows) { "squad.exe" } else { "squad" };
+/// Where curl writes a body we discard.
+const NULL_DEV: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 /// How long a successful update check is reused (and how often the
 /// background watcher looks again while squad stays open).
 const CHECK_COOLDOWN_SECS: u64 = 900;
@@ -37,6 +48,9 @@ pub fn update_check_enabled() -> bool {
 /// Windows' own copy of a tool. A bare `tar` can resolve to Git's GNU tar,
 /// which cannot read zip files, so go through System32 explicitly.
 pub fn system_tool(name: &str) -> PathBuf {
+    if !cfg!(windows) {
+        return PathBuf::from(name.trim_end_matches(".exe"));
+    }
     let root = env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
     PathBuf::from(root).join("System32").join(name)
 }
@@ -110,7 +124,7 @@ pub fn latest_tag() -> Option<String> {
 /// Like `latest_tag`, but says why a check failed (for `squad update`).
 pub fn latest_tag_result() -> Result<String> {
     let out = quiet(system_tool("curl.exe"))
-        .args(["-sL", "-m", "10", "-o", "NUL", "-w", "%{url_effective}"])
+        .args(["-sL", "-m", "10", "-o", NULL_DEV, "-w", "%{url_effective}"])
         .arg(format!("https://github.com/{REPO}/releases/latest"))
         .output()
         .context("Cannot run curl.exe")?;
@@ -257,7 +271,7 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
     if !ok {
         bail!("Could not unpack the download");
     }
-    let new_exe = work.join("squad.exe");
+    let new_exe = work.join(BIN);
     let said = quiet(&new_exe).arg("--version").output()?;
     let said = String::from_utf8_lossy(&said.stdout);
     let want = format!("squad {}", tag.trim_start_matches('v'));

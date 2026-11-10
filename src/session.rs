@@ -1,7 +1,6 @@
 use crate::config::{is_bare_shell, pty_env, size, Kind, Project};
 use crate::ledger;
 use crate::sys::{cpu_percent, Usage};
-#[cfg(windows)]
 use crate::sys::{kill_tree_by_pid, kill_trees};
 use crate::ui::{
     pane_status_text, screen_lines, spinner_frame, status_glyph, status_style, uptime_label, Notice,
@@ -921,7 +920,6 @@ pub fn start_sessions(
 /// Stop every session on the way out. All process trees are killed from
 /// one process-table snapshot instead of one walk per session.
 pub fn shutdown_all(sessions: &mut [Option<Session>]) {
-    #[cfg(windows)]
     {
         let pids: Vec<u32> = sessions
             .iter()
@@ -944,7 +942,6 @@ impl Drop for Session {
         }
         // Sweep the whole tree first: the direct child may already be dead
         // while orphaned grandchildren (the real agent) live on.
-        #[cfg(windows)]
         if !self.tree_killed {
             if let Some(pid) = self.child.process_id() {
                 kill_tree_by_pid(pid);

@@ -62,6 +62,53 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${{ github.ref_name }}" >$null 2>&1
-          if ($LASTEXITCODE -ne 0) { gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes }
+          # The macOS job may create the release at the same moment; retry the view.
+          foreach ($i in 1..5) {
+            gh release view "${{ github.ref_name }}" >$null 2>&1
+            if ($LASTEXITCODE -eq 0) { break }
+            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes >$null 2>&1
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 3
+          }
           gh release upload "${{ github.ref_name }}" squad-windows-x86_64.zip squad-windows-x86_64.zip.sha256 --clobber
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            asset: squad-macos-aarch64
+          - target: x86_64-apple-darwin
+            asset: squad-macos-x86_64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Tag matches Cargo.toml version
+        run: |
+          want="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "${{ github.ref_name }}" != "$want" ]; then echo "Tag ${{ github.ref_name }} does not match Cargo.toml version $want"; exit 1; fi
+      - name: Run tests
+        # Only the native (arm64) build can run here.
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: cargo test --locked
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release squad
+          shasum -a 256 ${{ matrix.asset }}.tar.gz | sed 's/ \*/  /' > ${{ matrix.asset }}.tar.gz.sha256
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The Windows job may create the release at the same moment; retry the view.
+          for i in 1 2 3 4 5; do
+            gh release view "${{ github.ref_name }}" >/dev/null 2>&1 && break
+            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes >/dev/null 2>&1 && break
+            sleep 3
+          done
+          gh release upload "${{ github.ref_name }}" ${{ matrix.asset }}.tar.gz ${{ matrix.asset }}.tar.gz.sha256 --clobber

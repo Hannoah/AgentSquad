@@ -79,6 +79,7 @@ fn check_tells_folder_from_file_and_nothing() {
 }
 
 #[test]
+#[cfg(windows)] // Windows path syntax
 fn roots_rank_parent_folders_by_use() {
     let mk = |p: &str| Project {
         name: "x".into(),

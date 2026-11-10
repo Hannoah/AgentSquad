@@ -292,16 +292,23 @@ pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
 }
 
 /// Claude Code settings that run `squad hook stop` when the agent finishes a
-/// turn. Pinned to PowerShell (always on Windows): Claude Code otherwise picks
-/// the shell itself, and a quoted path alone is a syntax error in PowerShell.
+/// turn. Pinned to PowerShell on Windows: Claude Code otherwise picks the
+/// shell itself, and a quoted path alone is a syntax error in PowerShell.
+/// Elsewhere the hook runs under bash.
 fn hook_settings(exe: &Path) -> String {
-    let exe = exe
-        .display()
-        .to_string()
-        .replace('\\', "/")
-        .replace('\'', "''");
+    let exe = exe.display().to_string();
+    let (shell, command) = if cfg!(windows) {
+        let exe = exe.replace('\\', "/").replace('\'', "''");
+        ("powershell", format!("& '{exe}' hook stop"))
+    } else {
+        (
+            "bash",
+            format!("'{}' hook stop", exe.replace('\'', "'\\''")),
+        )
+    };
+    let command = command.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","shell":"powershell","command":"& '{exe}' hook stop"}}]}}]}}}}"#
+        r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","shell":"{shell}","command":"{command}"}}]}}]}}}}"#
     )
 }
 

@@ -345,7 +345,7 @@ pub fn split_command(s: &str) -> Vec<String> {
 }
 /// Default command for a project without one: PowerShell on Windows
 /// (PowerShell 7 `pwsh.exe` when installed, otherwise the built-in
-/// `powershell.exe`). The resolved command is stored in the config, so it
+/// `powershell.exe`), the user's `$SHELL` elsewhere. The resolved command is stored in the config, so it
 /// never changes underneath an existing project.
 pub fn shell() -> Vec<String> {
     if cfg!(windows) {
@@ -356,7 +356,11 @@ pub fn shell() -> Vec<String> {
         };
         vec![exe.into(), "-NoLogo".into()]
     } else {
-        vec!["sh".into()]
+        // $SHELL is the user's login shell (zsh on macOS).
+        vec![env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "sh".into())]
     }
 }
 fn on_path(name: &str) -> bool {

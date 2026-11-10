@@ -2,8 +2,8 @@
 
 [![ci](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml/badge.svg)](https://github.com/Hannoah/AgentSquad/actions/workflows/ci.yml)
 
-AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows
-(Windows only: CI, releases and tests target Windows).
+AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows and macOS
+(CI, releases and tests cover both).
 Register your projects once, then open a single TUI manager to start, watch, and
 interact with a terminal session per project — an ideal setup for running one
 coding agent (or dev server) per project side by side.
@@ -11,6 +11,33 @@ coding agent (or dev server) per project side by side.
 Each project is either an **Agent** (an interactive terminal, e.g. `claude`) or a
 **Service** (a long-running process, e.g. `npm run dev`). The sidebar groups them
 accordingly, so running servers stay visible next to your agents.
+
+## Install (macOS, no Rust required)
+
+One line, straight from GitHub Releases (Apple Silicon and Intel are detected automatically):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | bash
+```
+
+What this does:
+
+- Downloads `squad-macos-aarch64.tar.gz` (Apple Silicon) or `squad-macos-x86_64.tar.gz` (Intel) from the latest GitHub Release.
+- Verifies its SHA256 checksum and installs nothing if it does not match.
+- Installs `squad` to `~/.local/bin` and tells you if that folder is not on your `PATH`.
+
+```bash
+squad --version
+```
+
+To pin a version or install elsewhere:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.0 SQUAD_INSTALL_DIR=/usr/local/bin bash
+```
+
+On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
+Process-tree CPU/RAM, the status bar load and the copy-to-clipboard action work on macOS too (`pbcopy`).
 
 ## Install (Windows, no Rust required)
 

@@ -55,6 +55,43 @@ fn alternate_screen_mouse_detection() {
     );
 }
 #[test]
+#[cfg(unix)]
+fn stop_kills_process_tree_unix() {
+    fn alive(pid: u32) -> bool {
+        // SAFETY: signal 0 only probes for existence.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+    let p = Project {
+        name: "treekill".into(),
+        path: env::current_dir().unwrap(),
+        command: vec!["sh".into(), "-c".into(), "sleep 300 & wait".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let s = Session::spawn(&p, 24, 80).unwrap();
+    let pid = s.child.process_id().expect("pty child pid");
+    let mut tree = Vec::new();
+    for _ in 0..50 {
+        tree = crate::sys::descendant_pids(pid);
+        if tree.len() > 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(tree.len() > 1, "grandchild never appeared");
+    drop(s);
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(100));
+        if tree.iter().all(|p| !alive(*p)) {
+            return;
+        }
+    }
+    panic!("process tree survived stop: {tree:?}");
+}
+#[test]
 #[cfg(windows)]
 fn stop_kills_process_tree() {
     let p = Project {

@@ -50,7 +50,7 @@ fn mem_and_usage_labels() {
     assert_eq!(warm.style().fg, Some(Color::Yellow), "75% RAM warns");
 }
 #[test]
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn probes_read_real_numbers() {
     let (times, (total, avail)) = system_snapshot().expect("system snapshot");
     assert!(total > 0 && avail <= total);

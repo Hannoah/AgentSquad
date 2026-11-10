@@ -94,6 +94,9 @@ impl SysUsage {
 pub struct ProcTable {
     pub children: HashMap<u32, Vec<u32>>,
     pub names: HashMap<u32, String>,
+    /// pid -> (CPU time in 100 ns units, resident bytes).
+    #[cfg(unix)]
+    pub usage: HashMap<u32, (u64, u64)>,
 }
 
 #[cfg(windows)]
@@ -135,6 +138,42 @@ fn snapshot_table() -> ProcTable {
         more = unsafe { Process32NextW(snapshot, &mut entry) };
     }
     unsafe { CloseHandle(snapshot) };
+    table
+}
+
+/// `ps` CPU time ("1:02.34" or "1:02:03.45") in 100 ns units; 0 when unreadable.
+#[cfg(unix)]
+fn parse_cputime(s: &str) -> u64 {
+    let secs = s
+        .split(':')
+        .try_fold(0.0f64, |acc, p| Some(acc * 60.0 + p.parse::<f64>().ok()?));
+    (secs.unwrap_or(0.0) * 1e7) as u64
+}
+
+#[cfg(unix)]
+fn snapshot_table() -> ProcTable {
+    let mut table = ProcTable::default();
+    let out = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,rss=,cputime=,comm="])
+        .output();
+    let Ok(out) = out else { return table };
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // comm is last because the executable path may contain spaces.
+        let mut f = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(rss), Some(cpu)) =
+            (f.next(), f.next(), f.next(), f.next())
+        else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid), Ok(rss)) =
+            (pid.parse::<u32>(), ppid.parse::<u32>(), rss.parse::<u64>())
+        else {
+            continue;
+        };
+        table.children.entry(ppid).or_default().push(pid);
+        table.names.insert(pid, f.collect::<Vec<_>>().join(" "));
+        table.usage.insert(pid, (parse_cputime(cpu), rss * 1024));
+    }
     table
 }
 
@@ -302,7 +341,16 @@ pub fn command_line(pid: u32) -> Option<String> {
         result
     }
 }
-#[cfg(not(all(windows, target_pointer_width = "64")))]
+#[cfg(unix)]
+pub fn command_line(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+#[cfg(not(any(unix, all(windows, target_pointer_width = "64"))))]
 pub fn command_line(_pid: u32) -> Option<String> {
     None
 }
@@ -312,7 +360,11 @@ pub fn descendant_pids(root: u32) -> Vec<u32> {
     descendant_pids_from_map(root, &snapshot_table().children)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub fn descendant_pids(root: u32) -> Vec<u32> {
+    descendant_pids_from_map(root, &snapshot_table().children)
+}
+#[cfg(not(any(unix, windows)))]
 pub fn descendant_pids(_root: u32) -> Vec<u32> {
     Vec::new()
 }
@@ -353,6 +405,25 @@ pub fn kill_trees(roots: &[u32]) {
                 TerminateProcess(handle, 1);
                 CloseHandle(handle);
             }
+        }
+    }
+}
+#[cfg(unix)]
+pub fn kill_tree_by_pid(root: u32) {
+    kill_trees(&[root]);
+}
+#[cfg(unix)]
+pub fn kill_trees(roots: &[u32]) {
+    if roots.is_empty() {
+        return;
+    }
+    let table = snapshot_table();
+    for &root in roots {
+        let mut pids = descendant_pids_from_map(root, &table.children);
+        pids.reverse();
+        for pid in pids {
+            // SAFETY: SIGKILL to a pid in our own session tree; ESRCH/EPERM are ignored.
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         }
     }
 }
@@ -400,7 +471,18 @@ fn tree_usage_with_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Option<(
     }
     Some((cpu, mem))
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub fn tree_usage(root: u32) -> Option<(u64, u64)> {
+    Some(tree_usage_with_table(root, &snapshot_table()))
+}
+#[cfg(unix)]
+fn tree_usage_with_table(root: u32, table: &ProcTable) -> (u64, u64) {
+    descendant_pids_from_map(root, &table.children)
+        .iter()
+        .filter_map(|pid| table.usage.get(pid))
+        .fold((0, 0), |(c, m), &(cpu, mem)| (c + cpu, m + mem))
+}
+#[cfg(not(any(unix, windows)))]
 pub fn tree_usage(_root: u32) -> Option<(u64, u64)> {
     None
 }
@@ -439,7 +521,56 @@ pub fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
         ))
     }
 }
-#[cfg(not(windows))]
+// libc marks the mach calls deprecated in favour of the mach2 crate; not worth a dependency.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
+    // SAFETY: the out-structs are live locals and the counts match their size.
+    unsafe {
+        let host = libc::mach_host_self();
+        let mut cpu: libc::host_cpu_load_info = std::mem::zeroed();
+        let mut n = libc::HOST_CPU_LOAD_INFO_COUNT;
+        if libc::host_statistics(
+            host,
+            libc::HOST_CPU_LOAD_INFO,
+            (&mut cpu as *mut libc::host_cpu_load_info).cast(),
+            &mut n,
+        ) != 0
+        {
+            return None;
+        }
+        let mut vm: libc::vm_statistics64 = std::mem::zeroed();
+        let mut n = libc::HOST_VM_INFO64_COUNT;
+        if libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&mut vm as *mut libc::vm_statistics64).cast(),
+            &mut n,
+        ) != 0
+        {
+            return None;
+        }
+        let mut total: u64 = 0;
+        let mut len = std::mem::size_of::<u64>();
+        if libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut total as *mut u64).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
+            return None;
+        }
+        let [user, system, idle, nice] = [0, 1, 2, 3].map(|i| cpu.cpu_ticks[i] as u64);
+        let page = libc::vm_page_size as u64;
+        let avail =
+            (vm.free_count as u64 + vm.inactive_count as u64 + vm.speculative_count as u64) * page;
+        // Kernel time includes idle, as on Windows.
+        Some(((idle, system + idle, user + nice), (total, avail)))
+    }
+}
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
     None
 }
@@ -455,7 +586,7 @@ pub struct Measurement {
 /// table can take tens of milliseconds, which is why this never runs on
 /// the thread that draws and reads keys.
 pub fn measure(roots: &[(usize, u32)]) -> Measurement {
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     let (procs, labels) = if roots.is_empty() {
         (Vec::new(), Vec::new())
     } else {
@@ -463,7 +594,11 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
         let procs = roots
             .iter()
             .filter_map(|&(pi, pid)| {
-                tree_usage_with_map(pid, &table.children).map(|(cpu, mem)| (pi, pid, cpu, mem))
+                #[cfg(windows)]
+                let usage = tree_usage_with_map(pid, &table.children);
+                #[cfg(unix)]
+                let usage = Some(tree_usage_with_table(pid, &table));
+                usage.map(|(cpu, mem)| (pi, pid, cpu, mem))
             })
             .collect();
         let labels = roots
@@ -479,7 +614,7 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
             .collect();
         (procs, labels)
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     let (procs, labels) = (
         roots
             .iter()
@@ -509,7 +644,7 @@ pub fn console_title() -> Option<String> {
     None
 }
 
-/// Put `text` on the Windows clipboard as Unicode text.
+/// Put `text` on the system clipboard as Unicode text.
 #[cfg(windows)]
 pub fn set_clipboard(text: &str) -> Result<(), String> {
     use windows_sys::Win32::{
@@ -551,7 +686,26 @@ pub fn set_clipboard(text: &str) -> Result<(), String> {
         result
     }
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn set_clipboard(text: &str) -> Result<(), String> {
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot run pbcopy: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("pbcopy has no stdin")?
+        .write_all(text.as_bytes())
+        .map_err(|e| e.to_string())?;
+    child.wait().map_err(|e| e.to_string())?;
+    Ok(())
+}
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn set_clipboard(_text: &str) -> Result<(), String> {
-    Err("copying is only supported on Windows".into())
+    Err("copying is only supported on Windows and macOS".into())
 }

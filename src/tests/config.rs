@@ -519,6 +519,7 @@ command = ["x"]
 }
 
 #[test]
+#[cfg(windows)] // Windows path syntax
 fn add_preview_name_matches_what_gets_registered() {
     let mk = |name: &str| Project {
         name: name.into(),

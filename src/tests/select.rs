@@ -43,10 +43,19 @@ fn screen_text_between_cells_matches_the_selection() {
 }
 
 #[test]
-#[ignore = "overwrites the real Windows clipboard"]
+#[ignore = "overwrites the real system clipboard"]
 fn clipboard_roundtrip() {
     let text = "squad clipboard test ✓ 한글";
     crate::sys::set_clipboard(text).unwrap();
+    #[cfg(windows)]
     let out = super::ps_stdout("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard");
+    #[cfg(not(windows))]
+    let out = String::from_utf8(
+        std::process::Command::new("pbpaste")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
     assert_eq!(out.trim(), text);
 }
