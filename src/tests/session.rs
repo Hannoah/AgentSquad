@@ -94,7 +94,8 @@ fn stop_kills_process_tree_unix() {
 #[test]
 #[cfg(unix)]
 fn stop_kills_orphaned_grandchildren_unix() {
-    // The shell exits at once; its background child is reparented to launchd
+    // The shell exits after the child has had time to install its HUP trap
+    // (exiting first would race the trap); its background child is reparented to launchd
     // and no longer a descendant, yet it must still die with the session.
     let dir = scratch_dir("orphan-unix");
     let pid_file = dir.join("pid");
@@ -105,7 +106,7 @@ fn stop_kills_orphaned_grandchildren_unix() {
             "sh".into(),
             "-c".into(),
             format!(
-                "(trap '' HUP; exec sleep 300) & echo $! > '{}'; exit 0",
+                "(trap '' HUP; exec sleep 300) & echo $! > '{}'; sleep 0.5; exit 0",
                 pid_file.display()
             ),
         ],
