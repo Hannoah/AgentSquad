@@ -55,6 +55,11 @@ fn probes_read_real_numbers() {
     let (times, (total, avail)) = system_snapshot().expect("system snapshot");
     assert!(total > 0 && avail <= total);
     assert!(times.1 + times.2 > 0);
+    // `ps` reports CPU time in 10 ms steps: burn enough that it is not 0.
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(150) {
+        std::hint::black_box(0u64);
+    }
     let (cpu, mem) = tree_usage(std::process::id()).expect("tree usage");
     assert!(cpu > 0, "this test process has used some CPU");
     assert!(mem > 0, "this test process has a working set");
@@ -68,4 +73,14 @@ fn probes_read_real_numbers() {
     let m = measure(&[(0, std::process::id())]);
     eprintln!("measure() took {:?}", t.elapsed());
     assert_eq!(m.procs.len(), 1);
+}
+
+#[test]
+#[cfg(unix)]
+fn ps_table_strips_the_login_shell_dash() {
+    let table = crate::sys::snapshot_table();
+    assert!(
+        !table.names.values().any(|n| n.starts_with('-')),
+        "login shells must read as zsh, not -zsh"
+    );
 }

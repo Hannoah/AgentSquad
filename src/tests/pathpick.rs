@@ -79,6 +79,23 @@ fn check_tells_folder_from_file_and_nothing() {
 }
 
 #[test]
+#[cfg(unix)]
+fn roots_rank_parent_folders_by_use_unix() {
+    let mk = |p: &str| Project {
+        name: "x".into(),
+        path: PathBuf::from(p),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let projects = [mk("/one/a"), mk("/two/b"), mk("/two/c"), mk("/x")];
+    let got: Vec<String> = roots(&projects).into_iter().map(|(_, t)| t).collect();
+    assert_eq!(got, ["/two/", "/one/", "/"]);
+}
+#[test]
 #[cfg(windows)] // Windows path syntax
 fn roots_rank_parent_folders_by_use() {
     let mk = |p: &str| Project {

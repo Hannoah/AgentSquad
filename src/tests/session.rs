@@ -92,6 +92,73 @@ fn stop_kills_process_tree_unix() {
     panic!("process tree survived stop: {tree:?}");
 }
 #[test]
+#[cfg(unix)]
+fn stop_kills_orphaned_grandchildren_unix() {
+    // The shell exits at once; its background child is reparented to launchd
+    // and no longer a descendant, yet it must still die with the session.
+    let dir = scratch_dir("orphan-unix");
+    let pid_file = dir.join("pid");
+    let p = Project {
+        name: "orphankill".into(),
+        path: dir.clone(),
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "(trap '' HUP; exec sleep 300) & echo $! > '{}'; exit 0",
+                pid_file.display()
+            ),
+        ],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let mut s = Session::spawn(&p, 24, 80).unwrap();
+    for _ in 0..50 {
+        s.update();
+        if !s.status.is_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!s.status.is_running(), "shell should have exited");
+    let orphan: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only probes for existence.
+    let alive = |pid: u32| unsafe { libc::kill(pid as i32, 0) == 0 };
+    assert!(alive(orphan), "orphan should outlive its shell");
+    drop(s);
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(100));
+        if !alive(orphan) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    }
+    panic!("orphaned grandchild {orphan} survived stop");
+}
+#[test]
+#[cfg(unix)]
+fn stop_spares_a_stranger_that_reused_the_root_pid() {
+    // kill_group must never touch a live process whose pid equals the group id.
+    let mut stranger = std::process::Command::new("sleep")
+        .arg("300")
+        .spawn()
+        .unwrap();
+    crate::sys::kill_group(stranger.id());
+    assert!(
+        stranger.try_wait().unwrap().is_none(),
+        "stranger was killed"
+    );
+    stranger.kill().unwrap();
+    let _ = stranger.wait();
+}
+#[test]
 #[cfg(windows)]
 fn stop_kills_process_tree() {
     let p = Project {

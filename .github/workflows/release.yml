@@ -58,19 +58,13 @@ jobs:
           Compress-Archive -Path target/release/squad.exe -DestinationPath squad-windows-x86_64.zip
           $hash = (Get-FileHash -Path squad-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  squad-windows-x86_64.zip" | Out-File -FilePath squad-windows-x86_64.zip.sha256 -Encoding ascii
-      - name: Publish to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # The macOS job may create the release at the same moment; retry the view.
-          foreach ($i in 1..5) {
-            gh release view "${{ github.ref_name }}" >$null 2>&1
-            if ($LASTEXITCODE -eq 0) { break }
-            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes >$null 2>&1
-            if ($LASTEXITCODE -eq 0) { break }
-            Start-Sleep -Seconds 3
-          }
-          gh release upload "${{ github.ref_name }}" squad-windows-x86_64.zip squad-windows-x86_64.zip.sha256 --clobber
+      - name: Keep the release files for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            squad-windows-x86_64.zip
+            squad-windows-x86_64.zip.sha256
 
   build-macos:
     strategy:
@@ -101,14 +95,31 @@ jobs:
         run: |
           tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release squad
           shasum -a 256 ${{ matrix.asset }}.tar.gz | sed 's/ \*/  /' > ${{ matrix.asset }}.tar.gz.sha256
+      - name: Keep the release files for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.target }}
+          path: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.tar.gz.sha256
+
+  # Nothing is published unless every build succeeded, so "latest" never
+  # points at a release that is missing a platform.
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
       - name: Publish to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          # The Windows job may create the release at the same moment; retry the view.
-          for i in 1 2 3 4 5; do
-            gh release view "${{ github.ref_name }}" >/dev/null 2>&1 && break
-            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes >/dev/null 2>&1 && break
-            sleep 3
-          done
-          gh release upload "${{ github.ref_name }}" ${{ matrix.asset }}.tar.gz ${{ matrix.asset }}.tar.gz.sha256 --clobber
+          ls -l dist
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 \
+            || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
+          gh release upload "${{ github.ref_name }}" dist/* --clobber

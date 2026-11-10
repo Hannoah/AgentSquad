@@ -18,7 +18,9 @@ pub const ASSET: &str = "squad-macos-x86_64.tar.gz";
 #[cfg(not(any(windows, target_os = "macos")))]
 pub const ASSET: &str = "squad-unsupported";
 /// File name of the binary inside the asset.
-const BIN: &str = if cfg!(windows) { "squad.exe" } else { "squad" };
+pub const BIN: &str = if cfg!(windows) { "squad.exe" } else { "squad" };
+const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
+const TAR: &str = if cfg!(windows) { "tar.exe" } else { "tar" };
 /// Where curl writes a body we discard.
 const NULL_DEV: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 /// How long a successful update check is reused (and how often the
@@ -49,7 +51,7 @@ pub fn update_check_enabled() -> bool {
 /// which cannot read zip files, so go through System32 explicitly.
 pub fn system_tool(name: &str) -> PathBuf {
     if !cfg!(windows) {
-        return PathBuf::from(name.trim_end_matches(".exe"));
+        return PathBuf::from(name);
     }
     let root = env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
     PathBuf::from(root).join("System32").join(name)
@@ -123,11 +125,11 @@ pub fn latest_tag() -> Option<String> {
 }
 /// Like `latest_tag`, but says why a check failed (for `squad update`).
 pub fn latest_tag_result() -> Result<String> {
-    let out = quiet(system_tool("curl.exe"))
+    let out = quiet(system_tool(CURL))
         .args(["-sL", "-m", "10", "-o", NULL_DEV, "-w", "%{url_effective}"])
         .arg(format!("https://github.com/{REPO}/releases/latest"))
         .output()
-        .context("Cannot run curl.exe")?;
+        .with_context(|| format!("Cannot run {CURL}"))?;
     if !out.status.success() {
         bail!("Cannot reach GitHub (curl {})", out.status);
     }
@@ -202,12 +204,12 @@ pub fn cleanup_old_binaries() {
 /// Fetch `url` into `dest` with Windows' curl, failing with the reason
 /// (HTTP status or what curl could not do) instead of a bare "failed".
 fn download(url: &str, dest: &Path, timeout_secs: &str) -> Result<()> {
-    let out = quiet(system_tool("curl.exe"))
+    let out = quiet(system_tool(CURL))
         .args(["-fsSL", "-m", timeout_secs, "-w", "%{http_code}", "-o"])
         .arg(dest)
         .arg(url)
         .output()
-        .context("Cannot run curl.exe")?;
+        .with_context(|| format!("Cannot run {CURL}"))?;
     if out.status.success() {
         return Ok(());
     }
@@ -260,7 +262,7 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
     if actual != expected {
         bail!("SHA256 checksum mismatch: expected {expected}, got {actual}");
     }
-    let ok = quiet(system_tool("tar.exe"))
+    let ok = quiet(system_tool(TAR))
         .arg("-xf")
         .arg(&zip)
         .arg("-C")
@@ -283,7 +285,7 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
 /// Fetch release `tag` and swap it in for the running binary.
 /// Slow: call from a worker thread.
 pub fn install_update(tag: &str) -> Result<()> {
-    let exe = install_path().context("Cannot find squad.exe")?;
+    let exe = install_path().with_context(|| format!("Cannot find {BIN}"))?;
     let work = env::temp_dir().join(format!("squad-update-{}", std::process::id()));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;

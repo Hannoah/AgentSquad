@@ -97,6 +97,9 @@ pub struct ProcTable {
     /// pid -> (CPU time in 100 ns units, resident bytes).
     #[cfg(unix)]
     pub usage: HashMap<u32, (u64, u64)>,
+    /// pid -> process group id.
+    #[cfg(unix)]
+    pub pgid: HashMap<u32, u32>,
 }
 
 #[cfg(windows)]
@@ -151,27 +154,37 @@ fn parse_cputime(s: &str) -> u64 {
 }
 
 #[cfg(unix)]
-fn snapshot_table() -> ProcTable {
+pub(crate) fn snapshot_table() -> ProcTable {
     let mut table = ProcTable::default();
     let out = std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,rss=,cputime=,comm="])
+        .args(["-axo", "pid=,ppid=,pgid=,rss=,cputime=,comm="])
         .output();
     let Ok(out) = out else { return table };
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         // comm is last because the executable path may contain spaces.
         let mut f = line.split_whitespace();
-        let (Some(pid), Some(ppid), Some(rss), Some(cpu)) =
-            (f.next(), f.next(), f.next(), f.next())
+        let (Some(pid), Some(ppid), Some(pgid), Some(rss), Some(cpu)) =
+            (f.next(), f.next(), f.next(), f.next(), f.next())
         else {
             continue;
         };
-        let (Ok(pid), Ok(ppid), Ok(rss)) =
-            (pid.parse::<u32>(), ppid.parse::<u32>(), rss.parse::<u64>())
-        else {
+        let (Ok(pid), Ok(ppid), Ok(pgid), Ok(rss)) = (
+            pid.parse::<u32>(),
+            ppid.parse::<u32>(),
+            pgid.parse::<u32>(),
+            rss.parse::<u64>(),
+        ) else {
             continue;
         };
         table.children.entry(ppid).or_default().push(pid);
-        table.names.insert(pid, f.collect::<Vec<_>>().join(" "));
+        table.pgid.insert(pid, pgid);
+        let name = f.collect::<Vec<_>>().join(" ");
+        // A login shell shows up as "-zsh".
+        let name = match name.strip_prefix('-') {
+            Some(rest) if !rest.contains('/') => rest.to_string(),
+            _ => name,
+        };
+        table.names.insert(pid, name);
         table.usage.insert(pid, (parse_cputime(cpu), rss * 1024));
     }
     table
@@ -228,11 +241,14 @@ fn foreground_proc(root: u32, table: &ProcTable) -> Option<(u32, String)> {
 
 /// Programs whose own name says nothing about what they run.
 const INTERPRETERS: [&str; 7] = ["node", "python", "pythonw", "py", "deno", "bun", "ruby"];
+fn is_interpreter(stem: &str) -> bool {
+    INTERPRETERS.contains(&stem.to_ascii_lowercase().as_str())
+}
 /// Name for an interpreter running a script: `node …\node_modules\jarvis-cli\
 /// dist\cli.js` is "jarvis-cli", `python app.py` is "app". None when `stem`
 /// is not an interpreter or no script argument is found.
 pub fn script_label(stem: &str, cmdline: &str) -> Option<String> {
-    if !INTERPRETERS.contains(&stem.to_ascii_lowercase().as_str()) {
+    if !is_interpreter(stem) {
         return None;
     }
     let args = split_command(cmdline);
@@ -421,11 +437,41 @@ pub fn kill_trees(roots: &[u32]) {
     for &root in roots {
         let mut pids = descendant_pids_from_map(root, &table.children);
         pids.reverse();
+        // Orphans reparented to launchd are no longer descendants but keep the group.
+        pids.extend(group_members(root, &table));
         for pid in pids {
-            // SAFETY: SIGKILL to a pid in our own session tree; ESRCH/EPERM are ignored.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            sigkill(pid);
         }
     }
+}
+/// Kill what is left of the process group `pgid` after its leader exited and
+/// was reaped. Pids are recycled, so a reaped root must never be swept by
+/// walking its (possibly reused) pid; a group id, in contrast, cannot be
+/// reused while any member lives.
+#[cfg(unix)]
+pub fn kill_group(pgid: u32) {
+    let table = snapshot_table();
+    // A live process with the leader's pid is a stranger that reused it.
+    if table.names.contains_key(&pgid) {
+        return;
+    }
+    for pid in group_members(pgid, &table) {
+        sigkill(pid);
+    }
+}
+#[cfg(unix)]
+fn group_members(pgid: u32, table: &ProcTable) -> Vec<u32> {
+    table
+        .pgid
+        .iter()
+        .filter(|&(&p, &g)| g == pgid && p != pgid)
+        .map(|(&p, _)| p)
+        .collect()
+}
+#[cfg(unix)]
+fn sigkill(pid: u32) {
+    // SAFETY: SIGKILL to a pid in our own session; ESRCH/EPERM are ignored.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
 }
 /// (CPU time in 100 ns units, working-set bytes) summed over the process
 /// tree rooted at `root`. None when the platform has no probe.
@@ -527,7 +573,9 @@ pub fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
 pub fn system_snapshot() -> Option<(CpuTimes, MemInfo)> {
     // SAFETY: the out-structs are live locals and the counts match their size.
     unsafe {
-        let host = libc::mach_host_self();
+        // One port for the process lifetime: every call to mach_host_self adds a reference.
+        static HOST: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        let host = *HOST.get_or_init(|| libc::mach_host_self());
         let mut cpu: libc::host_cpu_load_info = std::mem::zeroed();
         let mut n = libc::HOST_CPU_LOAD_INFO_COUNT;
         if libc::host_statistics(
@@ -605,7 +653,10 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
             .iter()
             .map(|&(pi, pid)| {
                 let label = foreground_proc(pid, &table).map(|(fg, stem)| {
-                    command_line(fg)
+                    // The command line is a process probe: only interpreters need it.
+                    is_interpreter(&stem)
+                        .then(|| command_line(fg))
+                        .flatten()
                         .and_then(|cmd| script_label(&stem, &cmd))
                         .unwrap_or(stem)
                 });

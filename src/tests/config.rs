@@ -519,6 +519,15 @@ command = ["x"]
 }
 
 #[test]
+#[cfg(unix)]
+fn add_preview_name_handles_unix_paths() {
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        preview_name(&[], r#" "/work/my-app/" "#, Kind::Agent, &none),
+        Some("my-app".into())
+    );
+}
+#[test]
 #[cfg(windows)] // Windows path syntax
 fn add_preview_name_matches_what_gets_registered() {
     let mk = |name: &str| Project {

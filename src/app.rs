@@ -674,7 +674,8 @@ impl History {
 
 pub fn run(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<()> {
     if let Some(args) = run_ui(c, initial, resume)? {
-        let exe = install_path().context("Cannot find squad.exe to restart")?;
+        let exe = install_path()
+            .with_context(|| format!("Cannot find {} to restart", crate::updater::BIN))?;
         // Wait for it: the new squad owns this console until it exits.
         let status = std::process::Command::new(exe).args(args).status()?;
         std::process::exit(status.code().unwrap_or(0));

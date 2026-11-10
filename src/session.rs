@@ -1,5 +1,7 @@
 use crate::config::{is_bare_shell, pty_env, size, Kind, Project};
 use crate::ledger;
+#[cfg(unix)]
+use crate::sys::kill_group;
 use crate::sys::{cpu_percent, Usage};
 use crate::sys::{kill_tree_by_pid, kill_trees};
 use crate::ui::{
@@ -920,19 +922,31 @@ pub fn start_sessions(
 /// Stop every session on the way out. All process trees are killed from
 /// one process-table snapshot instead of one walk per session.
 pub fn shutdown_all(sessions: &mut [Option<Session>]) {
-    {
-        let pids: Vec<u32> = sessions
-            .iter()
-            .flatten()
-            .filter_map(|s| s.child.process_id())
-            .collect();
-        kill_trees(&pids);
-        for s in sessions.iter_mut().flatten() {
-            s.tree_killed = true;
+    let mut live = Vec::new();
+    for s in sessions.iter_mut().flatten() {
+        let Some(pid) = s.child.process_id() else {
+            continue;
+        };
+        if s.root_reaped() {
+            #[cfg(unix)]
+            kill_group(pid);
+        } else {
+            live.push(pid);
         }
+        s.tree_killed = true;
     }
+    kill_trees(&live);
     for slot in sessions.iter_mut() {
         drop(slot.take());
+    }
+}
+impl Session {
+    /// True when the root process has exited on a platform that recycles
+    /// pids (unix): its pid may now belong to a stranger, so only the process
+    /// group may be swept. Windows keeps walking the tree: its pids are not
+    /// reused while the exited root's children still reference it.
+    fn root_reaped(&mut self) -> bool {
+        cfg!(unix) && self.child.try_wait().ok().flatten().is_some()
     }
 }
 impl Drop for Session {
@@ -944,7 +958,12 @@ impl Drop for Session {
         // while orphaned grandchildren (the real agent) live on.
         if !self.tree_killed {
             if let Some(pid) = self.child.process_id() {
-                kill_tree_by_pid(pid);
+                if self.root_reaped() {
+                    #[cfg(unix)]
+                    kill_group(pid);
+                } else {
+                    kill_tree_by_pid(pid);
+                }
             }
         }
         if self.child.try_wait().ok().flatten().is_none() {
