@@ -303,10 +303,17 @@ impl App {
                 .contains(ratatui::layout::Position::new(m.column, m.row))
             {
                 // Header, group label, blank space or border of the manager:
-                // hand the keyboard to the selected session if it is live.
+                // hand the keyboard to the selected session, starting it first
+                // if it is stopped (same as re-clicking its row).
                 if let Some(&pi) = self.order.get(self.selected) {
                     if slot_running(&self.sessions, pi) {
                         self.mode = Mode::Focus;
+                    } else {
+                        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
+                        {
+                            None => self.mode = Mode::Focus,
+                            Some(e) => self.message = (e, Notice::Error),
+                        }
                     }
                 }
                 self.dirty = true;
