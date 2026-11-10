@@ -21,6 +21,13 @@ pub enum PathState {
     NotFolder,
 }
 
+/// `text` with a leading `~` (alone or before a separator) replaced by
+/// `home`; `None` when there is nothing to expand.
+pub fn expand_home(text: &str, home: &str) -> Option<String> {
+    let rest = text.strip_prefix('~')?;
+    (rest.is_empty() || rest.starts_with(['/', '\\'])).then(|| format!("{home}{rest}"))
+}
+
 /// Look at the disk once. Call on edits, not per frame: a dead network share
 /// can block for seconds.
 pub fn check(raw: &str) -> PathState {

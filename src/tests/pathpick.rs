@@ -121,3 +121,15 @@ fn roots_rank_parent_folders_by_use() {
         "most used first, no double separator"
     );
 }
+
+#[test]
+fn expand_home_only_touches_a_leading_tilde() {
+    assert_eq!(expand_home("~", "/h").as_deref(), Some("/h"));
+    assert_eq!(
+        expand_home("~/Dev/new", "/h").as_deref(),
+        Some("/h/Dev/new")
+    );
+    assert_eq!(expand_home("~bob/x", "/h"), None, "other user's home");
+    assert_eq!(expand_home("/a/~/b", "/h"), None);
+    assert_eq!(expand_home("", "/h"), None);
+}

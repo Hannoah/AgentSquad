@@ -228,6 +228,14 @@ impl App {
     /// The Path field changed: re-check it, relist the folders under it and
     /// drop stale errors.
     pub(super) fn path_edited(&mut self) {
+        // No shell here: expand a leading `~` in the field itself, or a new
+        // folder would be made as a literal `~` under the current directory.
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        if let Some(full) =
+            home.and_then(|h| pathpick::expand_home(&self.add_path.as_str(), &h.to_string_lossy()))
+        {
+            self.add_path.set(&full);
+        }
         let text = self.add_path.as_str();
         self.add_picks = if text.is_empty() {
             pathpick::roots(&self.cfg.projects)
@@ -237,7 +245,6 @@ impl App {
         self.add_sel = None;
         self.add_state = pathpick::check(&text);
         self.add_err.clear();
-        self.add_create = false;
     }
 
     /// A text field of the form changed.
@@ -321,15 +328,10 @@ impl App {
                         self.order = display_order(&self.cfg.projects);
                     }
                 }
+                // A missing folder is made on the spot (the field says so).
                 if self.add_err.is_empty() && self.add_state == PathState::Missing {
-                    if self.add_create {
-                        if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
-                            self.add_err = format!("{e:#}");
-                        }
-                        self.add_create = false;
-                    } else {
-                        self.add_create = true;
-                        self.add_err = "Folder does not exist. Enter again creates it.".into();
+                    if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
+                        self.add_err = format!("{e:#}");
                     }
                 }
                 if self.add_err.is_empty() {
