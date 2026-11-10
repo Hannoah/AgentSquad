@@ -410,12 +410,14 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('2', "Stop session…"),
             ('3', "Restart session…"),
             ('4', "Remove project…"),
+            ('5', "Set superior…"),
         ]
     } else {
         vec![
             ('1', "Start and focus"),
             ('2', "Restart session"),
             ('3', "Remove project…"),
+            ('4', "Set superior…"),
         ]
     }
 }

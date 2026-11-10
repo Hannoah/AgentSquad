@@ -86,6 +86,15 @@ pub struct Config {
     /// input (default true; `bell = false` silences it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bell: Option<bool>,
+    /// A session whose process tree holds more RAM than this (MiB) is
+    /// flagged and reported once (default 4096; 0 turns the check off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_limit_mb: Option<u64>,
+}
+impl Config {
+    pub fn mem_limit_bytes(&self) -> u64 {
+        self.mem_limit_mb.unwrap_or(4096) << 20
+    }
 }
 impl Default for Config {
     fn default() -> Self {
@@ -94,6 +103,7 @@ impl Default for Config {
             projects: Vec::new(),
             scrollback: None,
             bell: None,
+            mem_limit_mb: None,
         }
     }
 }
@@ -442,26 +452,10 @@ pub fn same_dir(a: &Project, b: &Project) -> bool {
         .to_string_lossy()
         .eq_ignore_ascii_case(&b.path.to_string_lossy())
 }
-/// The first agent registered in `path`: the one later agents in the same
-/// folder report to by default.
-fn founder(projects: &[Project], path: &Project) -> Option<usize> {
-    projects
-        .iter()
-        .position(|p| p.kind == Kind::Agent && same_dir(p, path))
-}
 /// Commanders: agents with agents under them. An agent becomes one the
 /// moment another agent attaches to it.
 pub fn is_commander(projects: &[Project], i: usize) -> bool {
     !subordinates(projects, i).is_empty()
-}
-/// Whom a new agent in `new`'s folder reports to when none is named: the
-/// first agent registered there (which thereby becomes a commander). None
-/// for the first agent itself and for services.
-pub fn default_superior(existing: &[Project], new: &Project) -> Option<String> {
-    if new.kind != Kind::Agent {
-        return None;
-    }
-    founder(existing, new).map(|f| existing[f].name.clone())
 }
 /// Every agent below project `i`, at any depth (subordinates of
 /// subordinates included), without repeats even if a hand-edited loop exists.
@@ -633,8 +627,9 @@ pub fn build_project(
     if dir_name.is_empty() {
         return Err("Cannot use filesystem root as project.".into());
     }
-    // Agents may share a directory too (two agents collaborating on one
-    // project): the second becomes `dir-2`, like services.
+    // Agents may share a directory too: the second becomes `dir-2`, like
+    // services, and stays independent until given a commander (`--under`,
+    // `u`, or right-click > Set superior).
     let base = if kind == Kind::Service {
         program_name(&parts).unwrap_or(dir_name)
     } else {
@@ -642,7 +637,7 @@ pub fn build_project(
     };
     let name = unique_name(&base, existing);
     let command = if parts.is_empty() { shell() } else { parts };
-    let mut p = Project {
+    Ok(Project {
         name,
         path,
         command,
@@ -651,10 +646,7 @@ pub fn build_project(
         ledger: false,
         reports_to: None,
         pinned: false,
-    };
-    // An explicit --under / Reports to replaces this default afterwards.
-    p.reports_to = default_superior(existing, &p);
-    Ok(p)
+    })
 }
 /// The name a new project would get, guessed from the typed text alone (no
 /// disk access, so it can run on every redraw). None while it is unknowable.

@@ -188,6 +188,9 @@ impl App {
                         if let Some(u) = s.usage {
                             detail.push_str(" · ");
                             detail.push_str(&usage_label(u));
+                            if over_mem_limit(u, self.cfg.mem_limit_bytes()) {
+                                detail.push('!');
+                            }
                         }
                     }
                 }

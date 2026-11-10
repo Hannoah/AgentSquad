@@ -473,21 +473,7 @@ impl App {
             }
             // Change whom the selected agent reports to (empty clears it).
             KeyCode::Char('u') if !self.order.is_empty() => {
-                let pi = self.order[self.selected];
-                let p = &self.cfg.projects[pi];
-                if p.kind != Kind::Agent {
-                    self.message = (
-                        "Only agents report to a commander".to_string(),
-                        Notice::Info,
-                    );
-                } else {
-                    self.send_buf.clear();
-                    for ch in p.reports_to.clone().unwrap_or_default().chars() {
-                        self.send_buf.insert(ch);
-                    }
-                    self.mode = Mode::Send;
-                    self.send_to = SendTo::Under;
-                }
+                self.begin_set_superior(self.order[self.selected]);
             }
             // Orders: one line to every agent under the selected commander.
             KeyCode::Char('o') if !self.order.is_empty() => {

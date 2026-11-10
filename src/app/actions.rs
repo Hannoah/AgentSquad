@@ -3,6 +3,25 @@
 use super::*;
 
 impl App {
+    /// Open the one-line prompt for whom agent `pi` reports to (empty clears
+    /// it), prefilled with the current commander. Shared by `u` and the menu.
+    pub(super) fn begin_set_superior(&mut self, pi: usize) {
+        let p = &self.cfg.projects[pi];
+        if p.kind != Kind::Agent {
+            self.message = (
+                "Only agents report to a commander".to_string(),
+                Notice::Info,
+            );
+            return;
+        }
+        self.send_buf.clear();
+        for ch in p.reports_to.clone().unwrap_or_default().chars() {
+            self.send_buf.insert(ch);
+        }
+        self.mode = Mode::Send;
+        self.send_to = SendTo::Under;
+    }
+
     /// Point agent `pi` at a new commander (empty clears it), saving to the
     /// config file first so a failed save changes nothing.
     pub(super) fn set_superior(&mut self, pi: usize, under: &str) -> (String, Notice) {
@@ -344,6 +363,7 @@ impl App {
                 1 => self.confirm_stop = Some(pi),
                 2 => self.confirm_restart = Some(pi),
                 3 => self.confirm_remove = Some(pi),
+                4 => self.begin_set_superior(pi),
                 _ => {}
             }
             return;
@@ -364,6 +384,7 @@ impl App {
                     };
             }
             2 => self.confirm_remove = Some(pi),
+            3 => self.begin_set_superior(pi),
             _ => {}
         }
     }

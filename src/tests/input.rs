@@ -57,7 +57,7 @@ fn function_keys_encode_xterm() {
 #[test]
 fn update_prompt_accepts_only_y() {
     assert_eq!(update_key(KeyCode::Char('y')), Some(true));
-    assert_eq!(update_key(KeyCode::Enter), None, "Enter must not update");
+    assert_eq!(update_key(KeyCode::Enter), Some(true));
     assert_eq!(update_key(KeyCode::Char(' ')), None);
     assert_eq!(update_key(KeyCode::Esc), Some(false));
     assert_eq!(update_key(KeyCode::Char('n')), Some(false));
@@ -210,14 +210,10 @@ fn alt_digit_switches_project_inside_terminal() {
 }
 
 #[test]
-fn destructive_confirms_need_y_not_enter() {
+fn destructive_confirms_accept_y_or_enter() {
     assert_eq!(confirm_destructive_key(KeyCode::Char('y')), Some(true));
     assert_eq!(confirm_destructive_key(KeyCode::Char('Y')), Some(true));
-    assert_eq!(
-        confirm_destructive_key(KeyCode::Enter),
-        None,
-        "Enter must not destroy a session or project"
-    );
+    assert_eq!(confirm_destructive_key(KeyCode::Enter), Some(true));
     assert_eq!(confirm_destructive_key(KeyCode::Esc), Some(false));
     // The non-destructive start-all keeps its Enter shortcut.
     assert_eq!(confirm_key(KeyCode::Enter), Some(true));

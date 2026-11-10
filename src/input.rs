@@ -149,21 +149,20 @@ pub fn confirm_key(code: KeyCode) -> Option<bool> {
         _ => None,
     }
 }
-/// Destructive confirmations (`stop`, `remove`, `restart`, `quit`) accept
-/// only `y`: their hint rows already say `y`, and an `Enter` pressed for
-/// something else must not destroy a session or project.
+/// Destructive confirmations (`stop`, `remove`, `restart`, `quit`): `Enter`
+/// counts as `y` by request, so a stray Enter on an open prompt confirms.
 pub fn confirm_destructive_key(code: KeyCode) -> Option<bool> {
     match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
         _ => None,
     }
 }
-/// Only `y` accepts: an update prompt can pop up while the user is about to
-/// press Enter, so Enter must not start a download.
+/// `y` or `Enter` accepts. An update prompt can pop up while the user is about
+/// to press Enter, which then starts the download.
 pub fn update_key(code: KeyCode) -> Option<bool> {
     match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
         _ => None,
     }

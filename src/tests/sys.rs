@@ -84,3 +84,14 @@ fn ps_table_strips_the_login_shell_dash() {
         "login shells must read as zsh, not -zsh"
     );
 }
+
+#[test]
+fn mem_limit_flags_only_above_and_zero_disables() {
+    let u = Usage {
+        cpu: 0.0,
+        mem: 3 << 20,
+    };
+    assert!(over_mem_limit(u, 2 << 20));
+    assert!(!over_mem_limit(u, 3 << 20));
+    assert!(!over_mem_limit(u, 0));
+}

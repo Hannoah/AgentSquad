@@ -354,6 +354,23 @@ impl App {
             for (pi, pid, cpu_time, mem) in m.procs {
                 if let Some(Some(s)) = self.sessions.get_mut(pi) {
                     s.apply_usage(pid, cpu_time, mem, m.at, self.cores);
+                    let limit = self.cfg.mem_limit_bytes();
+                    if let Some(u) = s.usage {
+                        if over_mem_limit(u, limit) && !s.mem_warned {
+                            s.mem_warned = true;
+                            self.message = (
+                                format!(
+                                    "{} uses {} (limit {}): restart it if it leaks",
+                                    self.cfg.projects[pi].name,
+                                    mem_label(u.mem),
+                                    mem_label(limit)
+                                ),
+                                Notice::Warn,
+                            );
+                        } else if u.mem < limit / 10 * 9 {
+                            s.mem_warned = false; // re-arm once it drops well below
+                        }
+                    }
                 }
             }
             for (pi, pid, label) in m.labels {

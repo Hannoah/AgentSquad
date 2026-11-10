@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.1 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.2 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -78,8 +78,7 @@ never delays startup). You can also run `squad update` (or `squad update --check
 When a newer release exists, the manager asks whether to update:
 
 - `y` downloads and installs it; `n` or `Esc` skips until the next launch.
-  `Enter` deliberately does not accept, so a prompt that appears as you
-  press it cannot start a download.
+  `Enter` accepts too, so a prompt that appears as you press it starts the download.
 - The prompt waits while you are typing into a session or another input;
   the status bar shows `⬆ vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
 - When the install finishes, squad asks whether to restart into the new build
@@ -150,7 +149,7 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions (including **Set superior…**) |
 | `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
 | `1`–`9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
@@ -268,6 +267,8 @@ Optional settings:
   see on the tab or the taskbar. To keep the bell but make it silent, set
   Windows Terminal's `bellStyle` to `["window", "taskbar"]`: it then flashes
   instead of beeping.
+- `mem_limit_mb = 4096` (default; `0` turns it off) flags a session whose process tree holds more RAM:
+  the sidebar usage gets a `!` and the status bar warns once until it drops back.
 - `scrollback = 5000` sets the lines kept per session (default 2000).
 
 The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
@@ -327,11 +328,10 @@ arrived with a repository you did not write before you brief an agent in it.
 ### Chain of command
 
 Agents can report to other agents. An agent with agents under it is a
-commander (`★`): it becomes one the moment another agent attaches. Every
-agent registered in a folder that already has one reports to the first by
-default; name another commander with
-`squad add C:\work\my-app --under my-app-2 -- claude` (or the add form's
-"Reports to" field). Commanders can report to commanders, so the chain can
+commander (`★`): it becomes one the moment another agent attaches. Agents
+sharing a folder are independent by default; name a commander with
+`squad add C:\work\my-app --under my-app-2 -- claude`, the add form's
+"Reports to" field, `u`, or right-click > **Set superior…**. Commanders can report to commanders, so the chain can
 grow as deep as you need. The sidebar and `squad list` draw it as a tree:
 
 ```

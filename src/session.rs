@@ -429,6 +429,8 @@ pub struct Session {
     pub started: Option<Instant>,
     pub announced_exit: bool,
     pub usage: Option<Usage>,
+    /// The memory-limit warning was shown and the session has not dropped back.
+    pub mem_warned: bool,
     pub cpu_prev: u64,
     pub sampled: Option<Instant>,
     pub last_output: Option<Instant>,
@@ -553,6 +555,7 @@ impl Session {
             started: Some(Instant::now()),
             announced_exit: false,
             usage: None,
+            mem_warned: false,
             cpu_prev: 0,
             sampled: None,
             last_output: None,
@@ -757,6 +760,7 @@ impl Session {
     /// Forget usage once the session stops running.
     pub fn clear_usage(&mut self) {
         self.usage = None;
+        self.mem_warned = false;
         self.sampled = None;
         self.fg_name = None;
     }

@@ -42,6 +42,10 @@ pub fn mem_label(bytes: u64) -> String {
 pub fn usage_label(u: Usage) -> String {
     format!("{:.0}% {}", u.cpu, mem_label(u.mem))
 }
+/// True when `u` holds more RAM than `limit` bytes (0 means no limit).
+pub fn over_mem_limit(u: Usage, limit: u64) -> bool {
+    limit > 0 && u.mem > limit
+}
 /// Whole-machine load, refreshed by `sample`.
 #[derive(Default)]
 pub struct SysUsage {

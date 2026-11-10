@@ -695,23 +695,16 @@ fn an_agent_becomes_a_commander_when_another_attaches() {
     assert!(is_commander(&p, 0), "a commander once an agent attaches");
     assert!(!is_commander(&p, 1));
     assert!(!is_commander(&p, 2), "other folders are unaffected");
-    // Later agents default to the folder's first agent; it defaults to nobody.
-    let new = agent_in("third", "/work/app", None);
-    assert_eq!(default_superior(&p, &new).as_deref(), Some("lead"));
-    assert_eq!(default_superior(&[], &new), None);
-    let mut svc = new.clone();
-    svc.kind = Kind::Service;
-    assert_eq!(default_superior(&p, &svc), None);
 }
 
 #[test]
-fn second_agent_in_a_folder_reports_to_the_first() {
+fn second_agent_in_a_folder_stays_independent() {
     let dir = scratch_dir("founder");
     let d = dir.to_str().unwrap();
     let first = build_project(&[], d, Kind::Agent, vec![]).unwrap();
     assert_eq!(first.reports_to, None);
     let second = build_project(std::slice::from_ref(&first), d, Kind::Agent, vec![]).unwrap();
-    assert_eq!(second.reports_to.as_deref(), Some(first.name.as_str()));
+    assert_eq!(second.reports_to, None);
 }
 
 #[test]
