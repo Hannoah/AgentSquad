@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.2 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.3 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -112,6 +112,10 @@ squad list
 squad start my-app
 ```
 
+A path that does not exist is an error unless you pass `--create`, which makes the
+folder (parents included). In the add form, `Enter` on a missing folder asks once
+(`Enter` again creates it and saves; editing the path cancels).
+
 Project names default to the directory name for agents, and to the program
 name for services. Multiple agents and services can share the same directory
 (automatically disambiguated as `my-app`, `my-app-2`, etc.), so two agents can
@@ -170,7 +174,7 @@ case-insensitively by `remove` and `start`.
 | Drag | Select text in a terminal pane; it is copied to the clipboard when you let go (`Ctrl+C` copies a selection too) |
 | Mouse wheel | Scroll the selected terminal |
 | `Ctrl+Q`, middle-click | Back to the manager (from inside a terminal; clicking the project list works too) |
-| `Alt+1`–`Alt+9` | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
+| `Alt+1`–`Alt+9` (macOS: `Option+1`–`Option+9`) | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
 | `?` | Toggle the help popup |
 | `q`, `Ctrl+C` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
@@ -207,11 +211,20 @@ Inside a terminal, every key reaches the session, including `Esc` and
 an editor. squad keeps only `Ctrl+Q` (back to the manager) and
 `Alt+1`–`Alt+9` (switch project) for itself.
 
+On macOS the Alt key is Option, and a terminal normally sends the character
+Option+digit types (`¡™£¢∞§¶•ª` on a US keyboard) instead of an Alt modifier.
+squad reads those characters as `Option+1`–`Option+9`, so the switch works with
+the default settings; the cost is that those nine characters cannot be typed
+into a focused session. Turning on "Use Option as Meta key" (Terminal: Settings >
+Profiles > Keyboard; iTerm2: Profiles > Keys > Left Option key = Esc+) makes
+`Option+digit` arrive as a real Alt chord and frees the characters again. On
+other keyboard layouts, use that setting or `Ctrl+Q` then the digit.
+
 ## CLI reference
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [--autostart] [--under <commander>] [-- command args...]
+squad add [<path>] [--kind agent|service] [--autostart] [--create] [--under <commander>] [-- command args...]
                                                                    Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)

@@ -244,11 +244,25 @@ pub fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
 pub fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
     code == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
 }
+/// What Option+1..9 types on a US Mac keyboard, in digit order. macOS
+/// terminals send these characters instead of an Alt modifier unless
+/// "Use Option as Meta key" is on.
+const MAC_OPTION_DIGITS: [char; 9] = ['¡', '™', '£', '¢', '∞', '§', '¶', '•', 'ª'];
+/// The digit an Option+digit character stands for.
+pub fn mac_option_digit(c: char) -> Option<char> {
+    let i = MAC_OPTION_DIGITS.iter().position(|&m| m == c)?;
+    char::from_digit(i as u32 + 1, 10)
+}
 /// Alt+1..9 inside a terminal switches to that project (same numbering as
-/// the manager's `1`-`9`). Returns the position in the sidebar order.
+/// the manager's `1`-`9`). On macOS the Option+digit characters count too,
+/// so it works with the default terminal settings. Returns the position in
+/// the sidebar order.
 pub fn focus_switch_key(code: KeyCode, mods: KeyModifiers, order_len: usize) -> Option<usize> {
     match code {
         KeyCode::Char(c) if mods == KeyModifiers::ALT => jump_to(order_len, c),
+        KeyCode::Char(c) if cfg!(target_os = "macos") && mods == KeyModifiers::NONE => {
+            jump_to(order_len, mac_option_digit(c)?)
+        }
         _ => None,
     }
 }

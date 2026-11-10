@@ -100,6 +100,12 @@ pub fn status_style(status: &str) -> Style {
 pub fn pane_usage_note(u: Usage) -> String {
     format!("CPU {:.0}% · {}", u.cpu, crate::sys::mem_label(u.mem))
 }
+/// The in-terminal project switch chord, named as the platform's keyboard does.
+const SWITCH_KEY: &str = if cfg!(target_os = "macos") {
+    "Opt+1-9"
+} else {
+    "Alt+1-9"
+};
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
@@ -121,6 +127,9 @@ pub fn help_lines() -> Vec<&'static str> {
         "U          install the update squad found",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
         "Ctrl+Q, middle-click  terminal back to manager",
+        #[cfg(target_os = "macos")]
+        "Opt+1-9    switch project from inside a terminal",
+        #[cfg(not(target_os = "macos"))]
         "Alt+1-9    switch project from inside a terminal",
         "q, Ctrl+C  quit (confirms when sessions exist)",
         "?/Esc      close this help",
@@ -200,7 +209,7 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
         ],
         Mode::Focus => &[
             ("Ctrl+Q", "manager"),
-            ("Alt+1-9", "switch"),
+            (SWITCH_KEY, "switch"),
             ("", "other keys go to the session"),
         ],
         Mode::Send => &[("Enter", "sends"), ("Esc", "cancels")],
@@ -571,11 +580,12 @@ Manager keys:
   PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:
-  Ctrl+Q  back to manager (or middle-click) · Alt+1-9  switch project
+  Ctrl+Q  back to manager (or middle-click) · {}  switch project
   every other key, Esc included, goes to the session
 
 Quitting stops managed child processes; no detached daemon.",
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        SWITCH_KEY
     )
 }
 /// Severity of a session-exit notice: errors alarm, crashes warn,

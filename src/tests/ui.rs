@@ -311,7 +311,14 @@ fn hint_text_matches_legacy_strings() {
         );
     assert_eq!(
         mode_hints(Mode::Focus),
-        "Ctrl+Q manager | Alt+1-9 switch | other keys go to the session"
+        format!(
+            "Ctrl+Q manager | {} switch | other keys go to the session",
+            if cfg!(target_os = "macos") {
+                "Opt+1-9"
+            } else {
+                "Alt+1-9"
+            }
+        )
     );
     assert_eq!(mode_hints(Mode::Send), "Enter sends | Esc cancels");
     assert_eq!(

@@ -108,6 +108,8 @@ struct App {
     /// Name of the project the form is editing; None when it adds one.
     add_edit: Option<String>,
     add_err: String,
+    /// The typed folder is missing and Enter was pressed once: Enter again creates it.
+    add_create: bool,
     /// What the Path field points at (checked on edits, not per frame).
     add_state: PathState,
     /// The folders listed under the Path field: the parents your projects live in
@@ -212,6 +214,7 @@ impl App {
             add_autostart: false,
             add_edit: None,
             add_err: String::new(),
+            add_create: false,
             add_state: PathState::Blank,
             add_picks: Vec::new(),
             add_sel: None,

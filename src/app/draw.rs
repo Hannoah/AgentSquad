@@ -788,7 +788,7 @@ impl App {
     fn add_mark(&self) -> (&'static str, Color) {
         match self.add_state {
             PathState::Folder => ("✓ folder", Color::Green),
-            PathState::Missing => ("✗ not found", Color::Red),
+            PathState::Missing => ("✗ not found · Enter creates", Color::Red),
             PathState::NotFolder => ("✗ not a folder", Color::Red),
             PathState::Blank => ("", Color::Reset),
         }

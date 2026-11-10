@@ -235,6 +235,7 @@ impl App {
         self.add_sel = None;
         self.add_state = pathpick::check(&text);
         self.add_err.clear();
+        self.add_create = false;
     }
 
     /// A text field of the form changed.
@@ -316,6 +317,17 @@ impl App {
                     Ok(disk) => {
                         merge_projects(&mut self.cfg, &mut self.sessions, disk);
                         self.order = display_order(&self.cfg.projects);
+                    }
+                }
+                if self.add_err.is_empty() && self.add_state == PathState::Missing {
+                    if self.add_create {
+                        if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
+                            self.add_err = format!("{e:#}");
+                        }
+                        self.add_create = false;
+                    } else {
+                        self.add_create = true;
+                        self.add_err = "Folder does not exist. Enter again creates it.".into();
                     }
                 }
                 if self.add_err.is_empty() {

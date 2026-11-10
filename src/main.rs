@@ -21,7 +21,8 @@ use std::{
 
 use app::run;
 use config::{
-    build_project, check_superior, load, persist_add, persist_remove, persist_under, shell, Kind,
+    build_project, check_superior, clean_path, create_missing_dir, load, persist_add,
+    persist_remove, persist_under, shell, Kind,
 };
 use ui::{cli_help, empty_list_hint, list_table};
 use updater::{install_update, is_newer, latest_tag_result};
@@ -93,7 +94,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--under <commander>] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -103,6 +104,7 @@ fn main() -> Result<()> {
             let mut kind = Kind::default();
             let mut autostart = false;
             let mut ledger = false;
+            let mut create = false;
             let mut under: Option<String> = None;
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
@@ -121,6 +123,10 @@ fn main() -> Result<()> {
                         ledger = true;
                         i += 1;
                     }
+                    "--create" => {
+                        create = true;
+                        i += 1;
+                    }
                     "--under" => {
                         under = Some(tail.get(i + 1).context(USAGE)?.clone());
                         i += 2;
@@ -133,9 +139,19 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --under <commander> or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander> or -- command")
                     }
                 }
+            }
+            if create {
+                create_missing_dir(path_raw)?;
+            } else if !clean_path(path_raw).is_empty()
+                && !std::path::Path::new(clean_path(path_raw)).exists()
+            {
+                bail!(
+                    "Folder {} does not exist. Add --create to make it.",
+                    clean_path(path_raw)
+                );
             }
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;

@@ -812,3 +812,17 @@ fn join_command_round_trips_through_split_command() {
         assert_eq!(split_command(&join_command(&parts)), parts);
     }
 }
+
+#[test]
+fn create_missing_dir_makes_nested_folders_and_spares_existing() {
+    let base = scratch_dir("create");
+    let deep = base.join("a").join("b");
+    create_missing_dir(deep.to_str().unwrap()).unwrap();
+    assert!(deep.is_dir());
+    create_missing_dir(deep.to_str().unwrap()).unwrap(); // existing: no-op
+    create_missing_dir("  ").unwrap(); // blank: no-op
+    let file = base.join("f");
+    std::fs::write(&file, b"x").unwrap();
+    create_missing_dir(file.to_str().unwrap()).unwrap(); // a file is left alone
+    assert!(file.is_file());
+}

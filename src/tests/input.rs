@@ -227,3 +227,22 @@ fn help_popup_survives_inside_clicks() {
     assert!(popup.width <= 66 && popup.height == help_lines().len() as u16 + 2);
     assert!(popup.contains(ratatui::layout::Position::new(popup.x + 2, popup.y + 2)));
 }
+
+#[test]
+fn mac_option_digits_map_to_their_digit() {
+    let typed: Vec<char> = "¡™£¢∞§¶•ª".chars().collect();
+    for (i, c) in typed.iter().enumerate() {
+        assert_eq!(mac_option_digit(*c), char::from_digit(i as u32 + 1, 10));
+    }
+    assert_eq!(mac_option_digit('1'), None);
+    // Only macOS reads these characters as a switch; elsewhere they are text.
+    let got = focus_switch_key(KeyCode::Char('£'), KeyModifiers::NONE, 3);
+    assert_eq!(
+        got,
+        if cfg!(target_os = "macos") {
+            Some(2)
+        } else {
+            None
+        }
+    );
+}

@@ -599,6 +599,16 @@ pub fn unique_name(base: &str, existing: &[Project]) -> String {
 pub fn clean_path(raw: &str) -> &str {
     raw.trim().trim_matches('"').trim_matches('\'').trim()
 }
+/// Create the folder named by `path_raw` (parents too) when it does not
+/// exist yet. An existing folder or file is left alone; a file then fails
+/// later in `build_project`. Blank input does nothing.
+pub fn create_missing_dir(path_raw: &str) -> Result<()> {
+    let p = clean_path(path_raw);
+    if p.is_empty() || Path::new(p).exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(p).with_context(|| format!("Cannot create folder {p}"))
+}
 /// Build and validate a project from user inputs, without touching disk state.
 ///
 /// Services take their name from the program being run and can share a directory
