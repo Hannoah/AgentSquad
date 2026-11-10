@@ -47,6 +47,9 @@ pub struct ProcList {
     items: Vec<ProcInfo>,
     sel: usize,
     confirm: Option<ProcInfo>,
+    /// First listed row; drawing moves it just enough to keep `sel` shown,
+    /// so a click maps to the row it hit.
+    top: std::cell::Cell<usize>,
     /// Full command line of the picked process, read when the pick changes.
     cmd: Option<(u32, Option<String>)>,
 }

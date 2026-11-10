@@ -744,3 +744,18 @@ fn confirm_click_hits_yes_and_no() {
     assert_eq!(confirm_click(&lines, popup, x, hint - 1), None, "blank row");
     assert_eq!(confirm_click(&lines, popup, popup.x, hint), None, "border");
 }
+
+#[test]
+fn procs_list_rect_leaves_room_for_detail_and_footer() {
+    use ratatui::layout::Rect;
+    // Tall: border, 5-row detail box and footer come off the list.
+    assert_eq!(
+        procs_list_rect(Rect::new(0, 0, 40, 20)),
+        Rect::new(1, 1, 38, 12)
+    );
+    // Short: no detail box, only the footer.
+    assert_eq!(
+        procs_list_rect(Rect::new(0, 0, 40, 8)),
+        Rect::new(1, 1, 38, 5)
+    );
+}

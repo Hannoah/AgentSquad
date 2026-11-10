@@ -208,6 +208,7 @@ impl App {
             items: top_processes(PROC_ROWS),
             sel: 0,
             confirm: None,
+            top: Default::default(),
             cmd: None,
         };
         p.load_cmd();

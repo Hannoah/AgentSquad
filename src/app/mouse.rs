@@ -59,7 +59,17 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) || wheel_lines(m.kind).is_some() {
             self.sel = None; // the cells would no longer match the text
         }
-        if let Some(lines) = wheel_lines(m.kind) {
+        if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
+            // The memory monitor is modal: the wheel moves its pick.
+            p.confirm = None;
+            p.sel = if lines > 0 {
+                p.sel.saturating_sub(1)
+            } else {
+                (p.sel + 1).min(p.items.len().saturating_sub(1))
+            };
+            p.load_cmd();
+            self.dirty = true;
+        } else if let Some(lines) = wheel_lines(m.kind) {
             let over_sidebar = self.mode != Mode::Focus
                 && self.side_rect.width > 0
                 && self
@@ -132,11 +142,19 @@ impl App {
                     self.history = None;
                 }
                 self.dirty = true;
-            } else if self.procs.is_some() {
-                if !procs_popup(area.into())
-                    .contains(ratatui::layout::Position::new(m.column, m.row))
-                {
+            } else if let Some(p) = self.procs.as_mut() {
+                let popup = procs_popup(area.into());
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                let list = procs_list_rect(popup);
+                if !popup.contains(at) {
                     self.procs = None;
+                } else if list.contains(at) {
+                    let i = p.top.get() + usize::from(m.row - list.y);
+                    if i < p.items.len() {
+                        p.confirm = None;
+                        p.sel = i;
+                        p.load_cmd();
+                    }
                 }
                 self.dirty = true;
             } else if self.mode == Mode::Help {
@@ -280,6 +298,10 @@ impl App {
                 if i == MEMORY_ROW {
                     self.mode = Mode::Manager;
                     self.open_procs();
+                } else if self.selected == i && self.mode == Mode::Focus {
+                    // Clicking the manager while typing in a terminal hands
+                    // the keyboard back to the manager.
+                    self.mode = Mode::Manager;
                 } else if self.selected == i {
                     // Re-clicking selected project: start if stopped, focus if running
                     if let Some(&pi) = self.order.get(self.selected) {
@@ -318,9 +340,12 @@ impl App {
                 .contains(ratatui::layout::Position::new(m.column, m.row))
             {
                 // Header, group label, blank space or border of the manager:
-                // hand the keyboard to the selected session, starting it first
-                // if it is stopped (same as re-clicking its row).
-                if let Some(&pi) = self.order.get(self.selected) {
+                // from a terminal, hand the keyboard back to the manager;
+                // from the manager, hand it to the selected session, starting
+                // it first if it is stopped (same as re-clicking its row).
+                if self.mode == Mode::Focus {
+                    self.mode = Mode::Manager;
+                } else if let Some(&pi) = self.order.get(self.selected) {
                     if slot_running(&self.sessions, pi) {
                         self.mode = Mode::Focus;
                     } else {

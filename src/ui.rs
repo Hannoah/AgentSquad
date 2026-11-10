@@ -109,7 +109,7 @@ const SWITCH_KEY: &str = if cfg!(target_os = "macos") {
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
-        "Click/drag select a project, focus a terminal; drag copies text",
+        "Click a project or the pane to focus it; click the manager to return; drag copies",
         "Right-click  open quick actions for a project",
         "j/k, arrows  select project",
         "1-9, Home/End  jump to a project / the first / the last",
@@ -573,6 +573,18 @@ pub fn procs_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
         area.height.saturating_sub(4),
         area,
     )
+}
+/// The memory monitor's process list inside `popup`: what is left after the
+/// border, the detail box (only when there is room) and the footer row.
+pub fn procs_list_rect(popup: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    let detail_h: u16 = if inner.height >= 12 { 5 } else { 0 };
+    let h = inner
+        .height
+        .saturating_sub(detail_h + 1)
+        .max(1)
+        .min(inner.height);
+    ratatui::layout::Rect::new(inner.x, inner.y, inner.width, h)
 }
 pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));

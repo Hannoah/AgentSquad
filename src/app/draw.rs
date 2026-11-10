@@ -160,7 +160,8 @@ impl App {
             ])
             .split(inner);
         let rows = usize::from(parts[0].height).max(1);
-        let start = (p.sel + 1).saturating_sub(rows);
+        let start = p.top.get().min(p.sel).max((p.sel + 1).saturating_sub(rows));
+        p.top.set(start);
         let name_w = usize::from(inner.width).saturating_sub(18);
         let list: Vec<Line> = p
             .items
