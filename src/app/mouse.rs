@@ -121,6 +121,10 @@ impl App {
                 !modal_rect(lines, area.into())
                     .contains(ratatui::layout::Position::new(m.column, m.row))
             });
+            // A click on the hint row answers like the key it names.
+            let answer = self.confirm_modals().last().and_then(|(_, _, lines)| {
+                confirm_click(lines, modal_rect(lines, area.into()), m.column, m.row)
+            });
             if self.history.is_some() {
                 if !history_popup(area.into())
                     .contains(ratatui::layout::Position::new(m.column, m.row))
@@ -143,6 +147,14 @@ impl App {
                     self.mode = Mode::Manager;
                     self.dirty = true;
                 }
+            } else if let Some(yes) = answer.filter(|_| self.context_menu.is_none()) {
+                let code = if yes {
+                    KeyCode::Char('y')
+                } else {
+                    KeyCode::Esc
+                };
+                self.key_manager_or_confirm(KeyEvent::new(code, KeyModifiers::NONE), rows, cols);
+                self.dirty = true;
             } else if self.confirm_stop.is_some() {
                 if outside_modal {
                     self.confirm_stop = None;

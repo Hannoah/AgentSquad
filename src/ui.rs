@@ -536,6 +536,28 @@ pub fn modal_rect(lines: &[Line], area: ratatui::layout::Rect) -> ratatui::layou
         area,
     )
 }
+/// A click on a confirmation's hint row ("y confirms | n / Esc cancels"):
+/// Some(true) on the yes part, Some(false) on the rest of that row.
+pub fn confirm_click(
+    lines: &[Line],
+    popup: ratatui::layout::Rect,
+    col: u16,
+    row: u16,
+) -> Option<bool> {
+    let hint_row = popup.y + lines.len() as u16; // top border, then the lines
+    let left = popup.x + 1;
+    if lines.is_empty() || row != hint_row || col < left || col + 1 >= popup.right() {
+        return None;
+    }
+    let text: String = lines
+        .last()?
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    let yes_w = text.find(" | ").unwrap_or(text.len()) as u16;
+    Some(col - left < yes_w)
+}
 /// The SITREP reader: nearly the whole screen, shared by drawing and clicks.
 pub fn history_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     fixed_rect(

@@ -729,3 +729,18 @@ fn confirm_apply_lines_say_what_a_restart_costs() {
     assert!(text(0).contains("v9.9.9") && text(0).contains("No sessions are running"));
     assert!(text(2).contains("2 sessions will be stopped"));
 }
+
+#[test]
+fn confirm_click_hits_yes_and_no() {
+    let lines = confirm_stop_lines("app");
+    let area = ratatui::layout::Rect::new(0, 0, 100, 40);
+    let popup = modal_rect(&lines, area);
+    let hint = popup.y + lines.len() as u16;
+    let x = popup.x + 1;
+    // "y confirms | n / Esc cancels"
+    assert_eq!(confirm_click(&lines, popup, x, hint), Some(true));
+    assert_eq!(confirm_click(&lines, popup, x + 9, hint), Some(true));
+    assert_eq!(confirm_click(&lines, popup, x + 13, hint), Some(false));
+    assert_eq!(confirm_click(&lines, popup, x, hint - 1), None, "blank row");
+    assert_eq!(confirm_click(&lines, popup, popup.x, hint), None, "border");
+}
