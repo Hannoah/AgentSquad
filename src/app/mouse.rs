@@ -265,7 +265,10 @@ impl App {
                 m.column,
                 m.row,
             ) {
-                if self.selected == i {
+                if i == MEMORY_ROW {
+                    self.mode = Mode::Manager;
+                    self.open_procs();
+                } else if self.selected == i {
                     // Re-clicking selected project: start if stopped, focus if running
                     if let Some(&pi) = self.order.get(self.selected) {
                         let live = self
@@ -406,7 +409,9 @@ impl App {
                 &self.row_targets,
                 m.column,
                 m.row,
-            ) {
+            )
+            .filter(|&i| i != MEMORY_ROW)
+            {
                 self.selected = i;
                 if let Some(&pi) = self.order.get(self.selected) {
                     self.context_menu = Some(pi);

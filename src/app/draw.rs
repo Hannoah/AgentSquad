@@ -452,6 +452,29 @@ impl App {
                 );
             }
         }
+        items.push(ListItem::new(Line::from(Span::styled(
+            "Management",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ))));
+        targets.push(None);
+        let memory_style = if self.procs.is_some() {
+            selected_row_style()
+        } else {
+            Style::default()
+        };
+        items.push(
+            ListItem::new(Line::from(vec![
+                Span::raw("  Memory monitor "),
+                Span::styled(
+                    "M",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ),
+            ]))
+            .style(memory_style),
+        );
+        targets.push(Some(MEMORY_ROW));
         let visible_rows = (panel.height as usize).saturating_sub(2).max(1);
         if let Some(sr) = sel_row {
             self.list_offset = keep_visible(self.list_offset, sr, visible_rows);
