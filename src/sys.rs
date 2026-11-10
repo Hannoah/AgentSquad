@@ -477,6 +477,91 @@ fn sigkill(pid: u32) {
     // SAFETY: SIGKILL to a pid in our own session; ESRCH/EPERM are ignored.
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
 }
+/// One process in the memory list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcInfo {
+    pub pid: u32,
+    pub name: String,
+    pub mem: u64,
+}
+/// The `n` biggest by RAM, ties by pid so the order never flickers.
+#[cfg(any(windows, unix))]
+fn sort_top(mut all: Vec<ProcInfo>, n: usize) -> Vec<ProcInfo> {
+    all.sort_by(|a, b| b.mem.cmp(&a.mem).then(a.pid.cmp(&b.pid)));
+    all.truncate(n);
+    all
+}
+/// The `n` processes on the machine holding the most RAM, biggest first.
+#[cfg(unix)]
+pub fn top_processes(n: usize) -> Vec<ProcInfo> {
+    let t = snapshot_table();
+    let all = t
+        .names
+        .iter()
+        .filter_map(|(&pid, name)| {
+            let &(_, mem) = t.usage.get(&pid)?;
+            // `comm` is a full path on macOS; the file name is what people know.
+            let name = name.rsplit('/').next().unwrap_or(name).to_string();
+            Some(ProcInfo { pid, name, mem })
+        })
+        .collect();
+    sort_top(all, n)
+}
+#[cfg(windows)]
+pub fn top_processes(n: usize) -> Vec<ProcInfo> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FALSE},
+        System::{
+            ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
+    };
+    let all = snapshot_table()
+        .names
+        .into_iter()
+        .filter_map(|(pid, name)| {
+            // SAFETY: read-only query on a handle opened and closed here; a
+            // null handle only means the process is gone or out of reach.
+            unsafe {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if handle.is_null() {
+                    return None;
+                }
+                let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+                counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                let ok = GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0;
+                CloseHandle(handle);
+                ok.then(|| ProcInfo {
+                    pid,
+                    name,
+                    mem: counters.WorkingSetSize as u64,
+                })
+            }
+        })
+        .collect();
+    sort_top(all, n)
+}
+#[cfg(not(any(unix, windows)))]
+pub fn top_processes(_n: usize) -> Vec<ProcInfo> {
+    Vec::new()
+}
+/// Why squad must not kill `pid`, or None when it may. Killing the shell or
+/// terminal squad runs in would take squad and every session down with it.
+#[cfg(any(windows, unix))]
+pub fn kill_refusal(pid: u32) -> Option<&'static str> {
+    if pid <= 4 {
+        return Some("system process");
+    }
+    // The tree walk includes the root, so squad's own pid counts too.
+    let table = snapshot_table();
+    descendant_pids_from_map(pid, &table.children)
+        .contains(&std::process::id())
+        .then_some("squad runs inside it")
+}
+#[cfg(not(any(windows, unix)))]
+pub fn kill_refusal(_pid: u32) -> Option<&'static str> {
+    Some("not supported on this platform")
+}
 /// (CPU time in 100 ns units, working-set bytes) summed over the process
 /// tree rooted at `root`. None when the platform has no probe.
 #[cfg(windows)]

@@ -32,6 +32,8 @@ impl App {
             self.key_context_menu(k, rows, cols);
         } else if self.history.is_some() {
             self.key_history(k);
+        } else if self.procs.is_some() {
+            self.key_procs(k);
         } else if self.confirm_update {
             self.key_confirm_update(k);
         } else if self.confirm_apply {
@@ -503,6 +505,7 @@ impl App {
             }
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('h') if !self.order.is_empty() => self.open_history(),
+            KeyCode::Char('M') => self.open_procs(),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
             KeyCode::Char('?') => self.mode = Mode::Help,

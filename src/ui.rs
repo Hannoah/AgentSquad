@@ -118,13 +118,13 @@ pub fn help_lines() -> Vec<&'static str> {
         "m          message: send a line to session",
         "b          brief the agent on .squad/ (ledger = true)",
         "h          history: read the project's SITREPs",
+        "M          memory: biggest processes, kill one (x)",
         "o          order: send a line to every agent under a commander",
         "u          set whom the selected agent reports to",
         "e, f       edit command/autostart; pin or unpin (pinned first, marked *)",
         "s, r       stop / restart session (asks to confirm)",
         "d/Del      remove project (asks to confirm)",
-        "S          start all stopped sessions",
-        "U          install the update squad found",
+        "S, U       start all stopped / install the update squad found",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
         "Ctrl+Q, middle-click  terminal back to manager",
         #[cfg(target_os = "macos")]
@@ -540,6 +540,14 @@ pub fn modal_rect(lines: &[Line], area: ratatui::layout::Rect) -> ratatui::layou
 pub fn history_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     fixed_rect(
         area.width.saturating_sub(6).min(130),
+        area.height.saturating_sub(4),
+        area,
+    )
+}
+/// The memory monitor: a tall column, shared by drawing and clicks.
+pub fn procs_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    fixed_rect(
+        area.width.saturating_sub(6).min(72),
         area.height.saturating_sub(4),
         area,
     )

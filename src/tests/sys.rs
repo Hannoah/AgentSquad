@@ -95,3 +95,15 @@ fn mem_limit_flags_only_above_and_zero_disables() {
     assert!(!over_mem_limit(u, 3 << 20));
     assert!(!over_mem_limit(u, 0));
 }
+#[test]
+fn top_processes_lists_biggest_first_and_includes_self() {
+    let top = top_processes(10_000);
+    assert!(top.windows(2).all(|w| w[0].mem >= w[1].mem));
+    assert!(top.iter().any(|p| p.pid == std::process::id()));
+    assert_eq!(top_processes(3).len(), 3);
+}
+#[test]
+fn kill_refusal_protects_squad_and_system() {
+    assert!(kill_refusal(std::process::id()).is_some(), "squad itself");
+    assert!(kill_refusal(1).is_some(), "init/launchd");
+}

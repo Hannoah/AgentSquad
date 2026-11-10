@@ -202,6 +202,55 @@ impl App {
         self.dirty = true;
     }
 
+    /// `M`: list the processes holding the most RAM on the machine.
+    pub(super) fn open_procs(&mut self) {
+        self.procs = Some(ProcList {
+            items: top_processes(PROC_ROWS),
+            sel: 0,
+            confirm: None,
+        });
+    }
+
+    pub(super) fn key_procs(&mut self, k: KeyEvent) {
+        let Some(p) = self.procs.as_mut() else {
+            return;
+        };
+        self.dirty = true;
+        // A pending kill takes only the answer; anything but `y` cancels.
+        if let Some(t) = p.confirm.take() {
+            if matches!(k.code, KeyCode::Char('y') | KeyCode::Enter) {
+                kill_trees(&[t.pid]);
+                self.message = (format!("Killed {} ({})", t.name, t.pid), Notice::Info);
+                p.items = top_processes(PROC_ROWS);
+                p.sel = p.sel.min(p.items.len().saturating_sub(1));
+            }
+            return;
+        }
+        let last = p.items.len().saturating_sub(1);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('M') => self.procs = None,
+            KeyCode::Down | KeyCode::Char('j') => p.sel = (p.sel + 1).min(last),
+            KeyCode::Up | KeyCode::Char('k') => p.sel = p.sel.saturating_sub(1),
+            KeyCode::Home => p.sel = 0,
+            KeyCode::End => p.sel = last,
+            KeyCode::Char('r') => {
+                p.items = top_processes(PROC_ROWS);
+                p.sel = p.sel.min(p.items.len().saturating_sub(1));
+            }
+            KeyCode::Char('x') | KeyCode::Char('d') | KeyCode::Delete => {
+                if let Some(t) = p.items.get(p.sel) {
+                    match kill_refusal(t.pid) {
+                        Some(why) => {
+                            self.message = (format!("Not killing {}: {why}", t.name), Notice::Warn)
+                        }
+                        None => p.confirm = Some(t.clone()),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The update is installed: `y` restarts squad into it (stopping the
     /// sessions), `n` keeps the old build running until the next launch.
     pub(super) fn key_confirm_apply(&mut self, k: KeyEvent) {

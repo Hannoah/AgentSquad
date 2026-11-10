@@ -45,6 +45,7 @@ impl App {
         self.draw_status(f, vertical[1]);
         let has_modal = matches!(self.mode, Mode::Help | Mode::Add)
             || self.history.is_some()
+            || self.procs.is_some()
             || self.confirm_stop.is_some()
             || self.confirm_remove.is_some()
             || self.confirm_restart.is_some()
@@ -61,6 +62,7 @@ impl App {
             self.draw_help(f);
         }
         self.draw_history(f);
+        self.draw_procs(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
         if self.mode == Mode::Add {
@@ -123,6 +125,67 @@ impl App {
                 .block(Block::default().borders(Borders::LEFT)),
             cols[1],
         );
+    }
+
+    /// The memory monitor: biggest processes first, the picked row marked.
+    fn draw_procs(&self, f: &mut Frame) {
+        let Some(p) = &self.procs else {
+            return;
+        };
+        let popup = procs_popup(f.area());
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(Span::styled(
+                "Memory: biggest processes ↑↓ pick · x kill · r refresh · Esc closes",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        if inner.height == 0 {
+            return;
+        }
+        // The last row carries the kill question, so it never hides in a list.
+        let rows = usize::from(inner.height - 1).max(1);
+        let start = (p.sel + 1).saturating_sub(rows);
+        let name_w = usize::from(inner.width).saturating_sub(18);
+        let list: Vec<Line> = p
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(rows)
+            .map(|(i, it)| {
+                let name: String = it.name.chars().take(name_w).collect();
+                let style = if i == p.sel {
+                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                Line::from(Span::styled(
+                    format!("{:>7}  {:>8}  {name}", mem_label(it.mem), it.pid),
+                    style,
+                ))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(list), inner);
+        let foot = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+        let line = match &p.confirm {
+            Some(t) => Line::from(Span::styled(
+                format!("Kill {} ({}) and its children? y / n", t.name, t.pid),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )),
+            None => Line::from(Span::styled(
+                format!("{} processes by RAM (working set)", p.items.len()),
+                Style::default().fg(Color::DarkGray),
+            )),
+        };
+        f.render_widget(Paragraph::new(line), foot);
     }
 
     pub(super) fn draw_context_menu(&self, f: &mut Frame) {

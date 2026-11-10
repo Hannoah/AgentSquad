@@ -41,6 +41,16 @@ mod draw;
 mod keys;
 mod mouse;
 
+/// The memory monitor: biggest processes, the picked row, and the process
+/// waiting for a yes/no before it is killed.
+pub struct ProcList {
+    items: Vec<ProcInfo>,
+    sel: usize,
+    confirm: Option<ProcInfo>,
+}
+/// Rows the memory monitor lists.
+const PROC_ROWS: usize = 50;
+
 /// Restores the terminal on exit, including the title it found at start.
 pub struct ScreenGuard(Option<String>);
 impl Drop for ScreenGuard {
@@ -165,6 +175,8 @@ struct App {
     resume: Vec<usize>,
     /// The SITREP reader (`h`), open over the manager.
     history: Option<History>,
+    /// The memory monitor (`M`), open over the manager.
+    procs: Option<ProcList>,
     quit: bool,
 }
 
@@ -255,6 +267,7 @@ impl App {
             autostart_pending: true,
             resume: Vec::new(),
             history: None,
+            procs: None,
             quit: false,
         }
     }
@@ -427,6 +440,7 @@ impl App {
         // swallows keystrokes meant for a session or another input.
         let keyboard_free = !(self.mode != Mode::Manager
             || self.history.is_some()
+            || self.procs.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()

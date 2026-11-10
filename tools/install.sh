@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs squad from GitHub Releases (macOS).
 #   curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | bash
-# Env: SQUAD_VERSION (e.g. v0.15.3, default latest), SQUAD_INSTALL_DIR (default ~/.local/bin),
+# Env: SQUAD_VERSION (e.g. v0.15.4, default latest), SQUAD_INSTALL_DIR (default ~/.local/bin),
 #      SQUAD_REPO (default Hannoah/AgentSquad).
 set -euo pipefail
 

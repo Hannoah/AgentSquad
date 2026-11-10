@@ -128,6 +128,13 @@ impl App {
                     self.history = None;
                 }
                 self.dirty = true;
+            } else if self.procs.is_some() {
+                if !procs_popup(area.into())
+                    .contains(ratatui::layout::Position::new(m.column, m.row))
+                {
+                    self.procs = None;
+                }
+                self.dirty = true;
             } else if self.mode == Mode::Help {
                 // Clicks inside the popup (e.g. selecting text) keep it open.
                 if !help_popup(area.into())
@@ -292,6 +299,18 @@ impl App {
                 }
                 self.dirty = true;
             } else if self
+                .side_rect
+                .contains(ratatui::layout::Position::new(m.column, m.row))
+            {
+                // Header, group label, blank space or border of the manager:
+                // hand the keyboard to the selected session if it is live.
+                if let Some(&pi) = self.order.get(self.selected) {
+                    if slot_running(&self.sessions, pi) {
+                        self.mode = Mode::Focus;
+                    }
+                }
+                self.dirty = true;
+            } else if self
                 .pane_rect
                 .contains(ratatui::layout::Position::new(m.column, m.row))
             {
@@ -369,6 +388,7 @@ impl App {
             && !self.confirm_update
             && !self.confirm_apply
             && self.history.is_none()
+            && self.procs.is_none()
         {
             // Right-click on a sidebar row opens its quick-action menu.
             // Manager-only, so typing in a terminal is never stolen, and
