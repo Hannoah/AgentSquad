@@ -120,3 +120,6 @@ macOS 지원, 모듈(history, pathpick, select), 설정 경로, 종료 방식, �
 
 ## [2026-11-10] 배포 | v0.15.5
 메모리 모니터 `M`에 선택한 프로세스의 상세 박스 추가(PID, 부모 PID·이름, RAM, 누적 CPU 시간, 어느 squad 세션 안에서 도는지, 전체 명령줄). 테스트 161개 통과. v0.15.4는 릴리스 성공(에셋 6개), CI는 Windows clippy 린트(`then_some`)로 한 번 실패해 cfea8c2에서 고침.
+
+## [2026-11-11] 점검 | 프로덕션 수준 점검
+패닉 훅 추가(`crash.log`에 기록, 메인 스레드는 대체 화면을 먼저 빠져나와 메시지가 보임; 실제 패닉으로는 미확인). `changed_files`가 3바이트 이하 옛 이름의 rename 뒤 항목을 빠뜨리던 버그 수정(회귀 테스트 추가). CI에 `cargo audit`와 읽기 전용 권한, Dependabot(cargo, actions; `portable-pty` 제외) 추가.

@@ -233,9 +233,14 @@ pub fn git(project: &Path, args: &[&str]) -> Option<String> {
 pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
     let text = git(project, &["status", "--porcelain", "-z", "-uall"])?;
     let mut files = Vec::new();
-    let mut entries = text.split('\0').filter(|e| e.len() > 3);
+    // No filter on the iterator: a renamed file's old path may be shorter than
+    // a status prefix, and skipping it there would eat the next real entry.
+    let mut entries = text.split('\0');
     while let Some(e) = entries.next() {
-        files.push(PathBuf::from(&e[3..]));
+        let Some(path) = e.get(3..).filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        files.push(PathBuf::from(path));
         // A rename or copy is followed by its old path, with no status prefix.
         if matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C') {
             entries.next();

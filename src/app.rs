@@ -84,6 +84,48 @@ impl Drop for ScreenGuard {
     }
 }
 
+/// Without this a panic prints into the alternate screen and vanishes with it.
+/// Appends every panic to `crash.log` next to the config; a panic on the main
+/// thread also leaves the alternate screen first so the message stays visible.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(dir) = config_path()
+            .ok()
+            .and_then(|p| p.parent().map(std::path::PathBuf::from))
+        {
+            let secs = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("crash.log"))
+            {
+                let _ = writeln!(
+                    f,
+                    "{} squad v{} thread '{}': {info}\n{}\n",
+                    ledger::utc_stamp(secs),
+                    env!("CARGO_PKG_VERSION"),
+                    thread::current().name().unwrap_or("?"),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
+        // Background threads leave the screen alone: the manager keeps running.
+        if thread::current().name() == Some("main") {
+            let _ = disable_raw_mode();
+            let _ = execute!(
+                io::stdout(),
+                LeaveAlternateScreen,
+                DisableMouseCapture,
+                crossterm::cursor::Show
+            );
+        }
+        default(info);
+    }));
+}
+
 /// Rows and columns left for a session's terminal inside the frame.
 fn pane_size(a: Size) -> (u16, u16) {
     let side = sidebar_width(a.width);
@@ -741,6 +783,7 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     if let Some(lines) = c.scrollback {
         set_scrollback_limit(lines);
     }
+    install_panic_hook();
     let _guard = ScreenGuard(console_title());
     execute!(
         io::stdout(),

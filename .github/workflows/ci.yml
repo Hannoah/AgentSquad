@@ -6,7 +6,19 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  # Fails when a dependency in Cargo.lock has a published RustSec advisory.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
   check:
     strategy:
       fail-fast: false

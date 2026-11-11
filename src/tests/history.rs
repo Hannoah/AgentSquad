@@ -106,7 +106,8 @@ fn gather_reports_commits_and_changed_files_from_git() {
     git(&["init", "-q"]);
     let started = SystemTime::now() - Duration::from_secs(60);
     std::fs::write(dir.join("a.txt"), "a").unwrap();
-    git(&["add", "a.txt"]);
+    std::fs::write(dir.join("x"), "x").unwrap();
+    git(&["add", "a.txt", "x"]);
     git(&["commit", "-q", "-m", "add a"]);
     std::fs::write(dir.join("b.txt"), "b").unwrap();
     let (files, commits) = gather(&dir, started);
@@ -114,6 +115,13 @@ fn gather_reports_commits_and_changed_files_from_git() {
     assert!(
         commits.len() == 1 && commits[0].ends_with("add a"),
         "{commits:?}"
+    );
+    // A staged rename with a short old name must not swallow the next entry.
+    git(&["mv", "x", "renamed.txt"]);
+    let (files, _) = gather(&dir, started);
+    assert!(
+        files.iter().any(|f| f == "renamed.txt") && files.iter().any(|f| f == "b.txt"),
+        "{files:?}"
     );
     // Not a repository: empty, never an error.
     let plain = scratch_dir("history-plain");

@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Pinned on purpose: 0.9 hangs console clients at startup (see Cargo.toml).
+      - dependency-name: portable-pty
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
