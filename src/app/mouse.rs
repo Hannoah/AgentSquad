@@ -69,6 +69,33 @@ impl App {
             };
             p.load_cmd();
             self.dirty = true;
+        } else if let (Some(lines), Some(h)) = (wheel_lines(m.kind), self.history.as_mut()) {
+            let popup = history_popup(area.into());
+            let (left_col, _) = history_cols(popup);
+            let at = ratatui::layout::Position::new(m.column, m.row);
+            if left_col.contains(at) {
+                if lines > 0 {
+                    h.select(h.sel.saturating_sub(1));
+                } else {
+                    h.select(h.sel + 1);
+                }
+            } else {
+                h.scroll_by(-lines);
+            }
+            self.dirty = true;
+        } else if wheel_lines(m.kind).is_some() && self.mode == Mode::Add {
+            if let Some(lines) = wheel_lines(m.kind) {
+                if self.add_field == 0 && !self.add_picks.is_empty() {
+                    self.wheel_path_list(lines < 0);
+                    self.dirty = true;
+                }
+            }
+        } else if wheel_lines(m.kind).is_some()
+            && (self.mode == Mode::Help
+                || self.context_menu.is_some()
+                || !self.confirm_modals().is_empty())
+        {
+            // Keep modal popups isolated: wheel events do not leak into the dimmed background.
         } else if let Some(lines) = wheel_lines(m.kind) {
             let over_sidebar = self.mode != Mode::Focus
                 && self.side_rect.width > 0
@@ -135,11 +162,17 @@ impl App {
             let answer = self.confirm_modals().last().and_then(|(_, _, lines)| {
                 confirm_click(lines, modal_rect(lines, area.into()), m.column, m.row)
             });
-            if self.history.is_some() {
-                if !history_popup(area.into())
-                    .contains(ratatui::layout::Position::new(m.column, m.row))
-                {
+            if let Some(h) = self.history.as_mut() {
+                let popup = history_popup(area.into());
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                let (left_col, _) = history_cols(popup);
+                if !popup.contains(at) {
                     self.history = None;
+                } else if left_col.contains(at) {
+                    let i = h.top.get() + usize::from(m.row - left_col.y);
+                    if i < h.items.len() {
+                        h.select(i);
+                    }
                 }
                 self.dirty = true;
             } else if let Some(p) = self.procs.as_mut() {

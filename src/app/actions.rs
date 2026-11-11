@@ -193,8 +193,8 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => self.history = None,
             KeyCode::Down | KeyCode::Char('j') => h.select(h.sel + 1),
             KeyCode::Up | KeyCode::Char('k') => h.select(h.sel.saturating_sub(1)),
-            KeyCode::PageDown | KeyCode::Char(' ') => h.scroll = h.scroll.saturating_add(10),
-            KeyCode::PageUp => h.scroll = h.scroll.saturating_sub(10),
+            KeyCode::PageDown | KeyCode::Char(' ') => h.scroll_by(10),
+            KeyCode::PageUp => h.scroll_by(-10),
             KeyCode::Home => h.select(0),
             KeyCode::End => h.select(usize::MAX),
             _ => {}
@@ -236,6 +236,8 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('M') => self.procs = None,
             KeyCode::Down | KeyCode::Char('j') => p.sel = (p.sel + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => p.sel = p.sel.saturating_sub(1),
+            KeyCode::PageDown => p.sel = (p.sel + 10).min(last),
+            KeyCode::PageUp => p.sel = p.sel.saturating_sub(10),
             KeyCode::Home => p.sel = 0,
             KeyCode::End => p.sel = last,
             KeyCode::Char('r') => {

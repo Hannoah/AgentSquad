@@ -759,3 +759,25 @@ fn procs_list_rect_leaves_room_for_detail_and_footer() {
         Rect::new(1, 1, 38, 5)
     );
 }
+
+#[test]
+fn filtered_empty_state_explains_zero_matches() {
+    let text = filtered_empty_state_lines("api").join("\n");
+    assert!(text.contains("No projects match 'api'."));
+    assert!(text.contains("Esc") && text.contains("clear"));
+}
+
+#[test]
+fn history_cols_splits_list_and_reader() {
+    use ratatui::layout::Rect;
+    let popup = Rect::new(2, 2, 100, 20);
+    let (left, right) = history_cols(popup);
+    assert_eq!(left, Rect::new(3, 3, 30, 18));
+    assert_eq!(right, Rect::new(33, 3, 68, 18));
+}
+
+#[test]
+fn hint_text_len_counts_chars_not_utf8_bytes() {
+    // "↑↓" is 6 bytes in UTF-8, but 2 character columns on screen.
+    assert_eq!(hint_text_len(&[("↑↓", "pick")]), 7);
+}

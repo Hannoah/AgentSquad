@@ -5,6 +5,7 @@ use super::*;
 impl App {
     pub(super) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         self.dirty = true;
+        let k = normalize_ctrl_alt_key(k);
         // Any key drops the highlight. Ctrl+C on a selection copies it and is
         // not sent on; with nothing selected it reaches the session as before.
         if self.sel.is_some_and(|s| s.moved)
@@ -28,6 +29,7 @@ impl App {
 
     /// Manager keys, or the answer to whichever confirmation is open.
     pub(super) fn key_manager_or_confirm(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+        let k = hotkey_event(k);
         if self.context_menu.is_some() {
             self.key_context_menu(k, rows, cols);
         } else if self.history.is_some() {
@@ -159,11 +161,41 @@ impl App {
                     }
                 }
             }
+            KeyCode::Backspace
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.send_buf.delete_word_back();
+            }
+            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.send_buf.delete_word_back();
+            }
+            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.send_buf.clear_to_start();
+            }
+            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.send_buf.move_home();
+            }
+            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.send_buf.move_end();
+            }
             KeyCode::Backspace => {
                 self.send_buf.backspace();
             }
             KeyCode::Delete => {
                 self.send_buf.delete();
+            }
+            KeyCode::Left
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.send_buf.move_word_left();
+            }
+            KeyCode::Right
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.send_buf.move_word_right();
             }
             KeyCode::Left => self.send_buf.move_left(),
             KeyCode::Right => self.send_buf.move_right(),
@@ -188,6 +220,36 @@ impl App {
                 self.selected = 0;
             }
             KeyCode::Enter => self.mode = Mode::Manager,
+            KeyCode::Down if !self.order.is_empty() => {
+                self.selected = (self.selected + 1) % self.order.len();
+            }
+            KeyCode::Up if !self.order.is_empty() => {
+                self.selected = (self.selected + self.order.len() - 1) % self.order.len();
+            }
+            KeyCode::Backspace
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.filter_buf.delete_word_back();
+                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                self.selected = 0;
+            }
+            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter_buf.delete_word_back();
+                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                self.selected = 0;
+            }
+            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter_buf.clear_to_start();
+                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                self.selected = 0;
+            }
+            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter_buf.move_home();
+            }
+            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter_buf.move_end();
+            }
             KeyCode::Backspace => {
                 self.filter_buf.backspace();
                 self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
@@ -197,6 +259,18 @@ impl App {
                 self.filter_buf.delete();
                 self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                 self.selected = 0;
+            }
+            KeyCode::Left
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.filter_buf.move_word_left();
+            }
+            KeyCode::Right
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.filter_buf.move_word_right();
             }
             KeyCode::Left => self.filter_buf.move_left(),
             KeyCode::Right => self.filter_buf.move_right(),
@@ -288,7 +362,7 @@ impl App {
 
     /// Down/Up in the Path field step through the folder list; past either
     /// end they move to the neighbouring field.
-    fn step_path_list(&mut self, down: bool) {
+    pub(super) fn step_path_list(&mut self, down: bool) {
         let n = self.add_picks.len();
         match (down, self.add_sel) {
             (true, None) if n > 0 => self.add_sel = Some(0),
@@ -297,6 +371,21 @@ impl App {
             (false, Some(i)) => self.add_sel = Some(i - 1),
             (true, _) => self.add_field = 1,
             (false, None) => self.add_field = 4,
+        }
+    }
+
+    /// Mouse wheel in the Path field steps through the folder list without
+    /// jumping to another field at the ends.
+    pub(super) fn wheel_path_list(&mut self, down: bool) {
+        let n = self.add_picks.len();
+        if n == 0 {
+            return;
+        }
+        match (down, self.add_sel) {
+            (true, None) => self.add_sel = Some(0),
+            (true, Some(i)) => self.add_sel = Some((i + 1).min(n - 1)),
+            (false, Some(0) | None) => self.add_sel = None,
+            (false, Some(i)) => self.add_sel = Some(i - 1),
         }
     }
 
@@ -394,6 +483,37 @@ impl App {
             KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
             KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
             KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
+            KeyCode::Backspace
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(input) = self.add_input() {
+                    input.delete_word_back();
+                }
+                self.add_edited();
+            }
+            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = self.add_input() {
+                    input.delete_word_back();
+                }
+                self.add_edited();
+            }
+            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = self.add_input() {
+                    input.clear_to_start();
+                }
+                self.add_edited();
+            }
+            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = self.add_input() {
+                    input.move_home();
+                }
+            }
+            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = self.add_input() {
+                    input.move_end();
+                }
+            }
             KeyCode::Backspace => {
                 if let Some(input) = self.add_input() {
                     input.backspace();
@@ -408,15 +528,18 @@ impl App {
             }
             KeyCode::Left | KeyCode::Right => {
                 let left = k.code == KeyCode::Left;
+                let word_mod = k.modifiers.contains(KeyModifiers::CONTROL)
+                    || k.modifiers.contains(KeyModifiers::ALT);
                 match self.add_field {
                     1 => self.add_kind = self.add_kind.toggled(),
                     3 => self.add_autostart = !self.add_autostart,
                     _ => {
                         if let Some(input) = self.add_input() {
-                            if left {
-                                input.move_left()
-                            } else {
-                                input.move_right()
+                            match (left, word_mod) {
+                                (true, true) => input.move_word_left(),
+                                (false, true) => input.move_word_right(),
+                                (true, false) => input.move_left(),
+                                (false, false) => input.move_right(),
                             }
                         }
                     }
@@ -452,7 +575,7 @@ impl App {
     }
 
     pub(super) fn key_help(&mut self, k: KeyEvent) {
-        match k.code {
+        match hotkey_event(k).code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => self.mode = Mode::Manager,
             _ => {}
         }
@@ -638,8 +761,10 @@ impl App {
                 self.confirm_remove = self.order.get(self.selected).copied();
             }
             KeyCode::Enter => {
-                if self.order.is_empty() {
+                if self.cfg.projects.is_empty() {
                     self.open_add();
+                } else if self.order.is_empty() {
+                    self.mode = Mode::Filter;
                 } else if let Some(&pi) = self.order.get(self.selected) {
                     if let Some(e) =
                         start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)

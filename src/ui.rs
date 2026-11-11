@@ -268,7 +268,9 @@ pub fn priority_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
 pub fn hint_text_len(parts: &[(&str, &str)]) -> usize {
     parts
         .iter()
-        .map(|(k, d)| k.len() + d.len() + usize::from(!k.is_empty() && !d.is_empty()))
+        .map(|(k, d)| {
+            k.chars().count() + d.chars().count() + usize::from(!k.is_empty() && !d.is_empty())
+        })
         .sum::<usize>()
         + 3 * parts.len().saturating_sub(1)
 }
@@ -288,7 +290,8 @@ pub fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
     let mut take = 0usize;
     let mut len = 0usize;
     for (i, (k, d)) in order.iter().enumerate() {
-        let part = k.len() + d.len() + usize::from(!k.is_empty() && !d.is_empty());
+        let part =
+            k.chars().count() + d.chars().count() + usize::from(!k.is_empty() && !d.is_empty());
         let add = part + if i == 0 { 0 } else { 3 };
         if len + add > width {
             break;
@@ -486,6 +489,16 @@ pub fn empty_state_lines(has_projects: bool) -> Vec<String> {
     }
 }
 
+/// Empty-pane message when projects exist in config, but an active filter
+/// narrowed the list to 0 matches.
+pub fn filtered_empty_state_lines(query: &str) -> Vec<String> {
+    vec![
+        format!("No projects match '{query}'."),
+        "".into(),
+        "Press Esc to clear the filter, or / to edit it.".into(),
+    ]
+}
+
 pub fn confirm_update_lines(tag: &str) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
@@ -565,6 +578,21 @@ pub fn history_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
         area.height.saturating_sub(4),
         area,
     )
+}
+/// Left (SITREP list) and right (SITREP text) inner columns inside `popup`.
+pub fn history_cols(
+    popup: ratatui::layout::Rect,
+) -> (ratatui::layout::Rect, ratatui::layout::Rect) {
+    let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    let left_w = 30.min(inner.width / 3);
+    let left = ratatui::layout::Rect::new(inner.x, inner.y, left_w, inner.height);
+    let right = ratatui::layout::Rect::new(
+        inner.x + left_w,
+        inner.y,
+        inner.width.saturating_sub(left_w),
+        inner.height,
+    );
+    (left, right)
 }
 /// The memory monitor: a tall column, shared by drawing and clicks.
 pub fn procs_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {

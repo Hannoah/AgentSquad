@@ -1,6 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::{style::Style, text::Span};
 
+fn is_word_sep(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '/' | '\\')
+}
+
 /// Single-line editor with a movable cursor for the manager's input fields.
 /// Stored as chars so cursor motion never splits UTF-8.
 #[derive(Default)]
@@ -58,6 +62,41 @@ impl LineInput {
     }
     pub fn move_end(&mut self) {
         self.cursor = self.text.len();
+    }
+    /// Move the cursor left by one word or path segment (`Ctrl+Left`).
+    pub fn move_word_left(&mut self) {
+        let mut i = self.cursor.min(self.text.len());
+        while i > 0 && is_word_sep(self.text[i - 1]) {
+            i -= 1;
+        }
+        while i > 0 && !is_word_sep(self.text[i - 1]) {
+            i -= 1;
+        }
+        self.cursor = i;
+    }
+    /// Move the cursor right by one word or path segment (`Ctrl+Right`).
+    pub fn move_word_right(&mut self) {
+        let len = self.text.len();
+        let mut i = self.cursor.min(len);
+        while i < len && is_word_sep(self.text[i]) {
+            i += 1;
+        }
+        while i < len && !is_word_sep(self.text[i]) {
+            i += 1;
+        }
+        self.cursor = i;
+    }
+    /// Delete the word or path segment before the cursor (`Ctrl+W` / `Ctrl+Backspace`).
+    pub fn delete_word_back(&mut self) {
+        let end = self.cursor.min(self.text.len());
+        self.move_word_left();
+        self.text.drain(self.cursor..end);
+    }
+    /// Delete from the start of the line up to the cursor (`Ctrl+U`).
+    pub fn clear_to_start(&mut self) {
+        let end = self.cursor.min(self.text.len());
+        self.text.drain(..end);
+        self.cursor = 0;
     }
     /// (before, under-cursor, after) for rendering a block cursor.
     pub fn render_parts(&self) -> (String, char, String) {
@@ -140,10 +179,96 @@ pub fn jump_to(order_len: usize, ch: char) -> Option<usize> {
     }
     None
 }
+/// Map a Korean 2-beolsik (두벌식) Jamo or composed Hangul syllable to the
+/// physical QWERTY key that produced its last keystroke. This lets single-key
+/// shortcuts (`j`, `k`, `m`, `s`, `q`, `y`, `n`, …) and `Ctrl+<key>` chords
+/// work without toggling the `한/영` IME key.
+pub fn hangul_to_qwerty(ch: char) -> Option<char> {
+    let mapped = match ch {
+        'ㄱ' | '\u{1100}' | '\u{11A8}' | 'ㄺ' | '\u{11B0}' => 'r',
+        'ㄲ' | '\u{1101}' | '\u{11A9}' => 'R',
+        'ㄴ' | '\u{1102}' | '\u{11AB}' => 's',
+        'ㄷ' | '\u{1103}' | '\u{11AE}' => 'e',
+        'ㄸ' | '\u{1104}' => 'E',
+        'ㄹ' | '\u{1105}' | '\u{11AF}' => 'f',
+        'ㅁ' | '\u{1106}' | '\u{11B7}' | 'ㄻ' | '\u{11B1}' => 'a',
+        'ㅂ' | '\u{1107}' | '\u{11B8}' | 'ㄼ' | '\u{11B2}' => 'q',
+        'ㅃ' | '\u{1108}' => 'Q',
+        'ㅅ' | '\u{1109}' | '\u{11BA}' | 'ㄳ' | '\u{11AA}' | 'ㄽ' | '\u{11B3}' | 'ㅄ'
+        | '\u{11B9}' => 't',
+        'ㅆ' | '\u{110A}' | '\u{11BB}' => 'T',
+        'ㅇ' | '\u{110B}' | '\u{11BC}' => 'd',
+        'ㅈ' | '\u{110C}' | '\u{11BD}' | 'ㄵ' | '\u{11AC}' => 'w',
+        'ㅉ' | '\u{110D}' => 'W',
+        'ㅊ' | '\u{110E}' | '\u{11BE}' => 'c',
+        'ㅋ' | '\u{110F}' | '\u{11BF}' => 'z',
+        'ㅌ' | '\u{1110}' | '\u{11C0}' | 'ㄾ' | '\u{11B4}' => 'x',
+        'ㅍ' | '\u{1111}' | '\u{11C1}' | 'ㄿ' | '\u{11B5}' => 'v',
+        'ㅎ' | '\u{1112}' | '\u{11C2}' | 'ㄶ' | '\u{11AD}' | 'ㅀ' | '\u{11B6}' => 'g',
+        'ㅏ' | '\u{1161}' | 'ㅘ' | '\u{116A}' => 'k',
+        'ㅐ' | '\u{1162}' | 'ㅙ' | '\u{116B}' => 'o',
+        'ㅑ' | '\u{1163}' => 'i',
+        'ㅒ' | '\u{1164}' => 'O',
+        'ㅓ' | '\u{1165}' | 'ㅝ' | '\u{116F}' => 'j',
+        'ㅔ' | '\u{1166}' | 'ㅞ' | '\u{1170}' => 'p',
+        'ㅕ' | '\u{1167}' => 'u',
+        'ㅖ' | '\u{1168}' => 'P',
+        'ㅗ' | '\u{1169}' => 'h',
+        'ㅚ' | '\u{116C}' | 'ㅟ' | '\u{1171}' | 'ㅢ' | '\u{1174}' | 'ㅣ' | '\u{1175}' => 'l',
+        'ㅛ' | '\u{116D}' => 'y',
+        'ㅜ' | '\u{116E}' => 'n',
+        'ㅠ' | '\u{1172}' => 'b',
+        'ㅡ' | '\u{1173}' => 'm',
+        '가'..='힣' => {
+            const JUNG: [char; 21] = [
+                'k', 'o', 'i', 'O', 'j', 'p', 'u', 'P', 'h', 'k', 'o', 'l', 'y', 'n', 'j', 'p',
+                'l', 'b', 'm', 'l', 'l',
+            ];
+            const JONG: [char; 27] = [
+                'r', 'R', 't', 's', 'w', 'g', 'e', 'f', 'r', 'a', 'q', 't', 'x', 'v', 'g', 'a',
+                'q', 't', 't', 'T', 'd', 'w', 'c', 'z', 'x', 'v', 'g',
+            ];
+            let idx = (ch as u32 - 0xAC00) as usize;
+            let jong = idx % 28;
+            if jong > 0 {
+                JONG[jong - 1]
+            } else {
+                JUNG[(idx / 28) % 21]
+            }
+        }
+        _ => return None,
+    };
+    Some(mapped)
+}
+/// Normalize a key event for shortcut dispatch: maps Hangul 2-beolsik input
+/// to its QWERTY equivalent, preserving `SHIFT` as uppercase.
+pub fn hotkey_code(code: KeyCode, mods: KeyModifiers) -> KeyCode {
+    match code {
+        KeyCode::Char(c) => match hangul_to_qwerty(c) {
+            Some(q) if mods.contains(KeyModifiers::SHIFT) => KeyCode::Char(q.to_ascii_uppercase()),
+            Some(q) => KeyCode::Char(q),
+            None => code,
+        },
+        other => other,
+    }
+}
+pub fn hotkey_event(mut k: KeyEvent) -> KeyEvent {
+    k.code = hotkey_code(k.code, k.modifiers);
+    k
+}
+/// Normalize only modified chords (`Ctrl+<key>` / `Alt+<key>`) so prose input
+/// modes still type Korean characters while `Ctrl+W`, `Ctrl+U`, `Ctrl+C`, etc.
+/// work regardless of IME state.
+pub fn normalize_ctrl_alt_key(mut k: KeyEvent) -> KeyEvent {
+    if k.modifiers.contains(KeyModifiers::CONTROL) || k.modifiers.contains(KeyModifiers::ALT) {
+        k.code = hotkey_code(k.code, k.modifiers);
+    }
+    k
+}
 /// Key outcome while a confirmation modal is pending:
 /// `Some(true)` confirms, `Some(false)` cancels, `None` ignores the key.
 pub fn confirm_key(code: KeyCode) -> Option<bool> {
-    match code {
+    match hotkey_code(code, KeyModifiers::NONE) {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
         _ => None,
@@ -152,7 +277,7 @@ pub fn confirm_key(code: KeyCode) -> Option<bool> {
 /// Destructive confirmations (`stop`, `remove`, `restart`, `quit`): `Enter`
 /// counts as `y` by request, so a stray Enter on an open prompt confirms.
 pub fn confirm_destructive_key(code: KeyCode) -> Option<bool> {
-    match code {
+    match hotkey_code(code, KeyModifiers::NONE) {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
         _ => None,
@@ -161,7 +286,7 @@ pub fn confirm_destructive_key(code: KeyCode) -> Option<bool> {
 /// `y` or `Enter` accepts. An update prompt can pop up while the user is about
 /// to press Enter, which then starts the download.
 pub fn update_key(code: KeyCode) -> Option<bool> {
-    match code {
+    match hotkey_code(code, KeyModifiers::NONE) {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
         _ => None,
@@ -245,7 +370,7 @@ pub fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
 /// Ctrl+Q leaves terminal focus. Every other key, Esc and Ctrl+G included,
 /// belongs to the session: agents use Esc to interrupt and rewind.
 pub fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
-    code == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
+    hotkey_code(code, KeyModifiers::NONE) == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
 }
 /// What Option+1..9 types on a US Mac keyboard, in digit order. macOS
 /// terminals send these characters instead of an Alt modifier unless
@@ -273,7 +398,10 @@ pub fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
     let mut bytes = match k.code {
-        KeyCode::Char(c) if ctrl && c.is_ascii() => vec![(c.to_ascii_lowercase() as u8) & 0x1f],
+        KeyCode::Char(c) if ctrl => match hangul_to_qwerty(c).unwrap_or(c) {
+            a if a.is_ascii() => vec![(a.to_ascii_lowercase() as u8) & 0x1f],
+            other => other.to_string().into_bytes(),
+        },
         KeyCode::Char(c) => c.to_string().into_bytes(),
         KeyCode::Enter if shift => vec![10],
         KeyCode::Enter => vec![13],

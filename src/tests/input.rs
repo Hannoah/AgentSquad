@@ -246,3 +246,77 @@ fn mac_option_digits_map_to_their_digit() {
         }
     );
 }
+
+#[test]
+fn line_input_word_motion_and_deletion() {
+    let mut l = LineInput::default();
+    l.set(r"C:\Users\kornah\Work\AgentSquad");
+    l.delete_word_back();
+    assert_eq!(l.as_str(), r"C:\Users\kornah\Work\");
+    l.delete_word_back();
+    assert_eq!(l.as_str(), r"C:\Users\kornah\");
+    l.move_word_left();
+    assert_eq!(l.cursor, 9);
+    l.move_word_right();
+    assert_eq!(l.cursor, 15);
+    l.clear_to_start();
+    assert_eq!(l.as_str(), r"\");
+}
+
+#[test]
+fn hangul_ime_keys_map_to_qwerty_shortcuts() {
+    for (ko, en) in [
+        ('ㅂ', 'q'),
+        ('ㅃ', 'Q'),
+        ('ㅈ', 'w'),
+        ('ㄷ', 'e'),
+        ('ㄱ', 'r'),
+        ('ㅅ', 't'),
+        ('ㅛ', 'y'),
+        ('ㅕ', 'u'),
+        ('ㅑ', 'i'),
+        ('ㅐ', 'o'),
+        ('ㅔ', 'p'),
+        ('ㅁ', 'a'),
+        ('ㄴ', 's'),
+        ('ㅇ', 'd'),
+        ('ㄹ', 'f'),
+        ('ㅎ', 'g'),
+        ('ㅗ', 'h'),
+        ('ㅓ', 'j'),
+        ('ㅏ', 'k'),
+        ('ㅣ', 'l'),
+        ('ㅋ', 'z'),
+        ('ㅌ', 'x'),
+        ('ㅊ', 'c'),
+        ('ㅍ', 'v'),
+        ('ㅠ', 'b'),
+        ('ㅜ', 'n'),
+        ('ㅡ', 'm'),
+        // Composed syllables extract the last keystroke pressed:
+        ('라', 'k'), // ㄹ + ㅏ
+        ('란', 's'), // ㄹ + ㅏ + ㄴ
+        ('닭', 'r'), // ㄷ + ㅏ + ㄹ + ㄱ
+        ('과', 'k'), // ㄱ + ㅗ + ㅏ
+    ] {
+        assert_eq!(hangul_to_qwerty(ko), Some(en), "failed on {ko}");
+    }
+    assert_eq!(
+        hotkey_code(KeyCode::Char('ㄴ'), KeyModifiers::SHIFT),
+        KeyCode::Char('S')
+    );
+    assert_eq!(
+        hotkey_code(KeyCode::Char('ㅡ'), KeyModifiers::SHIFT),
+        KeyCode::Char('M')
+    );
+    assert_eq!(confirm_key(KeyCode::Char('ㅛ')), Some(true));
+    assert_eq!(confirm_key(KeyCode::Char('ㅜ')), Some(false));
+    assert!(focus_exit_key(KeyCode::Char('ㅂ'), KeyModifiers::CONTROL));
+    assert_eq!(
+        key_bytes(
+            KeyEvent::new(KeyCode::Char('ㅊ'), KeyModifiers::CONTROL),
+            false
+        ),
+        vec![3]
+    );
+}

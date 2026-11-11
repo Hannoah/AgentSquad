@@ -83,7 +83,7 @@ impl App {
             .border_type(BorderType::Rounded)
             .title(Line::from(Span::styled(
                 format!(
-                    "History: {} ({}) ↑↓ pick · PgUp/PgDn scroll · Esc closes",
+                    "History: {} ({}) ↑↓/click pick · PgUp/PgDn/wheel scroll · Esc closes",
                     h.project,
                     h.items.len()
                 ),
@@ -91,17 +91,11 @@ impl App {
                     .fg(Color::Cyan)
                     .add_modifier(ratatui::style::Modifier::BOLD),
             )));
-        let inner = block.inner(popup);
         f.render_widget(block, popup);
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(30.min(inner.width / 3)),
-                Constraint::Min(1),
-            ])
-            .split(inner);
-        let rows = usize::from(cols[0].height).max(1);
-        let start = (h.sel + 1).saturating_sub(rows);
+        let (left_col, right_col) = history_cols(popup);
+        let rows = usize::from(left_col.height).max(1);
+        let start = keep_visible(h.top.get(), h.sel, rows);
+        h.top.set(start);
         let list: Vec<Line> = h
             .items
             .iter()
@@ -117,14 +111,25 @@ impl App {
                 Line::from(Span::styled(crate::ledger::sitrep_label(name), style))
             })
             .collect();
-        f.render_widget(Paragraph::new(list), cols[0]);
+        f.render_widget(Paragraph::new(list), left_col);
+        let scroll = h.scroll.min(h.max_scroll());
         f.render_widget(
             Paragraph::new(h.text.as_str())
                 .wrap(ratatui::widgets::Wrap { trim: false })
-                .scroll((h.scroll, 0))
+                .scroll((scroll, 0))
                 .block(Block::default().borders(Borders::LEFT)),
-            cols[1],
+            right_col,
         );
+        let line_count = h.text.lines().count();
+        if line_count > usize::from(right_col.height) {
+            let mut scrollbar_state = ScrollbarState::new(line_count).position(usize::from(scroll));
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .thumb_symbol("█");
+            f.render_stateful_widget(scrollbar, popup, &mut scrollbar_state);
+        }
     }
 
     /// The memory monitor: biggest processes first, the picked row marked.
@@ -138,7 +143,7 @@ impl App {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(Line::from(Span::styled(
-                "Memory: biggest processes ↑↓ pick · x kill · r refresh · Esc closes",
+                "Memory: biggest processes ↑↓/PgUp/PgDn pick · x kill · r refresh · Esc closes",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(ratatui::style::Modifier::BOLD),
@@ -170,19 +175,44 @@ impl App {
             .skip(start)
             .take(rows)
             .map(|(i, it)| {
-                let name: String = it.name.chars().take(name_w).collect();
+                let owner_tag = self
+                    .proc_owner(it)
+                    .map(|s| format!(" [{s}]"))
+                    .unwrap_or_default();
+                let max_name = name_w.saturating_sub(owner_tag.chars().count());
+                let name: String = it.name.chars().take(max_name).collect();
                 let style = if i == p.sel {
                     Style::default().bg(Color::Cyan).fg(Color::Black)
                 } else {
                     Style::default().fg(Color::Cyan)
                 };
-                Line::from(Span::styled(
+                let mut spans = vec![Span::styled(
                     format!("{:>7}  {:>8}  {name}", mem_label(it.mem), it.pid),
                     style,
-                ))
+                )];
+                if !owner_tag.is_empty() {
+                    let tag_style = if i == p.sel {
+                        style.add_modifier(ratatui::style::Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(ratatui::style::Modifier::BOLD)
+                    };
+                    spans.push(Span::styled(owner_tag, tag_style));
+                }
+                Line::from(spans)
             })
             .collect();
         f.render_widget(Paragraph::new(list), parts[0]);
+        if p.items.len() > rows {
+            let mut scrollbar_state = ScrollbarState::new(p.items.len()).position(p.sel);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .thumb_symbol("█");
+            f.render_stateful_widget(scrollbar, popup, &mut scrollbar_state);
+        }
         if let (true, Some(it)) = (detail_h > 0, p.items.get(p.sel)) {
             let owner = match self.proc_owner(it) {
                 Some(name) => format!("squad session: {name}"),
@@ -218,12 +248,19 @@ impl App {
         }
         let foot = parts[2];
         let line = match &p.confirm {
-            Some(t) => Line::from(Span::styled(
-                format!("Kill {} ({}) and its children? y / n", t.name, t.pid),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            )),
+            Some(t) => {
+                let mut spans = vec![Span::styled(
+                    format!("Kill {} ({}) and its children?  ", t.name, t.pid),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                )];
+                spans.extend(hint_spans(&[
+                    ("y / Enter", "kills"),
+                    ("n / Esc", "cancels"),
+                ]));
+                Line::from(spans)
+            }
             None => Line::from(Span::styled(
                 format!("{} processes by RAM (working set)", p.items.len()),
                 Style::default().fg(Color::DarkGray),
@@ -476,24 +513,57 @@ impl App {
             .style(memory_style),
         );
         targets.push(Some(MEMORY_ROW));
+        let total_items = items.len();
         let visible_rows = (panel.height as usize).saturating_sub(2).max(1);
         if let Some(sr) = sel_row {
+            // Keep a prompt sub-row below the selection inside the viewport,
+            // and bring the group header back into view when scrolling up.
+            let has_prompt_sub = targets.get(sr + 1) == targets.get(sr) && targets[sr].is_some();
+            if has_prompt_sub {
+                self.list_offset = keep_visible(self.list_offset, sr + 1, visible_rows);
+            }
+            let top_target = if self.selected == 0 {
+                0
+            } else if sr > 0 && targets[sr - 1].is_none() {
+                sr - 1
+            } else {
+                sr
+            };
+            self.list_offset = keep_visible(self.list_offset, top_target, visible_rows);
             self.list_offset = keep_visible(self.list_offset, sr, visible_rows);
         }
-        self.list_offset = self.list_offset.min(items.len().saturating_sub(1));
+        self.list_offset = self.list_offset.min(total_items.saturating_sub(1));
         self.row_targets = targets;
         let mut window = items.split_off(self.list_offset);
         window.truncate(visible_rows);
-        f.render_widget(
-            List::new(window).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(sidebar_border_style(self.mode == Mode::Focus))
-                    .title(list_title(self.cfg.projects.len(), self.order.len())),
-            ),
-            panel,
-        );
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(sidebar_border_style(self.mode == Mode::Focus))
+            .title(list_title(self.cfg.projects.len(), self.order.len()));
+        if !self.filter_buf.is_empty() && panel.width >= 28 {
+            let q = fit(&self.filter_buf.as_str(), 8);
+            block = block.title_top(
+                Line::from(Span::styled(
+                    format!(" /{q} "),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ))
+                .right_aligned(),
+            );
+        }
+        f.render_widget(List::new(window).block(block), panel);
+        if total_items > visible_rows {
+            let mut scrollbar_state =
+                ScrollbarState::new(total_items).position(sel_row.unwrap_or(self.list_offset));
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("░"))
+                .thumb_symbol("█");
+            f.render_stateful_widget(scrollbar, panel, &mut scrollbar_state);
+        }
     }
 
     pub(super) fn draw_pane(&self, f: &mut Frame, panel: Rect) {
@@ -545,7 +615,26 @@ impl App {
                     Span::raw("]"),
                 ])
             })
-            .unwrap_or_else(|| Line::from("No projects: squad add <path>"));
+            .unwrap_or_else(|| {
+                if !self.cfg.projects.is_empty() && !self.filter_buf.is_empty() {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Filter: \"{}\"", self.filter_buf.as_str()),
+                            Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                        ),
+                        Span::raw(" ["),
+                        Span::styled(
+                            "0 matches",
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(ratatui::style::Modifier::BOLD),
+                        ),
+                        Span::raw("]"),
+                    ])
+                } else {
+                    Line::from("No projects: squad add <path>")
+                }
+            });
         let mut block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -631,7 +720,11 @@ impl App {
                 }
             }
         } else {
-            let body = empty_state_lines(!self.cfg.projects.is_empty());
+            let body = if !self.cfg.projects.is_empty() && self.order.is_empty() {
+                filtered_empty_state_lines(&self.filter_buf.as_str())
+            } else {
+                empty_state_lines(!self.cfg.projects.is_empty())
+            };
             let pad = inner.height.saturating_sub(body.len() as u16) / 2;
             let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
             for (idx, line) in body.iter().enumerate() {
@@ -976,13 +1069,21 @@ impl App {
         let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
         let typed = self.add_path.as_str();
         let n = self.add_picks.len();
+        let win = self.add_pick_window();
+        let count_note = if n > PICK_ROWS && !win.is_empty() {
+            format!("{}-{} of {n}", win.start + 1, win.end)
+        } else {
+            format!("{n}")
+        };
         let header = match self.add_picks.first() {
             None => String::new(),
-            Some(_) if typed.is_empty() => format!("  your project folders · {n} · ↑↓ Enter"),
+            Some(_) if typed.is_empty() => {
+                format!("  your project folders · {count_note} · ↑↓/wheel Enter")
+            }
             Some((label, full)) => {
                 let dir = full.strip_suffix(label.as_str()).unwrap_or("");
-                let dir = shorten_middle(dir.trim_start_matches('"'), modal_w.saturating_sub(34));
-                format!("  in {dir} · {n} folders · ↑↓ Enter")
+                let dir = shorten_middle(dir.trim_start_matches('"'), modal_w.saturating_sub(40));
+                format!("  in {dir} · {count_note} folders · ↑↓/wheel Enter")
             }
         };
         let mut out = vec![Line::from(Span::styled(header, dim))];
@@ -1042,12 +1143,22 @@ impl App {
         } else {
             "no (Space toggles)".to_string()
         };
+        let under_text = if editing {
+            let cur = self.add_under.as_str();
+            if cur.is_empty() {
+                "(none · use u in manager)".to_string()
+            } else {
+                format!("{cur} (use u in manager)")
+            }
+        } else {
+            self.add_under.as_str()
+        };
         let fields = [
             (path_label, self.add_path.as_str()),
             ("Kind", kind_hint.to_string()),
             ("Command", cmd_text),
             ("Autostart", autostart_hint),
-            ("Reports to", self.add_under.as_str()),
+            ("Reports to", under_text),
         ];
         let (path_mark, path_mark_color) = self.add_mark();
         let mark_w = if path_mark.is_empty() {
@@ -1058,6 +1169,7 @@ impl App {
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
+            let locked = editing && !matches!(i, 2 | 3);
             let mark = if active { ">" } else { " " };
             let label_style = if active {
                 Style::default().add_modifier(ratatui::style::Modifier::BOLD)
@@ -1070,8 +1182,8 @@ impl App {
             let avail = modal_w.saturating_sub(label_w + if i == 0 { mark_w } else { 0 });
             let mut used = label_w;
             let mut row = vec![Span::styled(label_text, label_style)];
-            let editing = active && matches!(i, 0 | 2 | 4);
-            if editing {
+            let editing_field = active && matches!(i, 0 | 2 | 4);
+            if editing_field {
                 let input = match i {
                     0 => &self.add_path,
                     2 => &self.add_cmd,
@@ -1108,6 +1220,8 @@ impl App {
                     shown,
                     if active {
                         Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+                    } else if locked {
+                        Style::default().fg(Color::DarkGray)
                     } else {
                         Style::default()
                     },

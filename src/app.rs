@@ -496,6 +496,7 @@ impl App {
         let keyboard_free = !(self.mode != Mode::Manager
             || self.history.is_some()
             || self.procs.is_some()
+            || self.context_menu.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()
@@ -730,6 +731,7 @@ struct History {
     project: String,
     items: Vec<(String, std::path::PathBuf)>,
     sel: usize,
+    top: std::cell::Cell<usize>,
     scroll: u16,
     text: String,
 }
@@ -739,6 +741,7 @@ impl History {
             project: project.to_string(),
             items,
             sel: 0,
+            top: Default::default(),
             scroll: 0,
             text: String::new(),
         };
@@ -758,6 +761,17 @@ impl History {
             self.sel = i;
             self.load();
         }
+    }
+    fn max_scroll(&self) -> u16 {
+        self.text
+            .lines()
+            .count()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16
+    }
+    fn scroll_by(&mut self, delta: isize) {
+        let next = (self.scroll as isize + delta).clamp(0, self.max_scroll() as isize);
+        self.scroll = next as u16;
     }
 }
 
