@@ -36,7 +36,10 @@ fn main() -> Result<()> {
         println!("{}", cli_help());
         return Ok(());
     }
-    if args.first().map(String::as_str) == Some("--version") {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--version" | "-V" | "version")
+    ) {
         println!("squad {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
@@ -44,6 +47,9 @@ fn main() -> Result<()> {
     if args.first().map(String::as_str) == Some("update") {
         if cfg!(debug_assertions) {
             bail!("Debug builds never self-update; install a release build first");
+        }
+        if !updater::SUPPORTED {
+            bail!("Releases are built for Windows and macOS only; update from source here");
         }
         let check_only = args.get(1).map(String::as_str) == Some("--check");
         let current = env!("CARGO_PKG_VERSION");

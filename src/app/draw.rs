@@ -22,6 +22,19 @@ fn modal(f: &mut Frame, title: &str, color: Color, lines: Vec<Line<'static>>) {
     );
 }
 
+/// The scrollbar on the right border of `area`: `len` rows, now at `pos`.
+fn scrollbar(f: &mut Frame, area: Rect, len: usize, pos: usize) {
+    f.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("░"))
+            .thumb_symbol("█"),
+        area,
+        &mut ScrollbarState::new(len).position(pos),
+    );
+}
+
 /// Folder rows the add form shows at once; the list scrolls past this.
 const PICK_ROWS: usize = 6;
 
@@ -112,6 +125,7 @@ impl App {
             })
             .collect();
         f.render_widget(Paragraph::new(list), left_col);
+        h.wrap_w.set(right_col.width.saturating_sub(1)); // less the left border
         let scroll = h.scroll.min(h.max_scroll());
         f.render_widget(
             Paragraph::new(h.text.as_str())
@@ -120,15 +134,9 @@ impl App {
                 .block(Block::default().borders(Borders::LEFT)),
             right_col,
         );
-        let line_count = h.text.lines().count();
+        let line_count = h.rows();
         if line_count > usize::from(right_col.height) {
-            let mut scrollbar_state = ScrollbarState::new(line_count).position(usize::from(scroll));
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some("░"))
-                .thumb_symbol("█");
-            f.render_stateful_widget(scrollbar, popup, &mut scrollbar_state);
+            scrollbar(f, popup, line_count, usize::from(scroll));
         }
     }
 
@@ -179,8 +187,7 @@ impl App {
                     .proc_owner(it)
                     .map(|s| format!(" [{s}]"))
                     .unwrap_or_default();
-                let max_name = name_w.saturating_sub(owner_tag.chars().count());
-                let name: String = it.name.chars().take(max_name).collect();
+                let name = take_cols(it.name.chars(), name_w.saturating_sub(width(&owner_tag)));
                 let style = if i == p.sel {
                     Style::default().bg(Color::Cyan).fg(Color::Black)
                 } else {
@@ -205,13 +212,7 @@ impl App {
             .collect();
         f.render_widget(Paragraph::new(list), parts[0]);
         if p.items.len() > rows {
-            let mut scrollbar_state = ScrollbarState::new(p.items.len()).position(p.sel);
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some("░"))
-                .thumb_symbol("█");
-            f.render_stateful_widget(scrollbar, popup, &mut scrollbar_state);
+            scrollbar(f, popup, p.items.len(), p.sel);
         }
         if let (true, Some(it)) = (detail_h > 0, p.items.get(p.sel)) {
             let owner = match self.proc_owner(it) {
@@ -420,8 +421,8 @@ impl App {
                 let (status_w, name_w, detail_w) = row_widths(
                     inner_w,
                     prefix.chars().count(),
-                    status_full.chars().count(),
-                    shown_name.chars().count(),
+                    width(&status_full),
+                    width(shown_name),
                 );
                 if Some(pi) == sel_pi {
                     sel_row = Some(items.len());
@@ -555,14 +556,7 @@ impl App {
         }
         f.render_widget(List::new(window).block(block), panel);
         if total_items > visible_rows {
-            let mut scrollbar_state =
-                ScrollbarState::new(total_items).position(sel_row.unwrap_or(self.list_offset));
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some("░"))
-                .thumb_symbol("█");
-            f.render_stateful_widget(scrollbar, panel, &mut scrollbar_state);
+            scrollbar(f, panel, total_items, sel_row.unwrap_or(self.list_offset));
         }
     }
 
@@ -678,14 +672,12 @@ impl App {
             }
             let scrollback_len = screen.scrollback_len();
             if scrollback_len > 0 {
-                let mut scrollbar_state = ScrollbarState::new(scrollback_len)
-                    .position(scrollback_len.saturating_sub(s.scroll));
-                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(None)
-                    .end_symbol(None)
-                    .track_symbol(Some("░"))
-                    .thumb_symbol("█");
-                f.render_stateful_widget(scrollbar, panel, &mut scrollbar_state);
+                scrollbar(
+                    f,
+                    panel,
+                    scrollback_len,
+                    scrollback_len.saturating_sub(s.scroll),
+                );
             }
             // A finished session leaves its last output on screen; say so
             // and say how to bring it back, right where the eyes are.
@@ -1191,7 +1183,7 @@ impl App {
                 };
                 let (left, cur, right) = input.render_parts();
                 let (left, cur, right) = input_window(&left, cur, &right, avail);
-                used += left.chars().count() + 1 + right.chars().count();
+                used += width(&left) + width(&right) + width(cur.encode_utf8(&mut [0; 4])).max(1);
                 let value_style = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
                 row.push(Span::styled(left, value_style));
                 row.push(Span::styled(
@@ -1215,7 +1207,7 @@ impl App {
                 } else {
                     val.clone()
                 };
-                used += shown.chars().count();
+                used += width(&shown);
                 row.push(Span::styled(
                     shown,
                     if active {

@@ -3,10 +3,11 @@ use anyhow::{bail, Context, Result};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     str::FromStr,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "lowercase")]
@@ -220,8 +221,18 @@ pub fn save_to(c: &Config, p: &Path) -> Result<()> {
     // Write-then-rename so a crash mid-write never leaves a torn config.
     // pid in the name: two squads saving at once must not share a temp file.
     let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
-    fs::write(&tmp, toml::to_string_pretty(c)?)?;
-    fs::rename(&tmp, p)?;
+    let text = toml::to_string_pretty(c)?;
+    // Synced before the rename: a power cut must not leave an empty config.
+    let written = fs::File::create(&tmp)
+        .and_then(|mut f| {
+            io::Write::write_all(&mut f, text.as_bytes())?;
+            f.sync_all()
+        })
+        .and_then(|()| fs::rename(&tmp, p));
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("Cannot write {}", p.display()));
+    }
     Ok(())
 }
 pub fn save(c: &Config) -> Result<()> {
@@ -743,14 +754,28 @@ pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
         })
         .collect()
 }
+/// Terminal columns `s` takes: Hangul and other wide characters take two.
+pub fn width(s: &str) -> usize {
+    s.width()
+}
+/// The leading run of `chars` that fits in `w` columns.
+pub fn take_cols(chars: impl Iterator<Item = char>, w: usize) -> String {
+    let mut used = 0;
+    chars
+        .take_while(|c| {
+            used += c.width().unwrap_or(0);
+            used <= w
+        })
+        .collect()
+}
+/// `s` cut to `w` columns, ending in `…` when something was cut.
 pub fn fit(s: &str, w: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= w {
+    if width(s) <= w {
         return s.to_string();
     }
     if w <= 1 {
-        return chars.into_iter().take(w).collect();
+        return take_cols(s.chars(), w);
     }
     // Keep a visible marker so a clipped name/command reads as clipped.
-    chars.into_iter().take(w - 1).collect::<String>() + "…"
+    take_cols(s.chars(), w - 1) + "…"
 }

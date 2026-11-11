@@ -1,5 +1,7 @@
+use crate::config::{take_cols, width};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::{style::Style, text::Span};
+use unicode_width::UnicodeWidthChar;
 
 fn is_word_sep(c: char) -> bool {
     c.is_whitespace() || matches!(c, '/' | '\\')
@@ -98,6 +100,31 @@ impl LineInput {
         self.text.drain(..end);
         self.cursor = 0;
     }
+    /// Apply an editing key (typing, deleting, moving the cursor). None when
+    /// `k` is not an editing key; otherwise whether the text changed.
+    pub fn edit_key(&mut self, k: KeyEvent) -> Option<bool> {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let word = ctrl || k.modifiers.contains(KeyModifiers::ALT);
+        let len = self.text.len();
+        match k.code {
+            KeyCode::Backspace if word => self.delete_word_back(),
+            KeyCode::Char('w') if ctrl => self.delete_word_back(),
+            KeyCode::Char('u') if ctrl => self.clear_to_start(),
+            KeyCode::Char('a') if ctrl => self.move_home(),
+            KeyCode::Char('e') if ctrl => self.move_end(),
+            KeyCode::Backspace => self.backspace(),
+            KeyCode::Delete => self.delete(),
+            KeyCode::Left if word => self.move_word_left(),
+            KeyCode::Right if word => self.move_word_right(),
+            KeyCode::Left => self.move_left(),
+            KeyCode::Right => self.move_right(),
+            KeyCode::Home => self.move_home(),
+            KeyCode::End => self.move_end(),
+            KeyCode::Char(ch) if !word => self.insert(ch),
+            _ => return None,
+        }
+        Some(self.text.len() != len) // every edit adds or removes characters
+    }
     /// (before, under-cursor, after) for rendering a block cursor.
     pub fn render_parts(&self) -> (String, char, String) {
         let at = self.text.get(self.cursor).copied().unwrap_or(' ');
@@ -114,52 +141,56 @@ impl LineInput {
 }
 /// Visible slice of a single-line input: shows the tail end once the
 /// text outgrows `width` so the block cursor never scrolls off screen.
-pub fn input_window(before: &str, at: char, after: &str, width: usize) -> (String, char, String) {
-    let b: Vec<char> = before.chars().collect();
-    let a: Vec<char> = after.chars().collect();
-    let total = b.len() + 1 + a.len();
-    if width == 0 || total <= width {
+/// Widths are terminal columns, so Hangul (two columns each) scrolls right.
+pub fn input_window(before: &str, at: char, after: &str, cols: usize) -> (String, char, String) {
+    let at_w = at.width().unwrap_or(1).max(1);
+    if cols == 0 || width(before) + at_w + width(after) <= cols {
         return (before.to_string(), at, after.to_string());
     }
-    let full: Vec<char> = b
-        .iter()
-        .chain(std::iter::once(&at))
-        .chain(a.iter())
-        .copied()
-        .collect();
-    let cursor = b.len();
-    let start = (cursor + 1).saturating_sub(width);
-    let end = (start + width).min(full.len());
-    let rel = cursor - start;
-    (
-        full[start..rel + start].iter().collect(),
-        full[rel + start],
-        full[rel + start + 1..end].iter().collect(),
-    )
+    let room = cols.saturating_sub(at_w);
+    let left = last_cols(before, room);
+    let right = take_cols(after.chars(), room - width(&left));
+    (left, at, right)
 }
-/// Fit `s` into `width` chars by replacing the middle with `…`, so a long path
-/// keeps its drive/root and its last folder.
-pub fn shorten_middle(s: &str, width: usize) -> String {
-    let n = s.chars().count();
-    if n <= width || width < 3 {
+/// The trailing part of `s` that fits in `cols` columns.
+fn last_cols(s: &str, cols: usize) -> String {
+    let tail = take_cols(s.chars().rev(), cols);
+    tail.chars().rev().collect()
+}
+/// Fit `s` into `cols` columns by replacing the middle with `…`, so a long
+/// path keeps its drive/root and its last folder.
+pub fn shorten_middle(s: &str, cols: usize) -> String {
+    if width(s) <= cols || cols < 3 {
         return s.to_string();
     }
-    let head = (width - 1) / 3;
-    let tail = width - 1 - head;
-    let start: String = s.chars().take(head).collect();
-    let end: String = s.chars().skip(n - tail).collect();
+    let head = (cols - 1) / 3;
+    let start = take_cols(s.chars(), head);
+    let end = last_cols(s, cols - 1 - head);
     format!("{start}…{end}")
+}
+/// What a paste sends to a session. A program that asked for bracketed paste
+/// gets the text between the markers, so a multi-line paste arrives as one
+/// block; otherwise line ends become Enter, as if typed. The end marker is
+/// dropped from the text: left in, it would close the paste early and the
+/// rest would run as typed commands.
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let text = text.replace("\x1b[201~", "");
+    if bracketed {
+        format!("\x1b[200~{text}\x1b[201~").into_bytes()
+    } else {
+        text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+    }
 }
 /// Status-bar input row: prompt + editable text with a block cursor + hint.
 pub fn input_line(
     prompt: String,
     input: &LineInput,
     hint: String,
-    width: usize,
+    cols: usize,
 ) -> Vec<Span<'static>> {
     let (before, at, after) = input.render_parts();
-    let prompt_w = prompt.chars().count();
-    let (before, at, after) = input_window(&before, at, &after, width.saturating_sub(prompt_w));
+    let prompt_w = width(&prompt);
+    let (before, at, after) = input_window(&before, at, &after, cols.saturating_sub(prompt_w));
     vec![
         Span::raw(prompt),
         Span::raw(before),
@@ -267,25 +298,9 @@ pub fn normalize_ctrl_alt_key(mut k: KeyEvent) -> KeyEvent {
 }
 /// Key outcome while a confirmation modal is pending:
 /// `Some(true)` confirms, `Some(false)` cancels, `None` ignores the key.
+/// `Enter` counts as `y` in every prompt by request, the destructive ones
+/// (stop, remove, restart, quit) and the update prompt included.
 pub fn confirm_key(code: KeyCode) -> Option<bool> {
-    match hotkey_code(code, KeyModifiers::NONE) {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
-        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
-        _ => None,
-    }
-}
-/// Destructive confirmations (`stop`, `remove`, `restart`, `quit`): `Enter`
-/// counts as `y` by request, so a stray Enter on an open prompt confirms.
-pub fn confirm_destructive_key(code: KeyCode) -> Option<bool> {
-    match hotkey_code(code, KeyModifiers::NONE) {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
-        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),
-        _ => None,
-    }
-}
-/// `y` or `Enter` accepts. An update prompt can pop up while the user is about
-/// to press Enter, which then starts the download.
-pub fn update_key(code: KeyCode) -> Option<bool> {
     match hotkey_code(code, KeyModifiers::NONE) {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Some(false),

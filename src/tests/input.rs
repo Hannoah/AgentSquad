@@ -56,11 +56,11 @@ fn function_keys_encode_xterm() {
 }
 #[test]
 fn update_prompt_accepts_only_y() {
-    assert_eq!(update_key(KeyCode::Char('y')), Some(true));
-    assert_eq!(update_key(KeyCode::Enter), Some(true));
-    assert_eq!(update_key(KeyCode::Char(' ')), None);
-    assert_eq!(update_key(KeyCode::Esc), Some(false));
-    assert_eq!(update_key(KeyCode::Char('n')), Some(false));
+    assert_eq!(confirm_key(KeyCode::Char('y')), Some(true));
+    assert_eq!(confirm_key(KeyCode::Enter), Some(true));
+    assert_eq!(confirm_key(KeyCode::Char(' ')), None);
+    assert_eq!(confirm_key(KeyCode::Esc), Some(false));
+    assert_eq!(confirm_key(KeyCode::Char('n')), Some(false));
     let text: String = confirm_update_lines("v9.9.9")
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -211,10 +211,10 @@ fn alt_digit_switches_project_inside_terminal() {
 
 #[test]
 fn destructive_confirms_accept_y_or_enter() {
-    assert_eq!(confirm_destructive_key(KeyCode::Char('y')), Some(true));
-    assert_eq!(confirm_destructive_key(KeyCode::Char('Y')), Some(true));
-    assert_eq!(confirm_destructive_key(KeyCode::Enter), Some(true));
-    assert_eq!(confirm_destructive_key(KeyCode::Esc), Some(false));
+    assert_eq!(confirm_key(KeyCode::Char('y')), Some(true));
+    assert_eq!(confirm_key(KeyCode::Char('Y')), Some(true));
+    assert_eq!(confirm_key(KeyCode::Enter), Some(true));
+    assert_eq!(confirm_key(KeyCode::Esc), Some(false));
     // The non-destructive start-all keeps its Enter shortcut.
     assert_eq!(confirm_key(KeyCode::Enter), Some(true));
 }
@@ -319,4 +319,55 @@ fn hangul_ime_keys_map_to_qwerty_shortcuts() {
         ),
         vec![3]
     );
+}
+#[test]
+fn hangul_takes_two_columns() {
+    // 4 syllables are 8 columns: the name is cut by columns, not by chars.
+    assert_eq!(fit("한글이름", 8), "한글이름");
+    assert_eq!(fit("한글이름", 7), "한글이…");
+    assert_eq!(fit("한글이름", 1), "");
+    assert_eq!(shorten_middle("가나다라마바사", 9), "가…마바사");
+    // The cursor stays on screen: left + cursor + right never exceed the width.
+    let (left, at, right) = input_window("한글 메시지를 길게", ' ', "", 9);
+    assert_eq!((left.as_str(), at, right.as_str()), ("를 길게", ' ', ""));
+    assert!(width(&left) + 1 + width(&right) <= 9);
+}
+#[test]
+fn paste_arrives_whole_or_as_typed() {
+    // A program in bracketed-paste mode gets one block, line ends untouched.
+    assert_eq!(paste_bytes("a\nb", true), b"\x1b[200~a\nb\x1b[201~");
+    // Otherwise line ends are Enter, as if typed.
+    assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc");
+    // An end marker in the text cannot close the paste early.
+    assert_eq!(
+        paste_bytes("x\x1b[201~rm -rf /\n", true),
+        b"\x1b[200~xrm -rf /\n\x1b[201~"
+    );
+}
+#[test]
+fn edit_key_reports_text_changes() {
+    let key = |c, m| KeyEvent::new(c, m);
+    let mut i = LineInput::new();
+    i.set("one two");
+    assert_eq!(
+        i.edit_key(key(KeyCode::Left, KeyModifiers::NONE)),
+        Some(false)
+    );
+    assert_eq!(
+        i.edit_key(key(KeyCode::Char('w'), KeyModifiers::CONTROL)),
+        Some(true)
+    );
+    assert_eq!(i.as_str(), "one o");
+    assert_eq!(
+        i.edit_key(key(KeyCode::Char('한'), KeyModifiers::NONE)),
+        Some(true)
+    );
+    // Nothing left to delete at the end; other keys are not editing keys.
+    i.move_end();
+    assert_eq!(
+        i.edit_key(key(KeyCode::Delete, KeyModifiers::NONE)),
+        Some(false)
+    );
+    assert_eq!(i.edit_key(key(KeyCode::Tab, KeyModifiers::NONE)), None);
+    assert_eq!(i.edit_key(key(KeyCode::Char('x'), KeyModifiers::ALT)), None);
 }

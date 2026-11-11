@@ -126,3 +126,6 @@ macOS 지원, 모듈(history, pathpick, select), 설정 경로, 종료 방식, �
 
 ## [2026-11-11] 배포 | v0.15.13
 UI/UX 정밀 리뷰 및 개선 + 한글(두벌식) 단축키 자동 인식: 한/영 키 전환 없이도 매니저·팝업·확인창 단축키와 `Ctrl+<키>` 조합이 동작하도록 두벌식 자모·완성형 음절 매핑(`hangul_to_qwerty`) 추가, 필터 0건 상태 분리(`No projects match …`) 및 `Enter` 오동작 수정, 사이드바 활성 필터 배지·스크롤바·그룹 헤더/질문 힌트 가시성 보정, `LineInput` 단어 단위 이동·삭제 단축키, 히스토리(`h`) 마우스 클릭·휠·본문 스크롤 클램핑·스크롤바, 메모리 모니터(`M`) 소속 세션 태그·스크롤바·`PgUp`/`PgDn`, 편집 모드(`e`) 읽기 전용 필드 시각 구분 및 폴더 후보 범위 표시, 상태바 힌트 유니코드 글자 폭 계산 수정, 모달·컨텍스트 메뉴 열림 시 배경 마우스 휠 및 자동 업데이트 모달 간섭 차단. 테스트 169개 통과. → [releases.md](releases.md)
+
+## [2026-11-11] 배포 | v0.15.14
+프로덕션 수준 점검 2차: 폭 계산(사이드바·입력줄·추가 폼·메모리 모니터·`squad list`가 글자 수가 아닌 터미널 칸 수로 계산; `config::width`/`take_cols`/`fit`, `unicode-width` 직접 의존성 명시), macOS bracketed paste 지원(`input::paste_bytes`), 매니저 `Shift+End` 버그 수정, 설정 저장 fsync 후 rename 및 실패 시 임시 파일 삭제, 프로젝트 삭제 뒤 `ROSTER.md` 갱신, 폴더 미존재 프로젝트 시작 시 알림, Linux 등 릴리스 없는 플랫폼 업데이트 확인 생략, 히스토리 줄바꿈 본문 스크롤 끝까지 허용, `LineInput::edit_key`·`confirm_key`·`App::open_session`/`restart` 등 중복 정리, CLI `-V`/`version` 및 도움말 보완. 테스트 174개 통과. → [releases.md](releases.md)

@@ -17,6 +17,8 @@ pub const ASSET: &str = "squad-macos-aarch64.tar.gz";
 pub const ASSET: &str = "squad-macos-x86_64.tar.gz";
 #[cfg(not(any(windows, target_os = "macos")))]
 pub const ASSET: &str = "squad-unsupported";
+/// Whether releases carry a build for this platform.
+pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
 /// File name of the binary inside the asset.
 pub const BIN: &str = if cfg!(windows) { "squad.exe" } else { "squad" };
 const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
@@ -44,8 +46,9 @@ pub fn is_newer(current: &str, latest: &str) -> bool {
 }
 /// Debug builds never check (so `cargo run` cannot overwrite itself), and
 /// `AGENTSQUAD_NO_UPDATE_CHECK` turns it off for offline or locked-down use.
+/// A platform without a release build never offers an update it cannot install.
 pub fn update_check_enabled() -> bool {
-    !cfg!(debug_assertions) && env::var_os("AGENTSQUAD_NO_UPDATE_CHECK").is_none()
+    SUPPORTED && !cfg!(debug_assertions) && env::var_os("AGENTSQUAD_NO_UPDATE_CHECK").is_none()
 }
 /// Windows' own copy of a tool. A bare `tar` can resolve to Git's GNU tar,
 /// which cannot read zip files, so go through System32 explicitly.

@@ -67,17 +67,24 @@ impl ProcList {
 /// Rows the memory monitor lists.
 const PROC_ROWS: usize = 50;
 
+/// Hand the terminal back as it was before `run_ui` took it over.
+fn restore_screen() {
+    let _ = disable_raw_mode();
+    #[cfg(unix)]
+    let _ = execute!(io::stdout(), event::DisableBracketedPaste);
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    );
+}
+
 /// Restores the terminal on exit, including the title it found at start.
 pub struct ScreenGuard(Option<String>);
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            crossterm::cursor::Show
-        );
+        restore_screen();
         if let Some(title) = self.0.take() {
             let _ = execute!(io::stdout(), crossterm::terminal::SetTitle(title));
         }
@@ -114,13 +121,7 @@ fn install_panic_hook() {
         }
         // Background threads leave the screen alone: the manager keeps running.
         if thread::current().name() == Some("main") {
-            let _ = disable_raw_mode();
-            let _ = execute!(
-                io::stdout(),
-                LeaveAlternateScreen,
-                DisableMouseCapture,
-                crossterm::cursor::Show
-            );
+            restore_screen();
         }
         default(info);
     }));
@@ -392,12 +393,30 @@ impl App {
         if self.first {
             self.first = false;
             if let Some(&pi) = self.order.get(self.selected) {
-                match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
-                    None => self.mode = Mode::Focus,
-                    Some(e) => self.message = (e, Notice::Error),
-                }
+                self.open_session(pi, rows, cols);
             }
         }
+    }
+
+    /// Start project `pi` unless it is running and hand it the keyboard; a
+    /// failed start says why and stays in the manager.
+    fn open_session(&mut self, pi: usize, rows: u16, cols: u16) {
+        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
+            None => self.mode = Mode::Focus,
+            Some(e) => self.message = (e, Notice::Error),
+        }
+    }
+
+    /// Replace project `pi`'s session with a fresh one and say how it went.
+    fn restart(&mut self, pi: usize, rows: u16, cols: u16) {
+        self.message = match restart_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
+        {
+            None => (
+                format!("Restarted {}", self.cfg.projects[pi].name),
+                Notice::Info,
+            ),
+            Some(e) => (e, Notice::Error),
+        };
     }
 
     /// Messages fade back to the idle hints; otherwise the last one would
@@ -734,6 +753,8 @@ struct History {
     top: std::cell::Cell<usize>,
     scroll: u16,
     text: String,
+    /// Columns the text is wrapped to, as last drawn.
+    wrap_w: std::cell::Cell<u16>,
 }
 impl History {
     fn open(project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
@@ -744,6 +765,7 @@ impl History {
             top: Default::default(),
             scroll: 0,
             text: String::new(),
+            wrap_w: std::cell::Cell::new(u16::MAX),
         };
         h.load();
         h
@@ -762,12 +784,16 @@ impl History {
             self.load();
         }
     }
+    /// Screen rows the text takes once wrapped. Long lines (an agent's last
+    /// output) wrap, and counting them as one row left the end out of reach.
+    // ponytail: counts column wrapping; word wrap can add a row or two, well
+    // inside the page that is still on screen at the last scroll position.
+    fn rows(&self) -> usize {
+        let w = usize::from(self.wrap_w.get()).max(1);
+        self.text.lines().map(|l| width(l).div_ceil(w).max(1)).sum()
+    }
     fn max_scroll(&self) -> u16 {
-        self.text
-            .lines()
-            .count()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
+        self.rows().saturating_sub(1).min(u16::MAX as usize) as u16
     }
     fn scroll_by(&mut self, delta: isize) {
         let next = (self.scroll as isize + delta).clamp(0, self.max_scroll() as isize);
@@ -805,6 +831,11 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
         EnableMouseCapture,
         crossterm::cursor::Hide
     )?;
+    // A multi-line paste then arrives whole instead of as one Enter per line.
+    // Unix only: the Windows console API has no paste event, and asking for
+    // one there would put the raw markers into the key stream.
+    #[cfg(unix)]
+    execute!(io::stdout(), event::EnableBracketedPaste)?;
     let stdout = io::BufWriter::new(io::stdout());
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(c, initial);

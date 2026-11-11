@@ -781,3 +781,19 @@ fn hint_text_len_counts_chars_not_utf8_bytes() {
     // "↑↓" is 6 bytes in UTF-8, but 2 character columns on screen.
     assert_eq!(hint_text_len(&[("↑↓", "pick")]), 7);
 }
+#[test]
+fn list_table_aligns_hangul_names() {
+    let mk = |name: &str| Project {
+        name: name.into(),
+        path: PathBuf::from("/tmp"),
+        command: vec!["claude".into()],
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let rows = list_table(&[mk("한글"), mk("abcdef")], false);
+    let kind_col = |r: &str| width(&r[..r.find("agent").unwrap()]);
+    assert_eq!(kind_col(&rows[0]), kind_col(&rows[1]));
+}

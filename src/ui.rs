@@ -634,19 +634,21 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--under <commander>] [-- cmd]
-                                                     Register project (path optional for services)
+  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [-- cmd]
+                                                     Register project (path optional for services;
+                                                     --create makes a missing folder)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
   squad start <name>                                 Open manager and start project
   squad update [--check]                             Install the newest release (--check only looks)
-  squad --version                                    Print version
+  squad --version, -V                                Print version
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · m  message (send a line) · b  brief (ledger) · o  order (all under a commander)
-  s  stop · r  restart · d/Del  remove · S  start all
+  /  filter · a  add · e  edit · f  pin · m  message (send a line) · u  set commander
+  b  brief (ledger) · o  order (all under a commander) · h  history · M  memory monitor
+  s  stop · r  restart · d/Del  remove · S  start all · U  install update
   PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:
@@ -726,11 +728,9 @@ pub fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
 pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
     let order = display_order(projects);
     let label = |i: usize| format!("{}{}", rank_prefix(projects, i), projects[i].name);
-    let name_w = order
-        .iter()
-        .map(|&i| label(i).chars().count())
-        .max()
-        .unwrap_or(0);
+    // Columns, not chars: `{:<w$}` would misalign rows with Hangul names.
+    let cols = |i: usize| crate::config::width(&label(i));
+    let name_w = order.iter().map(|&i| cols(i)).max().unwrap_or(0);
     let kind_w = order
         .iter()
         .map(|&i| projects[i].kind.as_str().chars().count())
@@ -742,8 +742,9 @@ pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
             let p = &projects[i];
             let kind = paint_kind(&format!("{:<kind_w$}", p.kind.as_str()), p.kind, color);
             format!(
-                "{:<name_w$}  {kind}  {}  {}",
+                "{}{}  {kind}  {}  {}",
                 label(i),
+                " ".repeat(name_w - cols(i)),
                 p.path.display(),
                 p.command.join(" ")
             )

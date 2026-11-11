@@ -20,7 +20,8 @@ impl App {
             if let Some(&pi) = self.order.get(self.selected) {
                 if let Some(Some(s)) = self.sessions.get_mut(pi) {
                     s.scroll_live();
-                    if let Err(e) = s.input(data.as_bytes()) {
+                    let bytes = paste_bytes(&data, s.parser.screen().bracketed_paste());
+                    if let Err(e) = s.input(&bytes) {
                         self.message = (e.to_string(), Notice::Error);
                         self.mode = Mode::Manager;
                     }
@@ -338,25 +339,7 @@ impl App {
                 } else if self.selected == i {
                     // Re-clicking selected project: start if stopped, focus if running
                     if let Some(&pi) = self.order.get(self.selected) {
-                        let live = self
-                            .sessions
-                            .get(pi)
-                            .and_then(|o| o.as_ref())
-                            .is_some_and(|s| s.status.is_running());
-                        if live {
-                            self.mode = Mode::Focus;
-                        } else {
-                            match start_session(
-                                &mut self.sessions,
-                                &self.cfg.projects,
-                                pi,
-                                rows,
-                                cols,
-                            ) {
-                                None => self.mode = Mode::Focus,
-                                Some(e) => self.message = (e, Notice::Error),
-                            }
-                        }
+                        self.open_session(pi, rows, cols);
                     }
                 } else {
                     // One click switches: a live session takes focus at once.
@@ -379,15 +362,7 @@ impl App {
                 if self.mode == Mode::Focus {
                     self.mode = Mode::Manager;
                 } else if let Some(&pi) = self.order.get(self.selected) {
-                    if slot_running(&self.sessions, pi) {
-                        self.mode = Mode::Focus;
-                    } else {
-                        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-                        {
-                            None => self.mode = Mode::Focus,
-                            Some(e) => self.message = (e, Notice::Error),
-                        }
-                    }
+                    self.open_session(pi, rows, cols);
                 }
                 self.dirty = true;
             } else if self
@@ -405,14 +380,8 @@ impl App {
                     if slot && inner.contains(ratatui::layout::Position::new(m.column, m.row)) {
                         self.sel = Some(Selection::new(pi, self.pane_cell(m)));
                     }
-                    if live {
-                        self.mode = Mode::Focus;
-                    } else if !slot {
-                        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-                        {
-                            None => self.mode = Mode::Focus,
-                            Some(e) => self.message = (e, Notice::Error),
-                        }
+                    if live || !slot {
+                        self.open_session(pi, rows, cols);
                     }
                 }
                 self.dirty = true;
@@ -439,16 +408,7 @@ impl App {
                 Some(sel) => {
                     self.sel = None;
                     if !slot_running(&self.sessions, sel.pi) {
-                        match start_session(
-                            &mut self.sessions,
-                            &self.cfg.projects,
-                            sel.pi,
-                            rows,
-                            cols,
-                        ) {
-                            None => self.mode = Mode::Focus,
-                            Some(e) => self.message = (e, Notice::Error),
-                        }
+                        self.open_session(sel.pi, rows, cols);
                     }
                 }
                 None => {}

@@ -86,7 +86,7 @@ impl App {
     }
 
     pub(super) fn key_confirm_update(&mut self, k: KeyEvent) {
-        match update_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 self.confirm_update = false;
                 if let Some(tag) = self.update_offer.take() {
@@ -273,7 +273,7 @@ impl App {
     /// The update is installed: `y` restarts squad into it (stopping the
     /// sessions), `n` keeps the old build running until the next launch.
     pub(super) fn key_confirm_apply(&mut self, k: KeyEvent) {
-        match update_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 self.confirm_apply = false;
                 self.relaunch = true;
@@ -295,7 +295,7 @@ impl App {
     }
 
     pub(super) fn key_confirm_quit(&mut self, k: KeyEvent) {
-        match confirm_destructive_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 self.quit = true;
             }
@@ -337,7 +337,7 @@ impl App {
     }
 
     pub(super) fn key_confirm_stop(&mut self, k: KeyEvent) {
-        match confirm_destructive_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_stop.take() {
                     if let Some(slot) = self.sessions.get_mut(pi) {
@@ -359,22 +359,10 @@ impl App {
     }
 
     pub(super) fn key_confirm_restart(&mut self, k: KeyEvent, rows: u16, cols: u16) {
-        match confirm_destructive_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_restart.take() {
-                    self.message = match restart_session(
-                        &mut self.sessions,
-                        &self.cfg.projects,
-                        pi,
-                        rows,
-                        cols,
-                    ) {
-                        None => (
-                            format!("Restarted {}", self.cfg.projects[pi].name),
-                            Notice::Info,
-                        ),
-                        Some(e) => (e, Notice::Error),
-                    };
+                    self.restart(pi, rows, cols);
                 }
             }
             Some(false) => self.confirm_restart = None,
@@ -383,7 +371,7 @@ impl App {
     }
 
     pub(super) fn key_confirm_remove(&mut self, k: KeyEvent) {
-        match confirm_destructive_key(k.code) {
+        match confirm_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_remove.take() {
                     // Save first: a failed save leaves the project and
@@ -399,6 +387,8 @@ impl App {
                             self.order =
                                 apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                             self.selected = self.selected.min(self.order.len().saturating_sub(1));
+                            // Whoever shared its folder or reported to it reads a current roster.
+                            ledger::write_rosters(&self.cfg.projects);
                             self.message = (format!("Removed {name}."), Notice::Warn);
                         }
                         Err(e) => {
@@ -437,20 +427,8 @@ impl App {
             return;
         }
         match action {
-            0 => match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
-                None => self.mode = Mode::Focus,
-                Some(e) => self.message = (e, Notice::Error),
-            },
-            1 => {
-                self.message =
-                    match restart_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
-                        None => (
-                            format!("Restarted {}", self.cfg.projects[pi].name),
-                            Notice::Info,
-                        ),
-                        Some(e) => (e, Notice::Error),
-                    };
-            }
+            0 => self.open_session(pi, rows, cols),
+            1 => self.restart(pi, rows, cols),
             2 => self.confirm_remove = Some(pi),
             3 => self.begin_set_superior(pi),
             _ => {}

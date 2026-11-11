@@ -550,3 +550,20 @@ fn idle_note_flags_quiet_finished_agents_only() {
         "waiting is not idle"
     );
 }
+#[test]
+fn missing_folder_is_named_in_the_error() {
+    let p = Project {
+        name: "gone".into(),
+        path: scratch_dir("gone").join("nope"),
+        command: vec!["sh".into()],
+        kind: Kind::Service,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let err = Session::spawn(&p, 24, 80)
+        .err()
+        .expect("no folder, no session");
+    assert!(format!("{err:#}").contains("is missing"), "{err:#}");
+}

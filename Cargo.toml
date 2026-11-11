@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.15.13"
+version = "0.15.14"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
@@ -19,6 +19,8 @@ ratatui = "0.30"
 # Revisit when upstream fixes it.
 portable-pty = "0.8"
 vt100 = "0.18"
+# Already in the tree through ratatui; named here to measure Hangul/CJK columns.
+unicode-width = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = "1.2"
 

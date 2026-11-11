@@ -470,6 +470,10 @@ impl Session {
         let Some(program) = p.command.first() else {
             anyhow::bail!("Project '{}' has an empty command", p.name);
         };
+        // Otherwise the OS blames the program ("directory name is invalid").
+        if !p.path.is_dir() {
+            anyhow::bail!("Folder {} of '{}' is missing", p.path.display(), p.name);
+        }
         let (ledger, ledger_note) = if p.has_ledger() {
             match ledger::ensure(&p.path) {
                 Ok(created) => {
@@ -796,23 +800,6 @@ impl Session {
                         dst.clone_from(src);
                     }
                 }
-            }
-        }
-    }
-}
-pub fn scroll_lines_selected(
-    sessions: &mut [Option<Session>],
-    order: &[usize],
-    selected: usize,
-    lines: isize,
-) {
-    if let Some(&pi) = order.get(selected) {
-        if let Some(Some(s)) = sessions.get_mut(pi) {
-            if s.parser.screen().alternate_screen() {
-                let seq: &[u8] = if lines > 0 { b"\x1b[5~" } else { b"\x1b[6~" };
-                let _ = s.input(seq);
-            } else {
-                s.scroll_by(lines);
             }
         }
     }

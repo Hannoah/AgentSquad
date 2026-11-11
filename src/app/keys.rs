@@ -161,53 +161,9 @@ impl App {
                     }
                 }
             }
-            KeyCode::Backspace
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.send_buf.delete_word_back();
+            _ => {
+                self.send_buf.edit_key(k);
             }
-            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_buf.delete_word_back();
-            }
-            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_buf.clear_to_start();
-            }
-            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_buf.move_home();
-            }
-            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_buf.move_end();
-            }
-            KeyCode::Backspace => {
-                self.send_buf.backspace();
-            }
-            KeyCode::Delete => {
-                self.send_buf.delete();
-            }
-            KeyCode::Left
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.send_buf.move_word_left();
-            }
-            KeyCode::Right
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.send_buf.move_word_right();
-            }
-            KeyCode::Left => self.send_buf.move_left(),
-            KeyCode::Right => self.send_buf.move_right(),
-            KeyCode::Home => self.send_buf.move_home(),
-            KeyCode::End => self.send_buf.move_end(),
-            KeyCode::Char(ch)
-                if !k.modifiers.contains(KeyModifiers::CONTROL)
-                    && !k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.send_buf.insert(ch)
-            }
-            _ => {}
         }
     }
 
@@ -226,65 +182,12 @@ impl App {
             KeyCode::Up if !self.order.is_empty() => {
                 self.selected = (self.selected + self.order.len() - 1) % self.order.len();
             }
-            KeyCode::Backspace
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.filter_buf.delete_word_back();
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
+            _ => {
+                if self.filter_buf.edit_key(k) == Some(true) {
+                    self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                    self.selected = 0;
+                }
             }
-            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter_buf.delete_word_back();
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
-            }
-            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter_buf.clear_to_start();
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
-            }
-            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter_buf.move_home();
-            }
-            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter_buf.move_end();
-            }
-            KeyCode::Backspace => {
-                self.filter_buf.backspace();
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
-            }
-            KeyCode::Delete => {
-                self.filter_buf.delete();
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
-            }
-            KeyCode::Left
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.filter_buf.move_word_left();
-            }
-            KeyCode::Right
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.filter_buf.move_word_right();
-            }
-            KeyCode::Left => self.filter_buf.move_left(),
-            KeyCode::Right => self.filter_buf.move_right(),
-            KeyCode::Home => self.filter_buf.move_home(),
-            KeyCode::End => self.filter_buf.move_end(),
-            KeyCode::Char(ch)
-                if !k.modifiers.contains(KeyModifiers::CONTROL)
-                    && !k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.filter_buf.insert(ch);
-                self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                self.selected = 0;
-            }
-            _ => {}
         }
     }
 
@@ -483,94 +386,18 @@ impl App {
             KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
             KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
             KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
-            KeyCode::Backspace
-                if k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                if let Some(input) = self.add_input() {
-                    input.delete_word_back();
-                }
-                self.add_edited();
-            }
-            KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(input) = self.add_input() {
-                    input.delete_word_back();
-                }
-                self.add_edited();
-            }
-            KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(input) = self.add_input() {
-                    input.clear_to_start();
-                }
-                self.add_edited();
-            }
-            KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(input) = self.add_input() {
-                    input.move_home();
-                }
-            }
-            KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(input) = self.add_input() {
-                    input.move_end();
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(input) = self.add_input() {
-                    input.backspace();
-                }
-                self.add_edited();
-            }
-            KeyCode::Delete => {
-                if let Some(input) = self.add_input() {
-                    input.delete();
-                }
-                self.add_edited();
-            }
-            KeyCode::Left | KeyCode::Right => {
-                let left = k.code == KeyCode::Left;
-                let word_mod = k.modifiers.contains(KeyModifiers::CONTROL)
-                    || k.modifiers.contains(KeyModifiers::ALT);
-                match self.add_field {
-                    1 => self.add_kind = self.add_kind.toggled(),
-                    3 => self.add_autostart = !self.add_autostart,
-                    _ => {
-                        if let Some(input) = self.add_input() {
-                            match (left, word_mod) {
-                                (true, true) => input.move_word_left(),
-                                (false, true) => input.move_word_right(),
-                                (true, false) => input.move_left(),
-                                (false, false) => input.move_right(),
-                            }
-                        }
-                    }
-                }
-            }
-            KeyCode::Home => {
-                if let Some(input) = self.add_input() {
-                    input.move_home();
-                }
-            }
-            KeyCode::End => {
-                if let Some(input) = self.add_input() {
-                    input.move_end();
-                }
-            }
-            KeyCode::Char(' ') if self.add_field == 1 => {
+            // The toggle fields flip on Space or a sideways arrow.
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 1 => {
                 self.add_kind = self.add_kind.toggled();
             }
-            KeyCode::Char(' ') if self.add_field == 3 => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 3 => {
                 self.add_autostart = !self.add_autostart;
             }
-            KeyCode::Char(ch)
-                if !k.modifiers.contains(KeyModifiers::CONTROL)
-                    && !k.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                if let Some(input) = self.add_input() {
-                    input.insert(ch);
+            _ => {
+                if self.add_input().and_then(|input| input.edit_key(k)) == Some(true) {
+                    self.add_edited();
                 }
-                self.add_edited();
             }
-            _ => {}
         }
     }
 
@@ -665,45 +492,22 @@ impl App {
                     }
                 }
             }
-            KeyCode::Home if !self.order.is_empty() => self.selected = 0,
-            KeyCode::End if !self.order.is_empty() => self.selected = self.order.len() - 1,
-            KeyCode::PageUp if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                scroll_selected(
-                    &mut self.sessions,
-                    &self.order,
-                    self.selected,
-                    rows as usize,
-                    1,
-                );
-            }
-            KeyCode::PageDown if k.modifiers.contains(KeyModifiers::SHIFT) => {
-                scroll_selected(
-                    &mut self.sessions,
-                    &self.order,
-                    self.selected,
-                    rows as usize,
-                    -1,
-                );
-            }
+            // Before plain End: Shift+End returns the pane to live output,
+            // as it does inside a terminal.
             KeyCode::End if k.modifiers.contains(KeyModifiers::SHIFT) => {
                 scroll_live_selected(&mut self.sessions, &self.order, self.selected);
             }
-            KeyCode::PageUp if !self.order.is_empty() => {
+            KeyCode::Home if !self.order.is_empty() => self.selected = 0,
+            KeyCode::End if !self.order.is_empty() => self.selected = self.order.len() - 1,
+            // With or without Shift, so the terminal's scroll keys work here too.
+            KeyCode::PageUp | KeyCode::PageDown => {
+                let pages = if k.code == KeyCode::PageUp { 1 } else { -1 };
                 scroll_selected(
                     &mut self.sessions,
                     &self.order,
                     self.selected,
                     rows as usize,
-                    1,
-                );
-            }
-            KeyCode::PageDown if !self.order.is_empty() => {
-                scroll_selected(
-                    &mut self.sessions,
-                    &self.order,
-                    self.selected,
-                    rows as usize,
-                    -1,
+                    pages,
                 );
             }
             KeyCode::Char('r') => {
@@ -711,21 +515,7 @@ impl App {
                     if slot_running(&self.sessions, pi) {
                         self.confirm_restart = Some(pi);
                     } else {
-                        match restart_session(
-                            &mut self.sessions,
-                            &self.cfg.projects,
-                            pi,
-                            rows,
-                            cols,
-                        ) {
-                            None => {
-                                self.message = (
-                                    format!("Restarted {}", self.cfg.projects[pi].name),
-                                    Notice::Info,
-                                );
-                            }
-                            Some(e) => self.message = (e, Notice::Error),
-                        }
+                        self.restart(pi, rows, cols);
                     }
                 }
             }
@@ -766,13 +556,7 @@ impl App {
                 } else if self.order.is_empty() {
                     self.mode = Mode::Filter;
                 } else if let Some(&pi) = self.order.get(self.selected) {
-                    if let Some(e) =
-                        start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-                    {
-                        self.message = (e, Notice::Error);
-                        return;
-                    }
-                    self.mode = Mode::Focus;
+                    self.open_session(pi, rows, cols);
                 }
             }
             _ => {}

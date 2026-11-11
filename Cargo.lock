@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentsquad"
-version = "0.15.13"
+version = "0.15.14"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -13,6 +13,7 @@ dependencies = [
  "ratatui",
  "serde",
  "toml",
+ "unicode-width",
  "vt100",
  "windows-sys",
 ]
