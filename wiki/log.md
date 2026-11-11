@@ -129,3 +129,6 @@ UI/UX 정밀 리뷰 및 개선 + 한글(두벌식) 단축키 자동 인식: 한/
 
 ## [2026-11-11] 배포 | v0.15.14
 프로덕션 수준 점검 2차: 폭 계산(사이드바·입력줄·추가 폼·메모리 모니터·`squad list`가 글자 수가 아닌 터미널 칸 수로 계산; `config::width`/`take_cols`/`fit`, `unicode-width` 직접 의존성 명시), macOS bracketed paste 지원(`input::paste_bytes`), 매니저 `Shift+End` 버그 수정, 설정 저장 fsync 후 rename 및 실패 시 임시 파일 삭제, 프로젝트 삭제 뒤 `ROSTER.md` 갱신, 폴더 미존재 프로젝트 시작 시 알림, Linux 등 릴리스 없는 플랫폼 업데이트 확인 생략, 히스토리 줄바꿈 본문 스크롤 끝까지 허용, `LineInput::edit_key`·`confirm_key`·`App::open_session`/`restart` 등 중복 정리, CLI `-V`/`version` 및 도움말 보완. 테스트 174개 통과. → [releases.md](releases.md)
+
+## [2026-11-12] 배포 | v0.15.15
+편집 폼에서 경로 변경 허용(`config::resolve_dir`/`relocate`/`persist_move`, 에이전트 이름·하위 에이전트 `reports_to` 연동 갱신, 서비스는 이름 유지), 매니저 선택 행 상태 아이콘 색 불일치 수정. 테스트 175개 통과. → [releases.md](releases.md)

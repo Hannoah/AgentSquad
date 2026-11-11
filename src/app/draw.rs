@@ -370,19 +370,18 @@ impl App {
                 } else {
                     row_style
                 };
-                let status_span_style = {
+                // The selected row is one reversed bar: a colored glyph here
+                // would turn its cell into a differently colored block, so
+                // the glyph shape alone says what state it is in.
+                let status_span_style = if Some(pi) == sel_pi {
+                    row_style
+                } else {
                     let (base_fg, is_bold) = if let Some(ph) = agent_phase {
                         match ph {
                             AgentPhase::Working => (Color::Cyan, true),
                             AgentPhase::NeedsInput => (Color::Yellow, true),
                             AgentPhase::Done => (Color::Green, true),
-                            AgentPhase::Idle => {
-                                if Some(pi) == sel_pi {
-                                    (Color::Gray, false)
-                                } else {
-                                    (Color::DarkGray, false)
-                                }
-                            }
+                            AgentPhase::Idle => (Color::DarkGray, false),
                         }
                     } else if status == "Running" {
                         (Color::Green, true)
@@ -390,8 +389,6 @@ impl App {
                         || (status.starts_with("Exited") && !status.ends_with("(0)"))
                     {
                         (Color::Red, true)
-                    } else if Some(pi) == sel_pi {
-                        (Color::Gray, false)
                     } else {
                         (Color::DarkGray, false)
                     };
@@ -399,9 +396,6 @@ impl App {
                     let mut st = Style::default().fg(base_fg);
                     if is_bold {
                         st = st.add_modifier(ratatui::style::Modifier::BOLD);
-                    }
-                    if Some(pi) == sel_pi {
-                        st = st.add_modifier(ratatui::style::Modifier::REVERSED);
                     }
                     st
                 };
@@ -985,10 +979,28 @@ impl App {
         }
     }
 
-    /// The name the add form would register, shown while typing.
+    /// The name the add form would register, shown while typing. An edit
+    /// shows it only when a new folder would rename the agent.
     pub(super) fn add_preview(&self) -> Option<String> {
-        if self.add_edit.is_some() {
-            return None; // an edit keeps its name
+        if let Some(old) = &self.add_edit {
+            let i = self
+                .cfg
+                .projects
+                .iter()
+                .position(|p| p.name.eq_ignore_ascii_case(old))?;
+            if self.cfg.projects[i].kind != Kind::Agent {
+                return None; // a service keeps its name
+            }
+            let others: Vec<Project> = self
+                .cfg
+                .projects
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, p)| p.clone())
+                .collect();
+            let name = preview_name(&others, &self.add_path.as_str(), Kind::Agent, &[])?;
+            return (!name.eq_ignore_ascii_case(old)).then_some(name);
         }
         let parts = split_command(&self.add_cmd.as_str());
         preview_name(
@@ -1012,8 +1024,13 @@ impl App {
     /// The line under the fields: the name the project would get.
     fn add_status(&self) -> Option<Line<'static>> {
         let name = self.add_preview()?;
+        let text = if self.add_edit.is_some() {
+            format!("  Renames to: {name}")
+        } else {
+            format!("  Registers as: {name}")
+        };
         Some(Line::from(Span::styled(
-            format!("  Registers as: {name}"),
+            text,
             Style::default().add_modifier(ratatui::style::Modifier::DIM),
         )))
     }
@@ -1161,7 +1178,7 @@ impl App {
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
-            let locked = editing && !matches!(i, 2 | 3);
+            let locked = editing && !matches!(i, 0 | 2 | 3);
             let mark = if active { ">" } else { " " };
             let label_style = if active {
                 Style::default().add_modifier(ratatui::style::Modifier::BOLD)
@@ -1246,7 +1263,7 @@ impl App {
                     .border_type(BorderType::Rounded)
                     .title(Line::from(Span::styled(
                         if editing {
-                            "Edit project: command, autostart (Enter save, Esc cancel)"
+                            "Edit project: path, command, autostart (Enter save, Esc cancel)"
                         } else {
                             "Add project (Enter save, Esc cancel)"
                         },

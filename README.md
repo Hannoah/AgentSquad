@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.14 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.15 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.14
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.15
 ```
 
 To install elsewhere:
@@ -162,7 +162,7 @@ case-insensitively by `remove` and `start`.
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `h` | History: read the selected project's work history, squad's own task entries and any SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`↑`/`↓` pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
-| `e` | Edit the selected project's command and autostart (path, kind and name stay; `u` sets whom it reports to). A running session keeps the old command until you restart it |
+| `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |

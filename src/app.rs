@@ -661,9 +661,9 @@ impl App {
         }
     }
 
-    /// `e`: the add form, filled with the selected project. Only the command
-    /// and autostart can change here; path, kind and chain of command keep
-    /// their own keys (`u`) so names and logs never go stale.
+    /// `e`: the add form, filled with the selected project. The path, command
+    /// and autostart can change here (a new path renames an agent after its
+    /// folder); kind and chain of command keep their own keys (`u`).
     fn open_edit(&mut self) {
         let Some(&pi) = self.order.get(self.selected) else {
             return;

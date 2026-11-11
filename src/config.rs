@@ -311,6 +311,19 @@ pub fn persist_edit(name: &str, command: Vec<String>, autostart: bool) -> Result
     p.autostart = autostart;
     save(&disk)
 }
+/// Move `name` to folder `path` on disk, re-reading the file first (see
+/// `persist_add`). Returns the name it has afterwards (see `relocate`).
+pub fn persist_move(name: &str, path: &Path) -> Result<String> {
+    let mut disk = load()?;
+    let i = disk
+        .projects
+        .iter()
+        .position(|q| q.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))?;
+    let new = relocate(&mut disk.projects, i, path.to_path_buf());
+    save(&disk)?;
+    Ok(new)
+}
 /// Inverse of `split_command`: quote the words that hold spaces (or are
 /// empty) so the line splits back into the same words.
 pub fn join_command(parts: &[String]) -> String {
@@ -620,6 +633,56 @@ pub fn create_missing_dir(path_raw: &str) -> Result<()> {
     }
     fs::create_dir_all(p).with_context(|| format!("Cannot create folder {p}"))
 }
+/// Canonical form of a project folder and its name, or why it cannot be one.
+pub fn resolve_dir(anchor: &str) -> Result<(PathBuf, String), String> {
+    let path = plain_path(fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?);
+    if !path.is_dir() {
+        return Err("Project path must be a directory.".into());
+    }
+    let dir_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if dir_name.is_empty() {
+        return Err("Cannot use filesystem root as project.".into());
+    }
+    Ok((path, dir_name))
+}
+/// Point project `i` at `path`. An agent is named after its folder, so it
+/// takes the new folder's name (made unique among the others) and everyone
+/// who reported to the old name follows it; a service is named after its
+/// program and keeps its name. Returns the project's name afterwards.
+pub fn relocate(projects: &mut [Project], i: usize, path: PathBuf) -> String {
+    let old = projects[i].name.clone();
+    if projects[i].kind == Kind::Agent {
+        let dir = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !dir.is_empty() {
+            let others: Vec<Project> = projects
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, p)| p.clone())
+                .collect();
+            let name = unique_name(&dir, &others);
+            if name != old {
+                for p in projects.iter_mut() {
+                    if p.reports_to
+                        .as_deref()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(&old))
+                    {
+                        p.reports_to = Some(name.clone());
+                    }
+                }
+                projects[i].name = name;
+            }
+        }
+    }
+    projects[i].path = path;
+    projects[i].name.clone()
+}
 /// Build and validate a project from user inputs, without touching disk state.
 ///
 /// Services take their name from the program being run and can share a directory
@@ -637,17 +700,7 @@ pub fn build_project(
     }
     // An omitted service path means "right here".
     let anchor = if trimmed.is_empty() { "." } else { trimmed };
-    let path = plain_path(fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?);
-    if !path.is_dir() {
-        return Err("Project path must be a directory.".into());
-    }
-    let dir_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if dir_name.is_empty() {
-        return Err("Cannot use filesystem root as project.".into());
-    }
+    let (path, dir_name) = resolve_dir(anchor)?;
     // Agents may share a directory too: the second becomes `dir-2`, like
     // services, and stays independent until given a commander (`--under`,
     // `u`, or right-click > Set superior).

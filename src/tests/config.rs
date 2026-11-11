@@ -191,6 +191,37 @@ fn split_command_honors_quotes() {
     assert!(split_command("   ").is_empty());
 }
 #[test]
+fn relocate_renames_agent_and_followers() {
+    let mk = |name: &str, path: &str, kind: Kind, up: Option<&str>| Project {
+        name: name.into(),
+        path: PathBuf::from(path),
+        command: vec!["sh".into()],
+        kind,
+        autostart: false,
+        ledger: false,
+        reports_to: up.map(String::from),
+        pinned: false,
+    };
+    let mut p = vec![
+        mk("old", "/w/old", Kind::Agent, None),
+        mk("sub", "/w/sub", Kind::Agent, Some("OLD")),
+        mk("fresh", "/w/fresh", Kind::Agent, None),
+        mk("node", "/w/old", Kind::Service, None),
+    ];
+    // A new folder renames the agent and the one reporting to it follows.
+    assert_eq!(relocate(&mut p, 0, PathBuf::from("/x/newdir")), "newdir");
+    assert_eq!(p[0].path, PathBuf::from("/x/newdir"));
+    assert_eq!(p[1].reports_to.as_deref(), Some("newdir"));
+    // A clash with another project's name gets a suffix.
+    assert_eq!(relocate(&mut p, 0, PathBuf::from("/y/fresh")), "fresh-2");
+    assert_eq!(p[1].reports_to.as_deref(), Some("fresh-2"));
+    // Same folder name elsewhere keeps the name instead of clashing with itself.
+    assert_eq!(relocate(&mut p, 0, PathBuf::from("/z/fresh")), "fresh-2");
+    // A service is named after its program, not its folder.
+    assert_eq!(relocate(&mut p, 3, PathBuf::from("/q/other")), "node");
+    assert_eq!(p[3].path, PathBuf::from("/q/other"));
+}
+#[test]
 fn persist_helpers_keep_other_writers_projects() {
     let file = env::temp_dir().join(format!("agentsquad-persist-{}.toml", std::process::id()));
     let mk = |name: &str| Project {

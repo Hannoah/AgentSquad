@@ -272,8 +272,8 @@ impl App {
             (true, Some(i)) if i + 1 < n => self.add_sel = Some(i + 1),
             (false, Some(0)) => self.add_sel = None,
             (false, Some(i)) => self.add_sel = Some(i - 1),
-            (true, _) => self.add_field = 1,
-            (false, None) => self.add_field = 4,
+            (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
+            (false, None) => self.add_field = if self.add_edit.is_some() { 3 } else { 4 },
         }
     }
 
@@ -298,16 +298,32 @@ impl App {
                 self.add_edit = None;
                 self.mode = Mode::Manager;
             }
-            KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
-            // Editing only reaches Command and Autostart.
-            KeyCode::Tab | KeyCode::Down | KeyCode::Up | KeyCode::BackTab
-                if self.add_edit.is_some() =>
-            {
-                self.add_field = if self.add_field == 2 { 3 } else { 2 };
-            }
             // A highlighted folder fills the path instead of saving.
             KeyCode::Enter if self.add_field == 0 && self.add_sel.is_some() => {
                 self.pick_path(self.add_sel.unwrap_or(0));
+            }
+            KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
+            KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
+            KeyCode::Up if self.add_edit.is_some() && self.add_field == 0 => {
+                self.step_path_list(false)
+            }
+            KeyCode::Down if self.add_edit.is_some() && self.add_field == 0 => {
+                self.step_path_list(true)
+            }
+            // Editing reaches only Path, Command and Autostart.
+            KeyCode::Tab | KeyCode::Down if self.add_edit.is_some() => {
+                self.add_field = match self.add_field {
+                    0 => 2,
+                    2 => 3,
+                    _ => 0,
+                };
+            }
+            KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
+                self.add_field = match self.add_field {
+                    3 => 2,
+                    2 => 0,
+                    _ => 3,
+                };
             }
             KeyCode::Enter => {
                 self.add_err.clear();

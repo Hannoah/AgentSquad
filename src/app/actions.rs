@@ -114,17 +114,12 @@ impl App {
         }
     }
 
-    /// Enter in the edit form: save the new command and autostart.
+    /// Enter in the edit form: save the new path, command and autostart. A
+    /// new folder renames an agent after it (see `relocate`).
     pub(super) fn save_edit(&mut self) {
-        let Some(name) = self.add_edit.clone() else {
+        let Some(mut name) = self.add_edit.clone() else {
             return;
         };
-        let cmd = split_command(&self.add_cmd.as_str());
-        if let Err(e) = persist_edit(&name, cmd.clone(), self.add_autostart) {
-            self.add_err = format!("Save failed: {e:#}");
-            return;
-        }
-        let autostart = self.add_autostart;
         let Some(pi) = self
             .cfg
             .projects
@@ -133,15 +128,59 @@ impl App {
         else {
             return;
         };
+        // A missing folder is made on the spot (the field says so).
+        if self.add_state == PathState::Missing {
+            if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
+                self.add_err = format!("{e:#}");
+                return;
+            }
+        }
+        let new_path = match resolve_dir(clean_path(&self.add_path.as_str())) {
+            Ok((path, _)) => path,
+            Err(e) => {
+                self.add_err = e;
+                return;
+            }
+        };
+        let moved = !new_path
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&self.cfg.projects[pi].path.to_string_lossy());
+        let was_running = slot_running(&self.sessions, pi);
+        if moved {
+            let new_name = match persist_move(&name, &new_path) {
+                Ok(n) => n,
+                Err(e) => {
+                    self.add_err = format!("Save failed: {e:#}");
+                    return;
+                }
+            };
+            // Same rules as on disk; the file wins if another process
+            // registered a clashing name meanwhile.
+            relocate(&mut self.cfg.projects, pi, new_path);
+            self.cfg.projects[pi].name.clone_from(&new_name);
+            name = new_name;
+            ledger::ensure_agent(&self.cfg.projects[pi]);
+            ledger::write_rosters(&self.cfg.projects);
+            // The new name must be visible, so drop any filter and follow it.
+            self.filter_buf.clear();
+            self.order = display_order(&self.cfg.projects);
+            self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
+        }
+        let cmd = split_command(&self.add_cmd.as_str());
+        if let Err(e) = persist_edit(&name, cmd.clone(), self.add_autostart) {
+            self.add_err = format!("Save failed: {e:#}");
+            return;
+        }
+        let autostart = self.add_autostart;
         let p = &mut self.cfg.projects[pi];
         p.command = if cmd.is_empty() { shell() } else { cmd };
         p.autostart = autostart;
         self.add_edit = None;
         self.mode = Mode::Manager;
-        let note = if slot_running(&self.sessions, pi) {
-            "; restart it to use the new command"
-        } else {
-            ""
+        let note = match (was_running, moved) {
+            (true, true) => "; restart it to use the new folder and command",
+            (true, false) => "; restart it to use the new command",
+            _ => "",
         };
         self.message = (format!("Saved {name}{note}"), Notice::Info);
     }
