@@ -59,7 +59,7 @@ jobs:
           $hash = (Get-FileHash -Path squad-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  squad-windows-x86_64.zip" | Out-File -FilePath squad-windows-x86_64.zip.sha256 -Encoding ascii
       - name: Keep the release files for the publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: |
@@ -96,7 +96,7 @@ jobs:
           tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release squad
           shasum -a 256 ${{ matrix.asset }}.tar.gz | sed 's/ \*/  /' > ${{ matrix.asset }}.tar.gz.sha256
       - name: Keep the release files for the publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-macos-${{ matrix.target }}
           path: |
