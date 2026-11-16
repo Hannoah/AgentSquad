@@ -870,6 +870,7 @@ pub fn utc_offset_secs() -> i64 {
     -i64::from(tz.Bias + seasonal) * 60
 }
 #[cfg(unix)]
+#[allow(clippy::useless_conversion)] // `c_long` is i64 on macOS, i32 on some unix targets
 pub fn utc_offset_secs() -> i64 {
     // SAFETY: `localtime_r` fills the live local `tm`.
     unsafe {
