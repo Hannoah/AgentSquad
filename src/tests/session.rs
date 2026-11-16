@@ -430,54 +430,6 @@ fn uptime_labels_scale() {
     assert_eq!(uptime_label(90000), "1d1h");
 }
 #[test]
-fn start_session_starts_and_reports() {
-    let dir = env::current_dir().unwrap();
-    let shell: Vec<String> = if cfg!(windows) {
-        vec![
-            "cmd.exe".into(),
-            "/d".into(),
-            "/c".into(),
-            "echo AGENTSQUAD_OK".into(),
-        ]
-    } else {
-        vec!["sh".into(), "-c".into(), "echo AGENTSQUAD_OK".into()]
-    };
-    let projects = vec![
-        Project {
-            name: "ok".into(),
-            path: dir.clone(),
-            command: shell,
-            kind: Kind::Agent,
-            autostart: false,
-            ledger: false,
-            reports_to: None,
-            pinned: false,
-        },
-        Project {
-            name: "bad".into(),
-            path: dir,
-            command: vec!["agentsquad-no-such-binary-xyz".into()],
-            kind: Kind::Service,
-            autostart: false,
-            ledger: false,
-            reports_to: None,
-            pinned: false,
-        },
-    ];
-    let mut sessions: Vec<Option<Session>> = vec![None, None];
-    // Stopped session starts.
-    assert!(start_session(&mut sessions, &projects, 0, 24, 80).is_none());
-    assert!(sessions[0].is_some());
-    // Already running: no-op, no respawn, no error.
-    assert!(start_session(&mut sessions, &projects, 0, 24, 80).is_none());
-    assert!(sessions[0].is_some());
-    // Bad binary surfaces an error and leaves no session behind.
-    assert!(start_session(&mut sessions, &projects, 1, 24, 80).is_some());
-    assert!(sessions[1].is_none());
-    // Unknown index reports instead of panicking.
-    assert!(start_session(&mut sessions, &projects, 7, 24, 80).is_some());
-}
-#[test]
 fn needs_input_and_working_ignore_false_positives() {
     // Active spinner / interrupt hint suppresses false `?` even when question text is on screen.
     let busy_screen = "Do you want to refactor this file?\n✶ Thinking… (esc to interrupt)";

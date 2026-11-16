@@ -346,24 +346,24 @@ impl App {
     pub(super) fn key_confirm_start_all(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         match confirm_key(k.code) {
             Some(true) => {
-                // Spawned in parallel: one slow start no longer
-                // stalls the others (or the keyboard).
-                let (started_n, failed) = start_sessions(
-                    &mut self.sessions,
-                    &self.cfg.projects,
-                    &self.order,
-                    rows,
-                    cols,
-                );
-                self.message = match failed {
-                    Some(e) => (format!("Started {started_n}; error: {e}"), Notice::Error),
-                    None if started_n == 0 => {
-                        ("All sessions already running.".to_string(), Notice::Info)
-                    }
-                    None => (
-                        format!("Started {}.", plural_sessions(started_n)),
+                // Each starts on its own worker: one slow start stalls
+                // neither the others nor the keyboard.
+                let todo: Vec<usize> = self
+                    .order
+                    .iter()
+                    .copied()
+                    .filter(|&pi| !slot_running(&self.sessions, pi))
+                    .collect();
+                for &pi in &todo {
+                    self.begin_start(pi, rows, cols, Vec::new());
+                }
+                self.message = if todo.is_empty() {
+                    ("All sessions already running.".to_string(), Notice::Info)
+                } else {
+                    (
+                        format!("Starting {}.", plural_sessions(todo.len())),
                         Notice::Info,
-                    ),
+                    )
                 };
                 self.confirm_start_all = false;
             }
@@ -381,7 +381,7 @@ impl App {
                 if let Some(pi) = self.confirm_stop.take() {
                     if let Some(slot) = self.sessions.get_mut(pi) {
                         if let Some(old) = slot.take() {
-                            thread::spawn(move || drop(old));
+                            stop_in_background(old);
                         }
                     }
                     self.message = (
@@ -419,7 +419,7 @@ impl App {
                     match persist_remove(&name) {
                         Ok(()) => {
                             if let Some(Some(old)) = self.sessions.get_mut(pi).map(|o| o.take()) {
-                                thread::spawn(move || drop(old));
+                                stop_in_background(old);
                             }
                             remove_project(&mut self.cfg.projects, &mut self.sessions, pi);
                             // Keep an active filter across the removal.
@@ -467,9 +467,8 @@ impl App {
         }
         match action {
             0 => self.open_session(pi, rows, cols),
-            1 => self.restart(pi, rows, cols),
-            2 => self.confirm_remove = Some(pi),
-            3 => self.begin_set_superior(pi),
+            1 => self.confirm_remove = Some(pi),
+            2 => self.begin_set_superior(pi),
             _ => {}
         }
     }

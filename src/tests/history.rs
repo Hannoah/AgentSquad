@@ -1,5 +1,5 @@
 use super::*;
-use crate::history::{render, write_entry, Task};
+use crate::history::{is_auto, prune, render, write_entry, Task};
 use crate::ledger::list_entries;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -144,6 +144,40 @@ fn flush_waits_for_entries_still_being_written() {
         list_entries(&log).len(),
         1,
         "entry exists once flush returns"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn old_auto_entries_are_pruned_and_sitreps_kept() {
+    assert!(is_auto("20261108T061200Z-auto.md"));
+    assert!(is_auto("20261108T061200Z-auto-2.md"));
+    assert!(
+        !is_auto("20261108T061200Z-auto-login.md"),
+        "an agent's slug"
+    );
+    assert!(!is_auto("20261108T061200Z-add-auth.md"));
+    assert!(!is_auto("auto.md"));
+    let dir = scratch_dir("prune");
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in [
+        "20261101T000000Z-auto.md",
+        "20261102T000000Z-auto.md",
+        "20261103T000000Z-auto.md",
+        "20261101T000000Z-add-auth.md",
+    ] {
+        std::fs::write(dir.join(name), "x").unwrap();
+    }
+    prune(&dir, 2);
+    let left: Vec<String> = list_entries(&dir).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(
+        left,
+        [
+            "20261103T000000Z-auto.md",
+            "20261102T000000Z-auto.md",
+            "20261101T000000Z-add-auth.md"
+        ],
+        "the oldest auto entry goes; the agent's SITREP stays"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

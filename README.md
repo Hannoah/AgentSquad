@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.15 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.16 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.15
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.16
 ```
 
 To install elsewhere:
@@ -160,10 +160,11 @@ case-insensitively by `remove` and `start`.
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
-| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
+| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`↑`/`↓` pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
 | `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
+| `z` | Zoom: a focused terminal takes the full width (the project list comes back in the manager; `z` again turns it off) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
@@ -301,7 +302,8 @@ Entries are markdown files named `<UTC time>-auto.md` in the project's
 log at the start of its next session sees what was done before it. They include
 what was on the screen, so treat them like terminal scrollback. Outside a git
 repository the entry has no file or commit lists, only the screen. Services are
-not recorded.
+not recorded. Squad keeps the newest 200 of its own entries per project and
+deletes older ones; SITREPs an agent wrote are never deleted.
 
 ## Operations log (automatic for agents)
 

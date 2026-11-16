@@ -109,7 +109,7 @@ const SWITCH_KEY: &str = if cfg!(target_os = "macos") {
 pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
-        "Click a project or the pane to focus it; click the manager to return; drag copies",
+        "Click, drag  focus a project or the pane; drag copies text",
         "Right-click  open quick actions for a project",
         "j/k, arrows  select project",
         "1-9, Home/End  jump to a project / the first / the last",
@@ -121,7 +121,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "M          memory: biggest processes, kill one (x)",
         "o          order: send a line to every agent under a commander",
         "u          set whom the selected agent reports to",
-        "e, f       edit command/autostart; pin or unpin (pinned first, marked *)",
+        "e, f, z    edit project; pin (*); zoom: full-width terminal",
         "s, r       stop / restart session (asks to confirm)",
         "d/Del      remove project (asks to confirm)",
         "S, U       start all stopped / install the update squad found",
@@ -427,9 +427,8 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
     } else {
         vec![
             ('1', "Start and focus"),
-            ('2', "Restart session"),
-            ('3', "Remove project…"),
-            ('4', "Set superior…"),
+            ('2', "Remove project…"),
+            ('3', "Set superior…"),
         ]
     }
 }
@@ -646,7 +645,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · e  edit · f  pin · m  message (send a line) · u  set commander
+  /  filter · a  add · e  edit · f  pin · z  zoom · m  message (send a line) · u  set commander
   b  brief (ledger) · o  order (all under a commander) · h  history · M  memory monitor
   s  stop · r  restart · d/Del  remove · S  start all · U  install update
   PgUp/PgDn  scroll · q  quit · ?  help

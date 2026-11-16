@@ -40,7 +40,7 @@ const PICK_ROWS: usize = 6;
 
 impl App {
     pub(super) fn draw(&mut self, f: &mut Frame) {
-        let sidebar = sidebar_width(f.area().width);
+        let sidebar = self.side_w(f.area().width);
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -121,7 +121,10 @@ impl App {
                 } else {
                     Style::default().fg(Color::Cyan)
                 };
-                Line::from(Span::styled(crate::ledger::sitrep_label(name), style))
+                Line::from(Span::styled(
+                    crate::ledger::sitrep_label(name, h.offset),
+                    style,
+                ))
             })
             .collect();
         f.render_widget(Paragraph::new(list), left_col);
@@ -279,6 +282,15 @@ impl App {
         }
     }
 
+    /// What a project without a session is doing: waiting, or on its way up.
+    fn idle_word(&self, pi: usize) -> &'static str {
+        if self.is_starting(pi) {
+            "Starting"
+        } else {
+            "Stopped"
+        }
+    }
+
     pub(super) fn draw_sidebar(&mut self, f: &mut Frame, panel: Rect) {
         let sel_pi = self.order.get(self.selected).copied();
         let inner_w = (panel.width as usize).saturating_sub(2);
@@ -307,7 +319,7 @@ impl App {
                 let status_text = self.sessions[pi]
                     .as_ref()
                     .map(|s| s.status.label())
-                    .unwrap_or(std::borrow::Cow::Borrowed("Stopped"));
+                    .unwrap_or(std::borrow::Cow::Borrowed(self.idle_word(pi)));
                 let status: &str = &status_text;
                 let fg = self.sessions[pi]
                     .as_ref()
@@ -559,7 +571,10 @@ impl App {
         let (sel_status_text, sel_uptime): (std::borrow::Cow<'static, str>, Option<u64>) = sel_pi
             .and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref()))
             .map(|s| (s.status.label(), s.started.map(|t| t.elapsed().as_secs())))
-            .unwrap_or((std::borrow::Cow::Borrowed("Stopped"), None));
+            .unwrap_or((
+                std::borrow::Cow::Borrowed(sel_pi.map_or("Stopped", |pi| self.idle_word(pi))),
+                None,
+            ));
         let sel_status: &str = &sel_status_text;
         let sel_fg = sel_pi
             .and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref()))
@@ -706,7 +721,9 @@ impl App {
                 }
             }
         } else {
-            let body = if !self.cfg.projects.is_empty() && self.order.is_empty() {
+            let body = if sel_pi.is_some_and(|pi| self.is_starting(pi)) {
+                vec!["Starting…".to_string()]
+            } else if !self.cfg.projects.is_empty() && self.order.is_empty() {
                 filtered_empty_state_lines(&self.filter_buf.as_str())
             } else {
                 empty_state_lines(!self.cfg.projects.is_empty())
@@ -806,7 +823,9 @@ impl App {
             ])
             .split(bar_area);
         let input_w = (status_row[0].width as usize).saturating_sub(chip_text.chars().count() + 1);
-        if self.mode == Mode::Focus {
+        // A notice (copied, a session died, memory limit) shows in a terminal
+        // too; the hints return when it expires.
+        if self.mode == Mode::Focus && self.message.0 == self.hints {
             bar.extend(fitted_hints(Mode::Focus, input_w));
         } else if self.mode == Mode::Filter {
             bar.extend(input_line(

@@ -17,7 +17,7 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 - 입력 모드는 `mode: Mode` 하나로 표현한다(Manager, Focus, Send, Filter, Add, Help). 확인 팝업은 별도 `confirm_*` 상태. `App`의 메서드는 위 파일들에 `impl App` 블록으로 나뉘어 있고, 파일 사이에서 부르는 메서드는 `pub(super)`다.
 - 주요 의존성: ratatui(화면), crossterm(입력), portable-pty(세션 PTY), vt100(터미널 에뮬레이션), serde + toml(설정), anyhow. 플랫폼별로 Windows는 windows-sys, Unix(macOS)는 libc(프로세스 트리, 측정, 종료 신호).
 - `portable-pty`는 0.8에 고정했다. 0.9는 콘솔이 없는 환경에서 시작 시 멈춘다(`Cargo.toml` 주석 참고).
-- 세션은 PTY로 띄우고 출력은 읽기 스레드가 채널로 보낸다(채널 크기 32, 가득 차면 읽기 스레드가 대기).
+- 세션은 PTY로 띄우고 출력은 읽기 스레드가 채널로 보낸다(채널 크기 32, 가득 차면 읽기 스레드가 대기). 세션 시작(`Session::spawn`, 약 150ms)은 작업 스레드에서 하고 결과를 채널로 받는다(`App::begin_start`/`finish_start`). 시작 중에 친 키는 모아 두었다가 세션이 뜨면 보낸다.
 - 종료 시 프로세스 트리 전체를 죽인다. Windows는 래퍼가 먼저 끝난 뒤 남은 손자 프로세스도 PID 스냅샷으로 찾아 종료한다. Unix는 프로세스 그룹 단위로도 종료하며, 이미 끝난 세션의 pid는 다른 프로세스가 쓸 수 있어 그룹 종료를 건너뛴다.
 
 ## 프로젝트 종류
@@ -40,4 +40,4 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 
 - github.com/Hannoah/AgentSquad (공개). CI와 릴리스는 GitHub Actions. 설치는 [build-and-release.md](build-and-release.md) 참고.
 - 지원 범위는 Windows(x86_64)와 macOS(Apple Silicon, Intel)다. CI는 `windows-latest`와 `macos-latest` 매트릭스로 돌고, 릴리스는 두 플랫폼 에셋을 올린다(macOS 지원 추가: c61110e).
-- 현재 버전: v0.15.5.
+- 현재 버전: v0.15.16.

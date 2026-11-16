@@ -3,17 +3,6 @@
 use super::*;
 
 impl App {
-    pub(super) fn on_resize(&mut self, a: Size) {
-        self.sel = None;
-        let (rows, cols) = pane_size(a);
-        for s in self.sessions.iter_mut().flatten() {
-            if let Err(e) = s.resize(rows, cols) {
-                self.message = (e.to_string(), Notice::Error);
-            }
-        }
-        self.dirty = true;
-    }
-
     pub(super) fn on_paste(&mut self, data: String) {
         self.dirty = true;
         if self.mode == Mode::Focus {
@@ -25,6 +14,8 @@ impl App {
                         self.message = (e.to_string(), Notice::Error);
                         self.mode = Mode::Manager;
                     }
+                } else if let Some(typed) = self.starting.get_mut(&self.cfg.projects[pi].name) {
+                    typed.extend(paste_bytes(&data, false));
                 }
             }
         } else if self.mode == Mode::Send {

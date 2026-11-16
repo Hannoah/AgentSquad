@@ -1,6 +1,6 @@
 [package]
 name = "agentsquad"
-version = "0.15.15"
+version = "0.15.16"
 edition = "2021"
 description = "Lightweight project-based terminal session manager"
 license = "MIT"
@@ -40,6 +40,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_Time",
 ] }
 
 [profile.release]

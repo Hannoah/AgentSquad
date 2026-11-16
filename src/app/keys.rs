@@ -108,6 +108,9 @@ impl App {
                     self.message = (e.to_string(), Notice::Error);
                     self.mode = Mode::Manager;
                 }
+            } else if let Some(typed) = self.starting.get_mut(&self.cfg.projects[pi].name) {
+                // Still starting: keep the keys for it instead of dropping them.
+                typed.extend(key_bytes(k, false));
             }
         }
     }
@@ -132,33 +135,25 @@ impl App {
                 {
                     self.message = self.issue_order(pi, &line);
                 } else if let Some(&pi) = self.order.get(self.selected) {
-                    let alive = self
+                    let name = self.cfg.projects[pi].name.clone();
+                    let mut bytes = line.into_bytes();
+                    // CR is Enter; LF reads as Shift+Enter (newline) to agents.
+                    bytes.push(b'\r');
+                    let live = self
                         .sessions
-                        .get(pi)
-                        .and_then(|o| o.as_ref())
-                        .map(|s| s.status.is_running())
-                        .unwrap_or(false);
-                    if !alive {
-                        if let Some(e) =
-                            start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-                        {
-                            self.message = (e, Notice::Error);
+                        .get_mut(pi)
+                        .and_then(|o| o.as_mut())
+                        .filter(|s| s.status.is_running());
+                    self.message = match live {
+                        Some(s) => match s.input(&bytes) {
+                            Ok(()) => (format!("Sent to {name}"), Notice::Info),
+                            Err(e) => (e.to_string(), Notice::Error),
+                        },
+                        None => {
+                            self.begin_start(pi, rows, cols, bytes);
+                            (format!("Starting {name}; the line follows"), Notice::Info)
                         }
-                    }
-                    if let Some(Some(s)) = self.sessions.get_mut(pi) {
-                        let mut bytes = line.into_bytes();
-                        // CR is Enter; LF reads as Shift+Enter (newline) to agents.
-                        bytes.push(b'\r');
-                        match s.input(&bytes) {
-                            Ok(()) => {
-                                self.message = (
-                                    format!("Sent to {}", self.cfg.projects[pi].name),
-                                    Notice::Info,
-                                )
-                            }
-                            Err(e) => self.message = (e.to_string(), Notice::Error),
-                        }
-                    }
+                    };
                 }
             }
             _ => {
@@ -476,6 +471,15 @@ impl App {
             KeyCode::Char('M') => self.open_procs(),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
+            KeyCode::Char('z') => {
+                self.zoom = !self.zoom;
+                let note = if self.zoom {
+                    "Zoom on: a focused terminal takes the full width (z turns it off)"
+                } else {
+                    "Zoom off"
+                };
+                self.message = (note.to_string(), Notice::Info);
+            }
             KeyCode::Char('?') => self.mode = Mode::Help,
             // Open the update prompt on demand; it also pops up by
             // itself whenever the manager has the keyboard.

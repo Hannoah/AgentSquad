@@ -103,6 +103,35 @@ pub fn gather(path: &Path, started: SystemTime) -> (Vec<String>, Vec<String>) {
     (files, commits)
 }
 
+/// Auto entries kept per project; older ones go as new ones land. Without a
+/// cap a busy project gathers thousands, and every listing of the log slows.
+const KEEP_AUTO: usize = 200;
+
+/// Is `name` an entry squad filed itself (`<stamp>-auto.md`, `<stamp>-auto-<n>.md`)?
+pub fn is_auto(name: &str) -> bool {
+    let rest = name.strip_suffix(".md").and_then(|stem| stem.get(16..));
+    rest.is_some_and(|r| {
+        r == "-auto"
+            || r.strip_prefix("-auto-")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+/// Delete the oldest auto entries in `dir` beyond the newest `keep`. SITREPs
+/// an agent wrote are never touched.
+pub fn prune(dir: &Path, keep: usize) {
+    let mut autos: Vec<String> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| is_auto(n))
+        .collect();
+    autos.sort_unstable_by(|a, b| b.cmp(a)); // names start with a UTC stamp
+    for name in autos.into_iter().skip(keep) {
+        let _ = fs::remove_file(dir.join(name));
+    }
+}
+
 /// Entries still being written by a worker.
 static PENDING: AtomicUsize = AtomicUsize::new(0);
 
@@ -126,6 +155,7 @@ fn file(t: &Task) {
     let (files, commits) = gather(&t.path, t.started);
     let dir = t.path.join(crate::ledger::DIR).join("log");
     write_entry(&dir, t, &files, &commits);
+    prune(&dir, KEEP_AUTO);
 }
 
 /// Wait (up to `limit`) for entries still being written. Call before exit.

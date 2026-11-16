@@ -851,6 +851,39 @@ pub fn measure(roots: &[(usize, u32)]) -> Measurement {
     }
 }
 
+/// Seconds local time is ahead of UTC right now.
+// ponytail: today's offset is used for every date, so an entry from the other
+// side of a daylight-saving change reads an hour off. Per-date lookup if that matters.
+#[cfg(windows)]
+pub fn utc_offset_secs() -> i64 {
+    use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    // SAFETY: the out-struct is a live local the call fills.
+    let (id, tz) = unsafe {
+        let mut tz: TIME_ZONE_INFORMATION = std::mem::zeroed();
+        (GetTimeZoneInformation(&mut tz), tz)
+    };
+    let seasonal = match id {
+        1 => tz.StandardBias,
+        2 => tz.DaylightBias,
+        _ => 0,
+    };
+    -i64::from(tz.Bias + seasonal) * 60
+}
+#[cfg(unix)]
+pub fn utc_offset_secs() -> i64 {
+    // SAFETY: `localtime_r` fills the live local `tm`.
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&now, &mut tm);
+        i64::from(tm.tm_gmtoff)
+    }
+}
+#[cfg(not(any(windows, unix)))]
+pub fn utc_offset_secs() -> i64 {
+    0
+}
+
 /// The console window's current title, so it can be put back on exit.
 #[cfg(windows)]
 pub fn console_title() -> Option<String> {

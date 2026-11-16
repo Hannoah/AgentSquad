@@ -219,8 +219,14 @@ fn fixed_rect_fits_short_terminals() {
     // Clamped, never larger than the screen.
     let r = fixed_rect(66, 18, Rect::new(0, 0, 40, 10));
     assert_eq!((r.width, r.height), (40, 10));
-    // Every help row fits the popup interior on a 24-line terminal.
+    // Every help row fits the popup interior on a 24-line terminal,
+    // and no row is wider than the popup (66 columns less the border).
     assert!(help_lines().len() as u16 + 2 <= 24);
+    for l in help_lines() {
+        let (key, desc) = split_help_line(l);
+        assert!(key.len() + 2 + desc.len() <= 64, "help row too wide: {l}");
+        assert!(!desc.is_empty(), "help row has no key column: {l}");
+    }
 }
 #[test]
 fn split_help_line_columns() {
@@ -670,7 +676,7 @@ fn context_menu_offers_start_for_stopped() {
     assert!(running.iter().any(|(_, l)| l.contains("Focus")));
     assert!(running.iter().any(|(_, l)| l.contains("Stop")));
     let stopped = context_menu_items(false);
-    assert_eq!(stopped.len(), 4);
+    assert_eq!(stopped.len(), 3);
     assert!(stopped.iter().any(|(_, l)| l.contains("Start")));
     assert!(!stopped.iter().any(|(_, l)| l.contains("Stop")));
     // Number keys are 1-based in order with no gaps.

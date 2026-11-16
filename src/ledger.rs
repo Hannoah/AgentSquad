@@ -356,15 +356,29 @@ pub fn list_entries(dir: &Path) -> Vec<(String, PathBuf)> {
     v
 }
 
-/// `20261108T061200Z-add-auth.md` as `11-08 06:12 add-auth` (UTC); any other
-/// name is shown as it is.
-pub fn sitrep_label(name: &str) -> String {
+/// `20261108T061200Z-add-auth.md` as `11-08 15:12 add-auth`: the UTC stamp
+/// read in local time, `offset_secs` ahead of UTC. Any other name is shown as
+/// it is.
+pub fn sitrep_label(name: &str, offset_secs: i64) -> String {
     let stem = name.strip_suffix(".md").unwrap_or(name);
     let b = stem.as_bytes();
     if b.len() > 16 && b[8] == b'T' && b[15] == b'Z' && stem.is_char_boundary(16) {
         let (d, t, slug) = (&stem[..8], &stem[9..15], stem[16..].trim_start_matches('-'));
         if d.bytes().chain(t.bytes()).all(|c| c.is_ascii_digit()) {
-            return format!("{}-{} {}:{} {slug}", &d[4..6], &d[6..8], &t[..2], &t[2..4])
+            let n = |s: &str| s.parse::<i64>().unwrap_or(0);
+            // Days since the epoch (the inverse of `utc_stamp`), then the shift.
+            let (m, day) = (n(&d[4..6]), n(&d[6..8]));
+            let (y, mp) = if m <= 2 {
+                (n(&d[..4]) - 1, m + 9)
+            } else {
+                (n(&d[..4]), m - 3)
+            };
+            let yoe = y.rem_euclid(400);
+            let doe = yoe * 365 + yoe / 4 - yoe / 100 + (153 * mp + 2) / 5 + day - 1;
+            let days = y.div_euclid(400) * 146_097 + doe - 719_468;
+            let secs = days * 86_400 + n(&t[..2]) * 3600 + n(&t[2..4]) * 60 + offset_secs;
+            let local = utc_stamp(secs.max(0) as u64);
+            return format!("{} {} {slug}", &local[5..10], &local[11..16])
                 .trim_end()
                 .to_string();
         }

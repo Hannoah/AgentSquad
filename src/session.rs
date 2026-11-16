@@ -7,7 +7,7 @@ use crate::sys::{kill_tree_by_pid, kill_trees};
 use crate::ui::{
     pane_status_text, screen_lines, spinner_frame, status_glyph, status_style, uptime_label, Notice,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty};
 use ratatui::{
     buffer::Buffer,
@@ -811,31 +811,22 @@ pub fn scroll_live_selected(sessions: &mut [Option<Session>], order: &[usize], s
         }
     }
 }
-/// Stop any existing session for `pi` and spawn a fresh one.
-/// Returns an error message when the spawn fails.
-pub fn restart_session(
-    sessions: &mut [Option<Session>],
-    projects: &[Project],
-    pi: usize,
-    rows: u16,
-    cols: u16,
-) -> Option<String> {
-    if let Some(slot) = sessions.get_mut(pi) {
-        if let Some(old) = slot.take() {
-            thread::spawn(move || drop(old));
-        }
-    }
-    let Some(p) = projects.get(pi) else {
-        return Some(format!("No such project #{pi}"));
-    };
-    match Session::spawn(p, rows, cols) {
-        Ok(s) => {
-            if let Some(slot) = sessions.get_mut(pi) {
-                *slot = Some(s);
-            }
-            None
-        }
-        Err(e) => Some(format!("{e:#}")),
+/// Sessions being torn down on a worker.
+static STOPPING: AtomicUsize = AtomicUsize::new(0);
+/// Stop `s` off the UI thread: killing a tree walks the process table.
+pub fn stop_in_background(s: Session) {
+    STOPPING.fetch_add(1, Ordering::SeqCst);
+    thread::spawn(move || {
+        drop(s);
+        STOPPING.fetch_sub(1, Ordering::SeqCst);
+    });
+}
+/// Wait (up to `limit`) for those workers. Call before exit, or quitting
+/// right after a stop could leave a half-killed process tree behind.
+pub fn wait_for_stops(limit: Duration) {
+    let end = Instant::now() + limit;
+    while STOPPING.load(Ordering::SeqCst) > 0 && Instant::now() < end {
+        thread::sleep(Duration::from_millis(10));
     }
 }
 pub fn slot_running(sessions: &[Option<Session>], pi: usize) -> bool {
@@ -843,72 +834,6 @@ pub fn slot_running(sessions: &[Option<Session>], pi: usize) -> bool {
         .get(pi)
         .and_then(|o| o.as_ref())
         .is_some_and(|s| s.status.is_running())
-}
-/// Start the project session unless it is already running.
-/// Returns an error message when the spawn fails.
-pub fn start_session(
-    sessions: &mut [Option<Session>],
-    projects: &[Project],
-    pi: usize,
-    rows: u16,
-    cols: u16,
-) -> Option<String> {
-    if slot_running(sessions, pi) {
-        return None;
-    }
-    restart_session(sessions, projects, pi, rows, cols)
-}
-/// Start every listed project that is not running yet, spawning them in
-/// parallel so "start all" takes about as long as one start instead of
-/// freezing the UI for the sum. Returns (started, last error).
-pub fn start_sessions(
-    sessions: &mut [Option<Session>],
-    projects: &[Project],
-    pis: &[usize],
-    rows: u16,
-    cols: u16,
-) -> (usize, Option<String>) {
-    let todo: Vec<usize> = pis
-        .iter()
-        .copied()
-        .filter(|&pi| pi < projects.len() && !slot_running(sessions, pi))
-        .collect();
-    for &pi in &todo {
-        if let Some(old) = sessions.get_mut(pi).and_then(|s| s.take()) {
-            thread::spawn(move || drop(old));
-        }
-    }
-    let results: Vec<(usize, Result<Session>)> = thread::scope(|scope| {
-        let handles: Vec<_> = todo
-            .iter()
-            .map(|&pi| {
-                let p = &projects[pi];
-                (pi, scope.spawn(move || Session::spawn(p, rows, cols)))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|(pi, h)| {
-                let r = h
-                    .join()
-                    .unwrap_or_else(|_| Err(anyhow!("start thread panicked")));
-                (pi, r)
-            })
-            .collect()
-    });
-    let (mut started, mut failed) = (0, None);
-    for (pi, r) in results {
-        match r {
-            Ok(s) => {
-                if let Some(slot) = sessions.get_mut(pi) {
-                    *slot = Some(s);
-                    started += 1;
-                }
-            }
-            Err(e) => failed = Some(format!("{e:#}")),
-        }
-    }
-    (started, failed)
 }
 /// Stop every session on the way out. All process trees are killed from
 /// one process-table snapshot instead of one walk per session.

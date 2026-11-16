@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -19,6 +19,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
+    collections::HashMap,
     io::{self, IsTerminal, Write},
     sync::mpsc,
     thread,
@@ -127,16 +128,12 @@ fn install_panic_hook() {
     }));
 }
 
-/// Rows and columns left for a session's terminal inside the frame.
-fn pane_size(a: Size) -> (u16, u16) {
-    let side = sidebar_width(a.width);
-    (
-        a.height.saturating_sub(3).max(1),
-        a.width.saturating_sub(side).saturating_sub(2).max(1),
-    )
-}
-
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
+/// Longest one pass spends on queued input before it draws again. A paste on
+/// Windows arrives as one key event per character.
+const EVENT_BUDGET: Duration = Duration::from_millis(8);
+/// A session start that finished on its worker: the project's name and how it went.
+type Started = (String, Result<Session>);
 
 /// Everything the manager keeps between frames. `run` owns the terminal;
 /// `App` owns state, drawing and input handling.
@@ -234,6 +231,15 @@ struct App {
     history: Option<History>,
     /// The memory monitor (`M`), open over the manager.
     procs: Option<ProcList>,
+    /// Projects whose session is starting on a worker, each with the keys
+    /// typed at it meanwhile (sent once the session is up).
+    starting: HashMap<String, Vec<u8>>,
+    start_tx: mpsc::Sender<Started>,
+    start_rx: mpsc::Receiver<Started>,
+    /// Rows and columns the sessions were last sized to.
+    pane: (u16, u16),
+    /// `z`: a focused terminal takes the sidebar's columns too.
+    zoom: bool,
     quit: bool,
 }
 
@@ -257,6 +263,7 @@ impl App {
                 }
             }
         });
+        let (start_tx, start_rx) = mpsc::channel::<Started>();
         let (upd_tx, upd_rx) = mpsc::channel::<UpdateMsg>();
         if update_check_enabled() {
             let tx = upd_tx.clone();
@@ -324,7 +331,102 @@ impl App {
             resume: Vec::new(),
             history: None,
             procs: None,
+            starting: HashMap::new(),
+            start_tx,
+            start_rx,
+            pane: (0, 0),
+            zoom: false,
             quit: false,
+        }
+    }
+
+    /// Columns the sidebar takes of a frame `area_w` wide.
+    fn side_w(&self, area_w: u16) -> u16 {
+        if self.zoom && self.mode == Mode::Focus {
+            0
+        } else {
+            sidebar_width(area_w)
+        }
+    }
+
+    /// Rows and columns left for a session's terminal inside the frame.
+    fn pane_size(&self, a: Size) -> (u16, u16) {
+        (
+            a.height.saturating_sub(3).max(1),
+            a.width
+                .saturating_sub(self.side_w(a.width))
+                .saturating_sub(2)
+                .max(1),
+        )
+    }
+
+    /// Is project `pi`'s session being started right now?
+    fn is_starting(&self, pi: usize) -> bool {
+        self.cfg
+            .projects
+            .get(pi)
+            .is_some_and(|p| self.starting.contains_key(&p.name))
+    }
+
+    /// Start project `pi` on a worker: opening a PTY takes about 150 ms, too
+    /// long for the thread that reads keys. `finish_start` files the result.
+    /// A session already in the slot is stopped first, on the same worker, so
+    /// a restarted server finds its port free. `input` is typed into the new
+    /// session.
+    fn begin_start(&mut self, pi: usize, rows: u16, cols: u16, input: Vec<u8>) {
+        let Some(p) = self.cfg.projects.get(pi).cloned() else {
+            return;
+        };
+        if let Some(typed) = self.starting.get_mut(&p.name) {
+            typed.extend(input);
+            return;
+        }
+        let old = self.sessions.get_mut(pi).and_then(Option::take);
+        self.starting.insert(p.name.clone(), input);
+        let tx = self.start_tx.clone();
+        thread::spawn(move || {
+            drop(old);
+            // A panic must still answer, or the project would read "Starting" for good.
+            let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Session::spawn(&p, rows, cols)
+            }))
+            .unwrap_or_else(|_| Err(anyhow!("Starting {} panicked", p.name)));
+            let _ = tx.send((p.name, spawned));
+        });
+        self.dirty = true;
+    }
+
+    /// A start begun by `begin_start` came back.
+    fn finish_start(&mut self, (name, spawned): Started) {
+        let typed = self.starting.remove(&name).unwrap_or_default();
+        self.dirty = true;
+        let pi = self.cfg.projects.iter().position(|p| p.name == name);
+        match (pi, spawned) {
+            (Some(pi), Ok(mut s)) => {
+                // The window may have been resized (or zoomed) meanwhile.
+                let (rows, cols) = s.parser.screen().size();
+                if (rows.get(), cols.get()) != self.pane && self.pane != (0, 0) {
+                    let _ = s.resize(self.pane.0, self.pane.1);
+                }
+                if !typed.is_empty() {
+                    if let Err(e) = s.input(&typed) {
+                        self.message = (e.to_string(), Notice::Error);
+                    }
+                }
+                if let Some(old) = self.sessions.get_mut(pi).and_then(|o| o.replace(s)) {
+                    stop_in_background(old);
+                }
+            }
+            (Some(pi), Err(e)) => {
+                self.message = (format!("{e:#}"), Notice::Error);
+                // Nothing to type into: hand the keyboard back.
+                if self.mode == Mode::Focus && self.order.get(self.selected) == Some(&pi) {
+                    self.mode = Mode::Manager;
+                }
+            }
+            // Removed or renamed while it started: no row is left to show it.
+            (None, Ok(s)) => stop_in_background(s),
+            (None, Err(_)) => {}
         }
     }
 
@@ -381,13 +483,13 @@ impl App {
             pis.sort_unstable();
             pis.dedup();
             if !pis.is_empty() {
-                let (n, failed) =
-                    start_sessions(&mut self.sessions, &self.cfg.projects, &pis, rows, cols);
-                self.message = match failed {
-                    Some(e) => (format!("Autostart: {n} started; error: {e}"), Notice::Error),
-                    None => (format!("Autostarted {}.", plural_sessions(n)), Notice::Info),
-                };
-                self.dirty = true;
+                for &pi in &pis {
+                    self.begin_start(pi, rows, cols, Vec::new());
+                }
+                self.message = (
+                    format!("Autostarting {}.", plural_sessions(pis.len())),
+                    Notice::Info,
+                );
             }
         }
         if self.first {
@@ -398,25 +500,35 @@ impl App {
         }
     }
 
-    /// Start project `pi` unless it is running and hand it the keyboard; a
-    /// failed start says why and stays in the manager.
+    /// Start project `pi` unless it is running and hand it the keyboard at
+    /// once: keys typed while it starts are kept for it. A failed start says
+    /// why and returns to the manager (`finish_start`).
     fn open_session(&mut self, pi: usize, rows: u16, cols: u16) {
-        match start_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols) {
-            None => self.mode = Mode::Focus,
-            Some(e) => self.message = (e, Notice::Error),
+        if !slot_running(&self.sessions, pi) {
+            self.begin_start(pi, rows, cols, Vec::new());
         }
+        self.mode = Mode::Focus;
     }
 
-    /// Replace project `pi`'s session with a fresh one and say how it went.
+    /// Replace project `pi`'s session with a fresh one; a failure is
+    /// reported when it comes back.
     fn restart(&mut self, pi: usize, rows: u16, cols: u16) {
-        self.message = match restart_session(&mut self.sessions, &self.cfg.projects, pi, rows, cols)
-        {
-            None => (
-                format!("Restarted {}", self.cfg.projects[pi].name),
-                Notice::Info,
-            ),
-            Some(e) => (e, Notice::Error),
-        };
+        if let Some(p) = self.cfg.projects.get(pi) {
+            self.message = (format!("Restarting {}", p.name), Notice::Info);
+        }
+        self.begin_start(pi, rows, cols, Vec::new());
+    }
+
+    /// The pane changed size (window resize, zoom): tell every session.
+    fn resize_sessions(&mut self, rows: u16, cols: u16) {
+        self.sel = None;
+        self.pane = (rows, cols);
+        for s in self.sessions.iter_mut().flatten() {
+            if let Err(e) = s.resize(rows, cols) {
+                self.message = (e.to_string(), Notice::Error);
+            }
+        }
+        self.dirty = true;
     }
 
     /// Messages fade back to the idle hints; otherwise the last one would
@@ -436,6 +548,9 @@ impl App {
     /// Fold in measurements, update messages and finished sessions.
     fn pump(&mut self) {
         self.expire_message();
+        while let Ok(started) = self.start_rx.try_recv() {
+            self.finish_start(started);
+        }
         while let Ok(m) = self.res_rx.try_recv() {
             self.sampling = false;
             if let Some(snap) = m.sys {
@@ -647,7 +762,12 @@ impl App {
             .iter()
             .flatten()
             .any(|s| s.is_active(Duration::from_millis(1500)));
-        if recently_active || self.sampling || self.updating || self.dirty {
+        if recently_active
+            || self.sampling
+            || self.updating
+            || self.dirty
+            || !self.starting.is_empty()
+        {
             Duration::from_millis(10)
         } else if self
             .sessions
@@ -755,6 +875,8 @@ struct History {
     text: String,
     /// Columns the text is wrapped to, as last drawn.
     wrap_w: std::cell::Cell<u16>,
+    /// Seconds local time is ahead of UTC, for the list's time labels.
+    offset: i64,
 }
 impl History {
     fn open(project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
@@ -766,6 +888,7 @@ impl History {
             scroll: 0,
             text: String::new(),
             wrap_w: std::cell::Cell::new(u16::MAX),
+            offset: utc_offset_secs(),
         };
         h.load();
         h
@@ -843,7 +966,11 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     let mut title = String::new();
     loop {
         let area = terminal.size()?;
-        let (rows, cols) = pane_size(area);
+        // One resize per pass, however many resize events a window drag sent.
+        let (rows, cols) = app.pane_size(area);
+        if (rows, cols) != app.pane {
+            app.resize_sessions(rows, cols);
+        }
         app.animate();
         app.start_initial(rows, cols);
         app.pump();
@@ -869,23 +996,33 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
         if !event::poll(app.poll_duration())? {
             continue;
         }
-        for batch_idx in 0..16 {
-            if batch_idx > 0 && !event::poll(Duration::ZERO)? {
-                break;
-            }
+        let batch = Instant::now();
+        loop {
             match event::read()? {
-                Event::Resize(_, _) => app.on_resize(terminal.size()?),
+                // The next pass sees the new size and resizes the sessions once.
+                Event::Resize(_, _) => app.dirty = true,
                 Event::Paste(data) => app.on_paste(data),
                 Event::Mouse(m) => app.on_mouse(m, area, rows, cols),
                 Event::Key(k) if k.kind != KeyEventKind::Release => app.on_key(k, rows, cols),
                 _ => {}
             }
-            if app.quit {
+            if app.quit || batch.elapsed() >= EVENT_BUDGET || !event::poll(Duration::ZERO)? {
                 break;
             }
         }
         if app.quit {
             break;
+        }
+    }
+    // Starts still in flight join the rest, so shutdown stops them too.
+    let end = Instant::now() + Duration::from_secs(2);
+    while !app.starting.is_empty() {
+        match app
+            .start_rx
+            .recv_timeout(end.saturating_duration_since(Instant::now()))
+        {
+            Ok(started) => app.finish_start(started),
+            Err(_) => break,
         }
     }
     let relaunch = app.relaunch.then(|| app.relaunch_args());
@@ -897,6 +1034,7 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
         }
     }
     shutdown_all(&mut app.sessions);
+    wait_for_stops(Duration::from_secs(2));
     history::flush(Duration::from_secs(3));
     Ok(relaunch)
 }

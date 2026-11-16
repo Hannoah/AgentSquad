@@ -270,11 +270,20 @@ fn hook_settings_file_runs_squad_hook_stop() {
 fn sitreps_list_newest_first_with_readable_labels() {
     use crate::ledger::{sitrep_label, sitreps};
     assert_eq!(
-        sitrep_label("20261108T061200Z-add-auth.md"),
+        sitrep_label("20261108T061200Z-add-auth.md", 0),
         "11-08 06:12 add-auth"
     );
+    // Shown in local time: nine hours ahead, and over midnight into the next day.
     assert_eq!(
-        sitrep_label("notes.md"),
+        sitrep_label("20261108T061200Z-add-auth.md", 9 * 3600),
+        "11-08 15:12 add-auth"
+    );
+    assert_eq!(
+        sitrep_label("20261231T200000Z-auto.md", 9 * 3600),
+        "01-01 05:00 auto"
+    );
+    assert_eq!(
+        sitrep_label("notes.md", 9 * 3600),
         "notes",
         "unstamped names pass through"
     );
