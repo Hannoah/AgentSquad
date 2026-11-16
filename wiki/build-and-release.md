@@ -24,7 +24,7 @@
 4. 커밋, `main`에 푸시, `git tag vX.Y.Z`, 태그 푸시.
 5. 워크플로 결과와 릴리스 에셋을 확인한다.
 
-이 PC에는 `gh`가 없어서 공개 API로 확인했다:
+`gh`가 설치·로그인되어 있으면 `gh run view <id>`, `gh run rerun <id> --failed`, `gh release view vX.Y.Z`로 확인한다(2026-11-16부터 이 PC에 있음). 없으면 공개 API로 확인한다:
 `https://api.github.com/repos/Hannoah/AgentSquad/actions/runs` 와 `.../releases/tags/vX.Y.Z`.
 
 ## 코드 서명 (SignPath Foundation)
