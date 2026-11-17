@@ -148,13 +148,18 @@ fn snapshot_table() -> ProcTable {
     table
 }
 
-/// `ps` CPU time ("1:02.34" or "1:02:03.45") in 100 ns units; 0 when unreadable.
-#[cfg(unix)]
-fn parse_cputime(s: &str) -> u64 {
-    let secs = s
+/// `ps` CPU time ("1:02.34", "1:02:03.45", or "1-02:03:04") in 100 ns units; 0 when unreadable.
+#[cfg(any(unix, test))]
+pub(crate) fn parse_cputime(s: &str) -> u64 {
+    let (days, rest) = match s.trim().split_once('-') {
+        Some((d, r)) => (d.parse::<f64>().ok().unwrap_or(0.0), r),
+        None => (0.0, s.trim()),
+    };
+    let secs = rest
         .split(':')
         .try_fold(0.0f64, |acc, p| Some(acc * 60.0 + p.parse::<f64>().ok()?));
-    (secs.unwrap_or(0.0) * 1e7) as u64
+    let total = secs.map(|v| days * 86_400.0 + v).unwrap_or(0.0);
+    (total * 1e7) as u64
 }
 
 #[cfg(unix)]
@@ -564,25 +569,19 @@ pub(crate) fn ancestors_of(pid: u32, parents: &HashMap<u32, u32>) -> Vec<u32> {
 fn base_name(name: &str) -> String {
     name.rsplit('/').next().unwrap_or(name).to_string()
 }
-/// Fill the parent fields of a process from one snapshot.
+/// Fill parent and ancestor fields only for the retained top entries.
 #[cfg(any(windows, unix))]
-fn relate(
-    pid: u32,
-    name: String,
-    mem: u64,
-    cpu_secs: u64,
-    parents: &HashMap<u32, u32>,
+fn fill_relations(
+    top: &mut [ProcInfo],
+    children: &HashMap<u32, Vec<u32>>,
     names: &HashMap<u32, String>,
-) -> ProcInfo {
-    let ppid = parents.get(&pid).copied().unwrap_or(0);
-    ProcInfo {
-        pid,
-        name,
-        mem,
-        ppid,
-        parent: names.get(&ppid).map(|n| base_name(n)).unwrap_or_default(),
-        cpu_secs,
-        ancestors: ancestors_of(pid, parents),
+) {
+    let parents = parent_map(children);
+    for it in top {
+        let ppid = parents.get(&it.pid).copied().unwrap_or(0);
+        it.ppid = ppid;
+        it.parent = names.get(&ppid).map(|n| base_name(n)).unwrap_or_default();
+        it.ancestors = ancestors_of(it.pid, &parents);
     }
 }
 /// The `n` biggest by RAM, ties by pid so the order never flickers.
@@ -596,24 +595,26 @@ fn sort_top(mut all: Vec<ProcInfo>, n: usize) -> Vec<ProcInfo> {
 #[cfg(unix)]
 pub fn top_processes(n: usize) -> Vec<ProcInfo> {
     let t = snapshot_table();
-    let parents = parent_map(&t.children);
     let all = t
         .names
         .iter()
         .filter_map(|(&pid, name)| {
             let &(cpu, mem) = t.usage.get(&pid)?;
             // `comm` is a full path on macOS; the file name is what people know.
-            Some(relate(
+            Some(ProcInfo {
                 pid,
-                base_name(name),
+                name: base_name(name),
                 mem,
-                cpu / 10_000_000,
-                &parents,
-                &t.names,
-            ))
+                ppid: 0,
+                parent: String::new(),
+                cpu_secs: cpu / 10_000_000,
+                ancestors: Vec::new(),
+            })
         })
         .collect();
-    sort_top(all, n)
+    let mut top = sort_top(all, n);
+    fill_relations(&mut top, &t.children, &t.names);
+    top
 }
 #[cfg(windows)]
 pub fn top_processes(n: usize) -> Vec<ProcInfo> {
@@ -625,7 +626,6 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
         },
     };
     let t = snapshot_table();
-    let parents = parent_map(&t.children);
     let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
     let all = t
         .names
@@ -655,18 +655,21 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
                         0
                     };
                 CloseHandle(handle);
-                ok.then_some(relate(
+                ok.then_some(ProcInfo {
                     pid,
-                    name.clone(),
-                    counters.WorkingSetSize as u64,
-                    cpu,
-                    &parents,
-                    &t.names,
-                ))
+                    name: name.clone(),
+                    mem: counters.WorkingSetSize as u64,
+                    ppid: 0,
+                    parent: String::new(),
+                    cpu_secs: cpu,
+                    ancestors: Vec::new(),
+                })
             }
         })
         .collect();
-    sort_top(all, n)
+    let mut top = sort_top(all, n);
+    fill_relations(&mut top, &t.children, &t.names);
+    top
 }
 #[cfg(not(any(unix, windows)))]
 pub fn top_processes(_n: usize) -> Vec<ProcInfo> {

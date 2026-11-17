@@ -372,7 +372,12 @@ pub fn confirm_restart_lines(name: &str) -> Vec<Line<'static>> {
 /// Quit-confirm modal body: same key-hint styling as the stop modal.
 pub fn confirm_quit_lines(n: usize) -> Vec<Line<'static>> {
     vec![
-        Line::from(confirm_quit_prompt(n)),
+        Line::from(Span::styled(
+            confirm_quit_prompt(n),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from(hint_spans(&[("y", "quits"), ("n / Esc", "cancels")])),
     ]
@@ -419,16 +424,24 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
     if running {
         vec![
             ('1', "Focus terminal"),
-            ('2', "Stop session…"),
-            ('3', "Restart session…"),
-            ('4', "Remove project…"),
-            ('5', "Set superior…"),
+            ('2', "Send message…"),
+            ('3', "Stop session…"),
+            ('4', "Restart session…"),
+            ('5', "Edit project…"),
+            ('6', "View history"),
+            ('7', "Toggle pin"),
+            ('8', "Set superior…"),
+            ('9', "Remove project…"),
         ]
     } else {
         vec![
             ('1', "Start and focus"),
-            ('2', "Remove project…"),
-            ('3', "Set superior…"),
+            ('2', "Send message…"),
+            ('3', "Edit project…"),
+            ('4', "View history"),
+            ('5', "Toggle pin"),
+            ('6', "Set superior…"),
+            ('7', "Remove project…"),
         ]
     }
 }
@@ -567,7 +580,10 @@ pub fn confirm_click(
         .iter()
         .map(|s| s.content.as_ref())
         .collect();
-    let yes_w = text.find(" | ").unwrap_or(text.len()) as u16;
+    let yes_w = text.find(" | ").map_or_else(
+        || crate::config::width(&text),
+        |i| crate::config::width(&text[..i]),
+    ) as u16;
     Some(col - left < yes_w)
 }
 /// The SITREP reader: nearly the whole screen, shared by drawing and clicks.
@@ -602,16 +618,17 @@ pub fn procs_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     )
 }
 /// The memory monitor's process list inside `popup`: what is left after the
-/// border, the detail box (only when there is room) and the footer row.
+/// border, the optional column header, the detail box and the footer row.
 pub fn procs_list_rect(popup: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    let header_h: u16 = u16::from(inner.height >= 4);
     let detail_h: u16 = if inner.height >= 12 { 5 } else { 0 };
     let h = inner
         .height
-        .saturating_sub(detail_h + 1)
+        .saturating_sub(header_h + detail_h + 1)
         .max(1)
-        .min(inner.height);
-    ratatui::layout::Rect::new(inner.x, inner.y, inner.width, h)
+        .min(inner.height.saturating_sub(header_h));
+    ratatui::layout::Rect::new(inner.x, inner.y + header_h, inner.width, h)
 }
 pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));

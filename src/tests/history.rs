@@ -30,6 +30,18 @@ fn entry_says_what_happened_without_the_agent() {
     assert!(text.contains("done: added login\n```"), "tail is trimmed");
     let empty = render(&task(), &[], &[]);
     assert_eq!(empty.matches("(none seen)").count(), 2);
+    let fenced = render(
+        &Task {
+            tail: "```rust\nlet a = 1;\n```".into(),
+            ..task()
+        },
+        &[],
+        &[],
+    );
+    assert!(
+        fenced.contains("````\n```rust\nlet a = 1;\n```\n````"),
+        "outer fence expands beyond embedded backticks:\n{fenced}"
+    );
 }
 
 #[test]

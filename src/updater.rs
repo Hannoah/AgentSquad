@@ -277,7 +277,25 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
         bail!("Could not unpack the download");
     }
     let new_exe = work.join(BIN);
-    let said = quiet(&new_exe).arg("--version").output()?;
+    // An AV scanner may briefly lock a freshly unpacked executable; retry before failing.
+    let mut said = None;
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_millis(500 * attempt));
+        }
+        match quiet(&new_exe).arg("--version").output() {
+            Ok(out) => {
+                said = Some(out);
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let said = match said {
+        Some(out) => out,
+        None => return Err(last_err.unwrap().into()),
+    };
     let said = String::from_utf8_lossy(&said.stdout);
     let want = format!("squad {}", tag.trim_start_matches('v'));
     if said.trim() != want {

@@ -47,7 +47,7 @@ impl App {
         (row.saturating_sub(inner.y), col.saturating_sub(inner.x))
     }
 
-    pub(super) fn on_mouse(&mut self, m: MouseEvent, area: Size, rows: u16, cols: u16) {
+    pub(crate) fn on_mouse(&mut self, m: MouseEvent, area: Size, rows: u16, cols: u16) {
         if matches!(m.kind, MouseEventKind::Down(_)) || wheel_lines(m.kind).is_some() {
             self.sel = None; // the cells would no longer match the text
         }
@@ -225,7 +225,7 @@ impl App {
                 }
             } else if self.confirm_update {
                 if outside_modal {
-                    self.confirm_update = false;
+                    self.dismiss_update();
                     self.dirty = true;
                 }
             } else if self.confirm_apply {
@@ -373,15 +373,20 @@ impl App {
                 // Pressing in the terminal pane focuses a live session and may
                 // start a drag-selection. A session that is not running keeps
                 // its last output on screen (to copy from) and restarts only
-                // when released without a drag.
+                // when released without a drag. With zoom on in Manager mode,
+                // defer focusing a slot until MouseUp so a drag does not widen
+                // `pane_rect` mid-selection.
                 if let Some(&pi) = self.order.get(self.selected) {
                     let slot = self.sessions.get(pi).is_some_and(|o| o.is_some());
                     let live = slot && slot_running(&self.sessions, pi);
                     let inner = self.pane_rect.inner(ratatui::layout::Margin::new(1, 1));
-                    if slot && inner.contains(ratatui::layout::Position::new(m.column, m.row)) {
+                    let can_select =
+                        slot && inner.contains(ratatui::layout::Position::new(m.column, m.row));
+                    if can_select {
                         self.sel = Some(Selection::new(pi, self.pane_cell(m)));
                     }
-                    if live || !slot {
+                    let defer_zoom = can_select && self.zoom && self.mode == Mode::Manager;
+                    if !defer_zoom && (live || !slot) {
                         self.open_session(pi, rows, cols);
                     }
                 }
@@ -405,10 +410,13 @@ impl App {
             match self.sel {
                 // A drag copies the moment the button comes up.
                 Some(sel) if sel.moved => self.copy_selection(),
-                // A plain click on a session that is not running restarts it.
+                // A plain click on a stopped session restarts it, or focuses a
+                // deferred zoomed pane.
                 Some(sel) => {
                     self.sel = None;
-                    if !slot_running(&self.sessions, sel.pi) {
+                    if !slot_running(&self.sessions, sel.pi)
+                        || (self.zoom && self.mode == Mode::Manager)
+                    {
                         self.open_session(sel.pi, rows, cols);
                     }
                 }

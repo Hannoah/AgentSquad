@@ -43,8 +43,21 @@ pub fn render(t: &Task, files: &[String], commits: &[String]) -> String {
             items.iter().map(|i| format!("- {i}\n")).collect()
         }
     };
+    let tail = t.tail.trim_end();
+    // Use a fence longer than any backtick run in `tail` so embedded code blocks stay intact.
+    let mut max_run = 0usize;
+    let mut cur = 0usize;
+    for b in tail.bytes() {
+        if b == b'`' {
+            cur += 1;
+            max_run = max_run.max(cur);
+        } else {
+            cur = 0;
+        }
+    }
+    let fence = "`".repeat(max_run.max(2) + 1);
     format!(
-        "# {} - {}\n\n- Ended: {}\n- Took: {}\n- Folder: {}\n- Command: {}\n\n## Files changed during the task\n\n{}\n## Commits during the task\n\n{}\n## Last output\n\n```\n{}\n```\n",
+        "# {} - {}\n\n- Ended: {}\n- Took: {}\n- Folder: {}\n- Command: {}\n\n## Files changed during the task\n\n{}\n## Commits during the task\n\n{}\n## Last output\n\n{fence}\n{}\n{fence}\n",
         t.project,
         t.outcome,
         utc_stamp(secs(t.started + t.took)),
@@ -53,7 +66,7 @@ pub fn render(t: &Task, files: &[String], commits: &[String]) -> String {
         t.command,
         list(files),
         list(commits),
-        t.tail.trim_end(),
+        tail,
     )
 }
 

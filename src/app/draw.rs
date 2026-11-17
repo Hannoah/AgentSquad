@@ -12,7 +12,7 @@ fn modal(f: &mut Frame, title: &str, color: Color, lines: Vec<Line<'static>>) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(Line::from(Span::styled(
-                    title.to_string(),
+                    format!(" {title} "),
                     Style::default()
                         .fg(color)
                         .add_modifier(ratatui::style::Modifier::BOLD),
@@ -39,7 +39,7 @@ fn scrollbar(f: &mut Frame, area: Rect, len: usize, pos: usize) {
 const PICK_ROWS: usize = 6;
 
 impl App {
-    pub(super) fn draw(&mut self, f: &mut Frame) {
+    pub(crate) fn draw(&mut self, f: &mut Frame) {
         let sidebar = self.side_w(f.area().width);
         let vertical = Layout::default()
             .direction(Direction::Vertical)
@@ -95,15 +95,18 @@ impl App {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(Line::from(Span::styled(
-                format!(
-                    "History: {} ({}) ↑↓/click pick · PgUp/PgDn/wheel scroll · Esc closes",
-                    h.project,
-                    h.items.len()
-                ),
+                format!(" History: {} ({}) ", h.project, h.items.len()),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(ratatui::style::Modifier::BOLD),
-            )));
+            )))
+            .title_bottom(
+                Line::from(Span::styled(
+                    " ↑↓/j/k pick · PgUp/PgDn/J/K/wheel scroll · Esc closes ",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
         f.render_widget(block, popup);
         let (left_col, right_col) = history_cols(popup);
         let rows = usize::from(left_col.height).max(1);
@@ -116,28 +119,50 @@ impl App {
             .skip(start)
             .take(rows)
             .map(|(i, (name, _))| {
+                let is_auto = crate::history::is_auto(name);
                 let style = if i == h.sel {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
-                } else {
+                    Style::default()
+                        .bg(Color::Cyan)
+                        .fg(Color::Black)
+                        .add_modifier(ratatui::style::Modifier::BOLD)
+                } else if is_auto {
                     Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(ratatui::style::Modifier::BOLD)
                 };
-                Line::from(Span::styled(
-                    crate::ledger::sitrep_label(name, h.offset),
-                    style,
-                ))
+                let mark = if i == h.sel { "▸ " } else { "  " };
+                let label = fit(
+                    &crate::ledger::sitrep_label(name, h.offset),
+                    usize::from(left_col.width).saturating_sub(2),
+                );
+                Line::from(Span::styled(format!("{mark}{label}"), style))
             })
             .collect();
         f.render_widget(Paragraph::new(list), left_col);
         h.wrap_w.set(right_col.width.saturating_sub(1)); // less the left border
         let scroll = h.scroll.min(h.max_scroll());
+        let line_count = h.rows();
+        let mut right_block = Block::default().borders(Borders::LEFT);
+        if line_count > usize::from(right_col.height) {
+            let max_s = h.max_scroll().max(1);
+            let pct = (u32::from(scroll) * 100 / u32::from(max_s)).min(100);
+            right_block = right_block.title_bottom(
+                Line::from(Span::styled(
+                    format!(" {pct}% "),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
+        }
         f.render_widget(
             Paragraph::new(h.text.as_str())
                 .wrap(ratatui::widgets::Wrap { trim: false })
                 .scroll((scroll, 0))
-                .block(Block::default().borders(Borders::LEFT)),
+                .block(right_block),
             right_col,
         );
-        let line_count = h.rows();
         if line_count > usize::from(right_col.height) {
             scrollbar(f, popup, line_count, usize::from(scroll));
         }
@@ -154,28 +179,46 @@ impl App {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(Line::from(Span::styled(
-                "Memory: biggest processes ↑↓/PgUp/PgDn pick · x kill · r refresh · Esc closes",
+                " Memory: biggest processes ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(ratatui::style::Modifier::BOLD),
-            )));
+            )))
+            .title_bottom(
+                Line::from(Span::styled(
+                    " ↑↓/PgUp/PgDn pick · x kill · r refresh · Esc closes ",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
         let inner = block.inner(popup);
         f.render_widget(block, popup);
         if inner.height == 0 {
             return;
         }
+        let header_h: u16 = u16::from(inner.height >= 4);
         // Detail box for the picked process, then the footer row that carries
         // the kill question so it never hides in the list.
         let detail_h: u16 = if inner.height >= 12 { 5 } else { 0 };
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Length(header_h),
                 Constraint::Min(1),
                 Constraint::Length(detail_h),
                 Constraint::Length(1),
             ])
             .split(inner);
-        let rows = usize::from(parts[0].height).max(1);
+        if header_h > 0 {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("{:>7}  {:>8}  Process", "RAM", "PID"),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))),
+                parts[0],
+            );
+        }
+        let rows = usize::from(parts[1].height).max(1);
         let start = p.top.get().min(p.sel).max((p.sel + 1).saturating_sub(rows));
         p.top.set(start);
         let name_w = usize::from(inner.width).saturating_sub(18);
@@ -213,7 +256,7 @@ impl App {
                 Line::from(spans)
             })
             .collect();
-        f.render_widget(Paragraph::new(list), parts[0]);
+        f.render_widget(Paragraph::new(list), parts[1]);
         if p.items.len() > rows {
             scrollbar(f, popup, p.items.len(), p.sel);
         }
@@ -247,10 +290,10 @@ impl App {
                 Paragraph::new(text)
                     .wrap(ratatui::widgets::Wrap { trim: false })
                     .block(Block::default().borders(Borders::TOP)),
-                parts[1],
+                parts[2],
             );
         }
-        let foot = parts[2];
+        let foot = parts[3];
         let line = match &p.confirm {
             Some(t) => {
                 let mut spans = vec![Span::styled(
@@ -316,21 +359,21 @@ impl App {
                 any = true;
                 n += 1;
                 let p = &self.cfg.projects[pi];
-                let status_text = self.sessions[pi]
-                    .as_ref()
+                let sess = self.sessions[pi].as_ref();
+                let is_running = sess.is_some_and(|s| s.status.is_running());
+                let needs_att = sess.is_some_and(|s| s.status.needs_attention());
+                let status_text = sess
                     .map(|s| s.status.label())
                     .unwrap_or(std::borrow::Cow::Borrowed(self.idle_word(pi)));
                 let status: &str = &status_text;
-                let fg = self.sessions[pi]
-                    .as_ref()
-                    .and_then(|s| s.fg_name.as_deref());
+                let fg = sess.and_then(|s| s.fg_name.as_deref());
                 let tree = rank_prefix(&self.cfg.projects, pi);
                 let pin = if p.pinned { "*" } else { "" };
                 let shown = format!("{tree}{}{pin}", live_name(p, fg));
                 let shown_name: &str = &shown;
                 let mut detail = String::new();
-                if status == "Running" {
-                    if let Some(s) = self.sessions[pi].as_ref() {
+                if is_running {
+                    if let Some(s) = sess {
                         if let Some(started) = s.started {
                             detail.push(' ');
                             detail.push_str(&uptime_label(started.elapsed().as_secs()));
@@ -361,13 +404,13 @@ impl App {
                 let mark = if Some(pi) == sel_pi { "▎" } else { " " };
                 let row_style = if Some(pi) == sel_pi {
                     selected_row_style()
-                } else if status == "Running" {
+                } else if is_running {
                     Style::default().add_modifier(ratatui::style::Modifier::BOLD)
                 } else {
                     Style::default().add_modifier(ratatui::style::Modifier::DIM)
                 };
-                let agent_phase = if p.kind == Kind::Agent && status == "Running" {
-                    self.sessions[pi].as_ref().map(|s| s.phase())
+                let agent_phase = if p.kind == Kind::Agent && is_running {
+                    sess.map(|s| s.phase())
                 } else {
                     None
                 };
@@ -395,11 +438,11 @@ impl App {
                             AgentPhase::Done => (Color::Green, true),
                             AgentPhase::Idle => (Color::DarkGray, false),
                         }
-                    } else if status == "Running" {
+                    } else if is_running {
                         (Color::Green, true)
-                    } else if status.starts_with("Error")
-                        || (status.starts_with("Exited") && !status.ends_with("(0)"))
-                    {
+                    } else if status == "Starting" {
+                        (Color::Cyan, true)
+                    } else if needs_att {
                         (Color::Red, true)
                     } else {
                         (Color::DarkGray, false)
@@ -419,8 +462,10 @@ impl App {
                 let prefix = format!("{mark}{n} ");
                 let status_full = if let Some(ph) = agent_phase {
                     ph.icon(self.tick).0
-                } else if status == "Running" {
+                } else if is_running {
                     format!("{}", status_glyph(status, self.tick))
+                } else if status == "Starting" {
+                    format!("{} Starting", spinner_frame(self.tick))
                 } else {
                     format!("{} {status}", status_glyph(status, self.tick))
                 };
@@ -478,13 +523,21 @@ impl App {
                     .and_then(|s| s.prompt_hint.as_deref())
                 {
                     targets.push(Some(n - 1));
-                    items.push(ListItem::new(Line::from(vec![
-                        Span::raw("   "),
+                    let sub_bar = if needs_input {
                         Span::styled(
-                            fit(ask, inner_w.saturating_sub(3)),
+                            "▎  ",
                             Style::default()
                                 .fg(Color::Yellow)
-                                .add_modifier(ratatui::style::Modifier::DIM),
+                                .add_modifier(ratatui::style::Modifier::BOLD),
+                        )
+                    } else {
+                        Span::raw("   ")
+                    };
+                    items.push(ListItem::new(Line::from(vec![
+                        sub_bar,
+                        Span::styled(
+                            fit(ask, inner_w.saturating_sub(3)),
+                            Style::default().fg(Color::Yellow),
                         ),
                     ])));
                 }
@@ -568,37 +621,30 @@ impl App {
 
     pub(super) fn draw_pane(&self, f: &mut Frame, panel: Rect) {
         let sel_pi = self.order.get(self.selected).copied();
-        let (sel_status_text, sel_uptime): (std::borrow::Cow<'static, str>, Option<u64>) = sel_pi
-            .and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref()))
-            .map(|s| (s.status.label(), s.started.map(|t| t.elapsed().as_secs())))
-            .unwrap_or((
-                std::borrow::Cow::Borrowed(sel_pi.map_or("Stopped", |pi| self.idle_word(pi))),
-                None,
-            ));
+        let sel_session = sel_pi
+            .and_then(|pi| self.sessions.get(pi))
+            .and_then(|o| o.as_ref());
+        let (sel_status_text, sel_uptime): (std::borrow::Cow<'static, str>, Option<u64>) =
+            sel_session
+                .map(|s| (s.status.label(), s.started.map(|t| t.elapsed().as_secs())))
+                .unwrap_or((
+                    std::borrow::Cow::Borrowed(sel_pi.map_or("Stopped", |pi| self.idle_word(pi))),
+                    None,
+                ));
         let sel_status: &str = &sel_status_text;
-        let sel_fg = sel_pi
-            .and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref()))
-            .and_then(|s| s.fg_name.as_deref());
-        let usage_note = sel_pi
-            .and_then(|pi| self.sessions.get(pi))
-            .and_then(|o| o.as_ref())
-            .and_then(|s| s.usage)
-            .map(pane_usage_note);
-        let scroll_note = sel_pi
-            .and_then(|pi| self.sessions.get(pi))
-            .and_then(|o| o.as_ref())
+        let sel_fg = sel_session.and_then(|s| s.fg_name.as_deref());
+        let usage_note = sel_session.and_then(|s| s.usage).map(pane_usage_note);
+        let scroll_note = sel_session
             .map(|s| s.parser.screen().scrollback())
             .filter(|&n| n > 0)
-            .map(|n| format!("history {n}"));
+            .map(|n| format!("↑ history {n} · Shift+End live"));
+        let zoom_note = (self.zoom && self.mode == Mode::Focus).then(|| "ZOOM".to_string());
         // The mode shows in the border color and the status-bar chip, so the
         // title keeps only what the session is and how it is doing.
         let title = sel_pi
             .and_then(|pi| self.cfg.projects.get(pi))
             .map(|p| {
-                let sel_phase = sel_pi
-                    .and_then(|pi| self.sessions.get(pi))
-                    .and_then(|o| o.as_ref())
-                    .map(|s| s.phase());
+                let sel_phase = sel_session.map(|s| s.phase());
                 let (disp_status, disp_style) =
                     pane_status_display(sel_status, sel_uptime, self.tick, p.kind, sel_phase);
                 Line::from(vec![
@@ -643,9 +689,9 @@ impl App {
             .border_type(BorderType::Rounded)
             .border_style(pane_border_style(self.mode == Mode::Focus))
             .title(title);
-        // Usage and scroll position ride on the right edge; on a narrow pane
-        // they would collide with the title, so they step aside.
-        let right_note = [usage_note, scroll_note]
+        // Usage, scroll position, and zoom indicator ride on the right edge;
+        // on a narrow pane only a compact ZOOM badge stays.
+        let right_note = [zoom_note.clone(), usage_note, scroll_note]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -658,10 +704,20 @@ impl App {
                 ))
                 .right_aligned(),
             );
+        } else if zoom_note.is_some() && panel.width >= 24 {
+            block = block.title_top(
+                Line::from(Span::styled(
+                    " ZOOM ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ))
+                .right_aligned(),
+            );
         }
         let inner = block.inner(panel);
         f.render_widget(block, panel);
-        if let Some(s) = sel_pi.and_then(|pi| self.sessions.get(pi).and_then(|o| o.as_ref())) {
+        if let Some(s) = sel_session {
             let screen = s.parser.screen();
             s.paint(f.buffer_mut(), inner);
             if let Some(sel) = self.sel.filter(|x| x.moved && Some(x.pi) == sel_pi) {
@@ -720,9 +776,60 @@ impl App {
                     f.set_cursor_position((inner.x + c, inner.y + r));
                 }
             }
+        } else if let Some(pi) = sel_pi.filter(|&pi| !self.is_starting(pi)) {
+            let p = &self.cfg.projects[pi];
+            let max_val = usize::from(inner.width).saturating_sub(14).max(10);
+            let mut card = vec![
+                Line::from(vec![
+                    Span::styled(
+                        p.name.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("[{}]", p.kind.as_str()),
+                        Style::default()
+                            .fg(kind_color(p.kind))
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Folder   ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(shorten_middle(&p.path.display().to_string(), max_val)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Command  ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(fit(&join_command(&p.command), max_val)),
+                ]),
+            ];
+            if let Some(sup) = &p.reports_to {
+                card.push(Line::from(vec![
+                    Span::styled("Reports  ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(sup.clone()),
+                ]));
+            }
+            if p.autostart {
+                card.push(Line::from(vec![
+                    Span::styled("Auto     ", Style::default().fg(Color::DarkGray)),
+                    Span::raw("starts with manager"),
+                ]));
+            }
+            card.push(Line::from(""));
+            card.push(Line::from(hint_spans(&[
+                ("Enter", "start"),
+                ("m", "message"),
+                ("e", "edit"),
+            ])));
+            let pad = inner.height.saturating_sub(card.len() as u16) / 2;
+            let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
+            lines.extend(card);
+            f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
         } else {
             let body = if sel_pi.is_some_and(|pi| self.is_starting(pi)) {
-                vec!["Starting…".to_string()]
+                vec![format!("{} Starting…", spinner_frame(self.tick))]
             } else if !self.cfg.projects.is_empty() && self.order.is_empty() {
                 filtered_empty_state_lines(&self.filter_buf.as_str())
             } else {
@@ -839,27 +946,28 @@ impl App {
                 .and_then(|pi| self.cfg.projects.get(pi))
                 .map(|p| p.name.as_str())
                 .unwrap_or("?");
-            let label = match self.send_to {
-                SendTo::One => format!("Send to {name}: "),
-                SendTo::All => format!("Order to all under {name}: "),
-                SendTo::Under => format!("{name} reports to (empty clears): "),
+            let (label, hint) = match self.send_to {
+                SendTo::One => (format!("Send to {name}: "), " (Enter sends, Esc cancels)"),
+                SendTo::All => (
+                    format!("Order to all under {name}: "),
+                    " (Enter sends, Esc cancels)",
+                ),
+                SendTo::Under => (
+                    format!("{name} reports to (empty clears): "),
+                    " (Tab completes, Enter saves, Esc cancels)",
+                ),
             };
-            bar.extend(input_line(
-                label,
-                &self.send_buf,
-                " (Enter sends, Esc cancels)".to_string(),
-                input_w,
-            ));
+            bar.extend(input_line(label, &self.send_buf, hint.to_string(), input_w));
         } else if self.mode == Mode::Add {
             bar.extend(fitted_hints(Mode::Add, input_w));
-        } else if self.mode == Mode::Help && self.message.0 == mode_hints(Mode::Manager) {
+        } else if self.mode == Mode::Help && self.message.0 == self.hints {
             bar.extend(fitted_hints(Mode::Help, input_w));
-        } else if self.message.0 == mode_hints(Mode::Manager) {
+        } else if self.message.0 == self.hints {
             // Idle hints recede so action feedback stands out.
             bar.extend(fitted_hints(Mode::Manager, input_w));
         } else {
             bar.push(Span::styled(
-                self.message.0.clone(),
+                fit(&self.message.0, input_w),
                 notice_style(self.message.1),
             ));
         }
@@ -936,7 +1044,7 @@ impl App {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(Line::from(Span::styled(
-                        "Help (?/Esc closes)",
+                        " Help (?/Esc closes) ",
                         Style::default()
                             .fg(Color::White)
                             .add_modifier(ratatui::style::Modifier::BOLD),
@@ -1065,25 +1173,47 @@ impl App {
         }
     }
 
-    /// The rows of `add_picks` on screen: at most `PICK_ROWS`, scrolled so the
-    /// highlighted one stays visible. Only the Path field lists folders.
+    /// The rows of `add_picks` on screen: at most `PICK_ROWS`, scrolled smoothly
+    /// via `keep_visible` so stepping up/down never jumps early.
     pub(super) fn add_pick_window(&self) -> std::ops::Range<usize> {
         if self.add_field != 0 {
             return 0..0;
         }
         let n = self.add_picks.len();
-        let start = self
-            .add_sel
-            .map_or(0, |s| (s + 1).saturating_sub(PICK_ROWS));
+        let max_start = n.saturating_sub(PICK_ROWS);
+        let start = match self.add_sel {
+            Some(s) => keep_visible(self.add_top.get().min(max_start), s, PICK_ROWS),
+            None => 0,
+        };
+        self.add_top.set(start);
         start..(start + PICK_ROWS).min(n)
+    }
+
+    fn add_err_lines(&self, max_w: usize) -> Vec<Line<'static>> {
+        if self.add_err.is_empty() {
+            return Vec::new();
+        }
+        let msg = format!("Error: {}", self.add_err);
+        let w = max_w.max(10);
+        let mut out = Vec::new();
+        let mut rest = msg.as_str();
+        while !rest.is_empty() {
+            let chunk = take_cols(rest.chars(), w);
+            let len = chunk.len().max(1);
+            out.push(Line::from(Span::styled(
+                rest[..len].to_string(),
+                Style::default().fg(Color::Red),
+            )));
+            rest = &rest[len..];
+        }
+        out
     }
 
     /// The add form's popup; its height follows the rows it shows.
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
-        let rows = 5
-            + self.add_list_h()
-            + u16::from(self.add_status().is_some())
-            + u16::from(!self.add_err.is_empty());
+        let modal_w = usize::from(72u16.min(area.width)).saturating_sub(2);
+        let err_rows = self.add_err_lines(modal_w).len() as u16;
+        let rows = 5 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
         fixed_rect(72, rows + 2, area)
     }
 
@@ -1103,6 +1233,7 @@ impl App {
         } else {
             format!("{n}")
         };
+        let noun = if n == 1 { "folder" } else { "folders" };
         let header = match self.add_picks.first() {
             None => String::new(),
             Some(_) if typed.is_empty() => {
@@ -1111,7 +1242,11 @@ impl App {
             Some((label, full)) => {
                 let dir = full.strip_suffix(label.as_str()).unwrap_or("");
                 let dir = shorten_middle(dir.trim_start_matches('"'), modal_w.saturating_sub(40));
-                format!("  in {dir} · {count_note} folders · ↑↓/wheel Enter")
+                if dir.is_empty() {
+                    format!("  {count_note} {noun} · ↑↓/wheel Enter")
+                } else {
+                    format!("  in {dir} · {count_note} {noun} · ↑↓/wheel Enter")
+                }
             }
         };
         let mut out = vec![Line::from(Span::styled(header, dim))];
@@ -1235,6 +1370,11 @@ impl App {
                         "(default shell)".to_string(),
                         Style::default().fg(Color::DarkGray),
                     ));
+                } else if i == 4 && self.add_under.is_empty() {
+                    row.push(Span::styled(
+                        "(optional · Tab completes)".to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 }
             } else {
                 // A path too long for its row keeps both ends.
@@ -1269,12 +1409,7 @@ impl App {
             }
         }
         lines.extend(self.add_status());
-        if !self.add_err.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("Error: {}", self.add_err),
-                Style::default().fg(Color::Red),
-            )));
-        }
+        lines.extend(self.add_err_lines(modal_w));
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
@@ -1282,9 +1417,9 @@ impl App {
                     .border_type(BorderType::Rounded)
                     .title(Line::from(Span::styled(
                         if editing {
-                            "Edit project: path, command, autostart (Enter save, Esc cancel)"
+                            " Edit project: path, command, autostart (Enter save, Esc cancel) "
                         } else {
-                            "Add project (Enter save, Esc cancel)"
+                            " Add project (Enter save, Esc cancel) "
                         },
                         Style::default()
                             .fg(Color::Blue)

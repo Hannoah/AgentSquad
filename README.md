@@ -5,7 +5,7 @@
 AgentSquad (`squad`) is a lightweight, project-based terminal session manager for Windows and macOS
 (CI, releases and tests cover both).
 Register your projects once, then open a single TUI manager to start, watch, and
-interact with a terminal session per project — an ideal setup for running one
+interact with a terminal session per project ??an ideal setup for running one
 coding agent (or dev server) per project side by side.
 
 Each project is either an **Agent** (an interactive terminal, e.g. `claude`) or a
@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.18 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.19 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.18
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.19
 ```
 
 To install elsewhere:
@@ -80,7 +80,7 @@ When a newer release exists, the manager asks whether to update:
 - `y` downloads and installs it; `n` or `Esc` skips until the next launch.
   `Enter` accepts too, so a prompt that appears as you press it starts the download.
 - The prompt waits while you are typing into a session or another input;
-  the status bar shows `⬆ vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
+  the status bar shows `燧?vX.Y.Z (U)` so you can press `U` in the manager whenever you are ready.
 - When the install finishes, squad asks whether to restart into the new build
   now (`y`) or later (`n` / `Esc`). A restart stops the running sessions (the
   prompt says how many), starts the new build on the project you had selected
@@ -127,7 +127,7 @@ case-insensitively by `remove` and `start`.
 `squad` with no arguments (or `squad start <name>`) opens the TUI manager:
 
 - **Left:** project list, grouped under **Agents** and **Services** headers,
-  each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: …`).
+  each with its live status (`Running`, `Exited (code)`, `Stopped`, `Error: ??).
   Running rows spin while active and show uptime plus the session's CPU and
   memory (`Running 3m 12% 340M`). Usage covers the whole process tree
   (the agent and everything it spawned); CPU is a share of the entire
@@ -143,7 +143,7 @@ case-insensitively by `remove` and `start`.
   colors, bold/italic/underline, cursor positioning).
 - **Bottom:** a one-line status bar with hints, which doubles as the input
   line for send/filter mode and a popup host for help. Its right side shows
-  whole-PC load (`CPU 23% · RAM 9.7G/16.0G`, yellow past 70%, red past 90%;
+  whole-PC load (`CPU 23% 쨌 RAM 9.7G/16.0G`, yellow past 70%, red past 90%;
   hidden on terminals narrower than 70 columns) next to the running count.
   Usage is sampled every 2 seconds on a background thread, so it never
   slows typing or redraws.
@@ -153,15 +153,15 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions (including **Set superior…**) |
-| `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
-| `1`–`9` | Jump to a visible row |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions (including **Set superior??*) |
+| `j` / `k`, `?? / `?? | Move selection (`n` / `p` still work) |
+| `1`??9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
-| `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
+| `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `??/`?? + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
-| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
-| `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`↑`/`↓` pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
+| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`??/`?? pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
+| `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`??/`?? pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
 | `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
 | `z` | Zoom: a focused terminal takes the full width (the project list comes back in the manager; `z` again turns it off) |
@@ -176,24 +176,24 @@ case-insensitively by `remove` and `start`.
 | Drag | Select text in a terminal pane; it is copied to the clipboard when you let go (`Ctrl+C` copies a selection too) |
 | Mouse wheel | Scroll the selected terminal |
 | `Ctrl+Q`, middle-click | Back to the manager (from inside a terminal; clicking the project list works too) |
-| `Alt+1`–`Alt+9` (macOS: `Option+1`–`Option+9`) | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
+| `Alt+1`??Alt+9` (macOS: `Option+1`??Option+9`) | Switch to that project, also from inside a terminal (a stopped one lands on the manager) |
 | `?` | Toggle the help popup |
 | `q`, `Ctrl+C` | Quit (asks to confirm when sessions exist; all managed child processes are stopped; nothing runs detached) |
 
-Send, filter, and add inputs support `←` / `→` / `Home` / `End` / `Delete`
+Send, filter, and add inputs support `?? / `?? / `Home` / `End` / `Delete`
 for cursor-aware editing.
 
 **Picking a path in the add form.** The folders under the Path field are
 listed as you type: the subfolders matching the last segment (a trailing `\`
 lists everything inside), or the folders your projects already live in while
-the field is empty. `↓` / `↑` highlight a row, `Enter` (or a click) fills it in
+the field is empty. `?? / `?? highlight a row, `Enter` (or a click) fills it in
 and lists *its* subfolders, so you can walk down the tree; past the last row
-`↓` moves to the next field, and `Enter` with nothing highlighted saves.
+`?? moves to the next field, and `Enter` with nothing highlighted saves.
 `Tab` completes the last segment against the disk, case-insensitively, up to
 the part all matches share (or takes the highlighted row). The list sits right
 under the Path row with a header naming the folder it lists (the part you typed
-is bold), and the popup keeps a fixed height while you type. `✓ folder`,
-`✗ not found` or `✗ not a folder` shows at the right end of the Path row right
+is bold), and the popup keeps a fixed height while you type. `??folder`,
+`??not found` or `??not a folder` shows at the right end of the Path row right
 away; a long path is shortened in the middle when you are not editing it.
 
 **Selecting and copying terminal text.** Drag in a terminal pane (no `Shift`
@@ -211,11 +211,11 @@ is restored when squad exits.
 Inside a terminal, every key reaches the session, including `Esc` and
 `Ctrl+G`, which agents such as Claude Code use to interrupt, rewind or open
 an editor. squad keeps only `Ctrl+Q` (back to the manager) and
-`Alt+1`–`Alt+9` (switch project) for itself.
+`Alt+1`??Alt+9` (switch project) for itself.
 
 On macOS the Alt key is Option, and a terminal normally sends the character
-Option+digit types (`¡™£¢∞§¶•ª` on a US keyboard) instead of an Alt modifier.
-squad reads those characters as `Option+1`–`Option+9`, so the switch works with
+Option+digit types (`징?◈Ｂ™닞짠쨋?◈? on a US keyboard) instead of an Alt modifier.
+squad reads those characters as `Option+1`??Option+9`, so the switch works with
 the default settings; the cost is that those nine characters cannot be typed
 into a focused session. Turning on "Use Option as Meta key" (Terminal: Settings >
 Profiles > Keyboard; iTerm2: Profiles > Keys > Left Option key = Esc+) makes
@@ -226,7 +226,7 @@ other keyboard layouts, use that setting or `Ctrl+Q` then the digit.
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [--autostart] [--create] [--under <commander>] [-- command args...]
+squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [-- command args...]
                                                                    Register a project (path optional for services)
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
@@ -251,7 +251,8 @@ Notes:
 
 Projects live in a single TOML file:
 
-- `%LOCALAPPDATA%\AgentSquad\config.toml`, or
+- `%LOCALAPPDATA%\AgentSquad\config.toml` (Windows),
+- `~/.config/AgentSquad/config.toml` (macOS; or `$XDG_CONFIG_HOME/AgentSquad/config.toml`), or
 - wherever `AGENTSQUAD_CONFIG` points.
 
 Example:
@@ -286,7 +287,7 @@ Optional settings:
   the sidebar usage gets a `!` and the status bar warns once until it drops back.
 - `scrollback = 5000` sets the lines kept per session (default 2000).
 
-The file is plain TOML — you can edit it by hand. Deleting it resets to empty.
+The file is plain TOML ??you can edit it by hand. Deleting it resets to empty.
 
 ## Work history (automatic)
 
@@ -344,17 +345,17 @@ arrived with a repository you did not write before you brief an agent in it.
 ### Chain of command
 
 Agents can report to other agents. An agent with agents under it is a
-commander (`★`): it becomes one the moment another agent attaches. Agents
+commander (`??): it becomes one the moment another agent attaches. Agents
 sharing a folder are independent by default; name a commander with
 `squad add C:\work\my-app --under my-app-2 -- claude`, the add form's
-"Reports to" field, `u`, or right-click > **Set superior…**. Commanders can report to commanders, so the chain can
+"Reports to" field, `u`, or right-click > **Set superior??*. Commanders can report to commanders, so the chain can
 grow as deep as you need. The sidebar and `squad list` draw it as a tree:
 
 ```
-★ my-app
-├─★ my-app-2
-│ └── my-app-4
-└── my-app-3
+??my-app
+?쒋???my-app-2
+???붴?? my-app-4
+?붴?? my-app-3
 ```
 
 Change it later with `u` on an agent in the manager, or from the shell:
@@ -408,7 +409,7 @@ process-tree kill). Releases are built by GitHub Actions on every `v*` tag
 - **`squad` not found after install:** the installer refreshes the
   current session's `PATH`; if it still fails, open a new terminal so the
   updated user `PATH` takes effect.
-- **Session shows `Error: …`:** the start command failed — check that the
+- **Session shows `Error: ??:** the start command failed ??check that the
   binary (e.g. `claude`, `node`) is on your `PATH` and the project path exists.
 - **`Exited (1)` right after start:** the process ran and exited; select it
   and read the terminal pane for its own error message.
@@ -417,7 +418,7 @@ process-tree kill). Releases are built by GitHub Actions on every `v*` tag
   creation"): a default-shell session is `powershell.exe` started by
   `squad.exe`, and behavior rules distrust an unsigned program that launches
   PowerShell. Every release is a new unknown file, so it can return after an
-  update. Add the install folder `%LOCALAPPDATA%\AgentSquadin` (or
+  update. Add the install folder `%LOCALAPPDATA%\AgentSquad\bin` (or
   `squad.exe`) to the product's trusted/exclusion list **by path**, not by
   hash, so updates stay covered, and report the false positive to the vendor.
   squad does not try to hide its child processes from the scanner.

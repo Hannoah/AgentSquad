@@ -299,7 +299,7 @@ fn is_spinner_line(line: &str) -> bool {
     let Some(first) = line.chars().next() else {
         return false;
     };
-    let glyph = ('\u{2800}'..='\u{28ff}').contains(&first) || "✻✶✳✢✽✺✹✸✷·".contains(first);
+    let glyph = ('\u{2800}'..='\u{28ff}').contains(&first) || "✻✶✳✢✽✺✹✸✷".contains(first);
     glyph && (line.contains('…') || line.contains("..."))
 }
 
@@ -319,15 +319,17 @@ pub fn is_working_text(screen_text: &str) -> bool {
         "pondering",
         "synthesizing",
     ];
-    for lower in tail_lines(screen_text, 5) {
+    for (idx, lower) in tail_lines(screen_text, 5).into_iter().enumerate() {
         if has_busy_hint(&lower) || is_spinner_line(&lower) {
             return true;
         }
-        // Verbs count only at the start of a line, where status text puts
-        // them; mid-sentence mentions ("finished reading") do not.
-        let head = lower.trim_start_matches(|c: char| !c.is_alphanumeric());
-        if VERBS.iter().any(|v| head.starts_with(v)) {
-            return true;
+        // Verbs count only near the very bottom (last 2 lines) at line start,
+        // so completed prose paragraphs above an idle prompt do not stick.
+        if idx < 2 {
+            let head = lower.trim_start_matches(|c: char| !c.is_alphanumeric());
+            if VERBS.iter().any(|v| head.starts_with(v)) {
+                return true;
+            }
         }
     }
     false

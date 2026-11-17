@@ -220,6 +220,19 @@ fn stop_hook_sends_the_agent_back_until_it_files() {
     fs::write(dir.join("a.txt"), "work").unwrap();
     let out = ledger::stop_hook("{}", &dir).expect("changed files are blocked");
     assert!(out.contains(r#""decision":"block""#));
+    // Auto history entries written by squad must NOT satisfy the Stop hook.
+    sleep(Duration::from_millis(50));
+    fs::write(
+        dir.join(".squad")
+            .join("log")
+            .join("20261108T061200Z-auto.md"),
+        "auto",
+    )
+    .unwrap();
+    assert!(
+        ledger::stop_hook("{}", &dir).is_some(),
+        "auto history entry must not bypass Stop hook"
+    );
     assert!(
         ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir).is_none(),
         "sent back once, never in a loop"
@@ -282,6 +295,7 @@ fn sitreps_list_newest_first_with_readable_labels() {
         sitrep_label("20261231T200000Z-auto.md", 9 * 3600),
         "01-01 05:00 auto"
     );
+    assert_eq!(sitrep_label("20261108T061200Z.md", 0), "11-08 06:12");
     assert_eq!(
         sitrep_label("notes.md", 9 * 3600),
         "notes",

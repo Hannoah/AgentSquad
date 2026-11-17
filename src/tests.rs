@@ -19,6 +19,7 @@ use crate::sys::*;
 use crate::ui::*;
 use crate::updater::*;
 
+mod app;
 mod config;
 mod history;
 mod input;

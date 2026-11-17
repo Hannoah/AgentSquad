@@ -254,6 +254,12 @@ fn persist_helpers_keep_other_writers_projects() {
     persist_remove("A").unwrap();
     persist_add(&mk("d")).unwrap();
     persist_add(&mk("D")).unwrap();
+    let mut clash = mk("d");
+    clash.path = PathBuf::from("other-path");
+    assert!(
+        persist_add(&clash).is_err(),
+        "concurrent different project claiming the same name must error"
+    );
     persist_pin("C", true).unwrap();
     persist_edit("c", vec!["zsh".into(), "-l".into()], true).unwrap();
     let after = load_from(&file).unwrap().projects;

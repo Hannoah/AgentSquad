@@ -105,6 +105,7 @@ impl LineInput {
     pub fn edit_key(&mut self, k: KeyEvent) -> Option<bool> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let word = ctrl || k.modifiers.contains(KeyModifiers::ALT);
+        let super_key = k.modifiers.contains(KeyModifiers::SUPER);
         let len = self.text.len();
         match k.code {
             KeyCode::Backspace if word => self.delete_word_back(),
@@ -120,7 +121,7 @@ impl LineInput {
             KeyCode::Right => self.move_right(),
             KeyCode::Home => self.move_home(),
             KeyCode::End => self.move_end(),
-            KeyCode::Char(ch) if !word => self.insert(ch),
+            KeyCode::Char(ch) if !(word || super_key) => self.insert(ch),
             _ => return None,
         }
         Some(self.text.len() != len) // every edit adds or removes characters
@@ -143,8 +144,11 @@ impl LineInput {
 /// text outgrows `width` so the block cursor never scrolls off screen.
 /// Widths are terminal columns, so Hangul (two columns each) scrolls right.
 pub fn input_window(before: &str, at: char, after: &str, cols: usize) -> (String, char, String) {
+    if cols == 0 {
+        return (String::new(), ' ', String::new());
+    }
     let at_w = at.width().unwrap_or(1).max(1);
-    if cols == 0 || width(before) + at_w + width(after) <= cols {
+    if width(before) + at_w + width(after) <= cols {
         return (before.to_string(), at, after.to_string());
     }
     let room = cols.saturating_sub(at_w);
@@ -181,7 +185,7 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
         text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
     }
 }
-/// Status-bar input row: prompt + editable text with a block cursor + hint.
+/// Status-bar input row: prompt + editable text with a block cursor + dimmed hint.
 pub fn input_line(
     prompt: String,
     input: &LineInput,
@@ -190,16 +194,26 @@ pub fn input_line(
 ) -> Vec<Span<'static>> {
     let (before, at, after) = input.render_parts();
     let prompt_w = width(&prompt);
-    let (before, at, after) = input_window(&before, at, &after, cols.saturating_sub(prompt_w));
-    vec![
+    let hint_w = width(&hint);
+    let show_hint = cols > prompt_w + hint_w + 8;
+    let avail = cols.saturating_sub(prompt_w + if show_hint { hint_w } else { 0 });
+    let (before, at, after) = input_window(&before, at, &after, avail);
+    let mut out = vec![
         Span::raw(prompt),
         Span::raw(before),
         Span::styled(
             at.to_string(),
             Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
         ),
-        Span::raw(after + &hint),
-    ]
+        Span::raw(after),
+    ];
+    if show_hint {
+        out.push(Span::styled(
+            hint,
+            Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ));
+    }
+    out
 }
 pub fn jump_to(order_len: usize, ch: char) -> Option<usize> {
     if ch.is_ascii_digit() && ch != '0' {

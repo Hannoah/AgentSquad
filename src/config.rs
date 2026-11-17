@@ -109,7 +109,7 @@ impl Default for Config {
     }
 }
 pub fn config_path() -> Result<PathBuf> {
-    if let Some(p) = env::var_os("AGENTSQUAD_CONFIG") {
+    if let Some(p) = env::var_os("AGENTSQUAD_CONFIG").filter(|s| !s.is_empty()) {
         return Ok(p.into());
     }
     let base = env::var_os("LOCALAPPDATA")
@@ -253,15 +253,27 @@ pub fn enable_chain_ledger(projects: &mut [Project], i: usize) {
 // milliseconds still race (last rename wins). Add a lock file if that ever bites.
 pub fn persist_add(p: &Project) -> Result<()> {
     let mut disk = load()?;
-    if !disk
+    if let Some(existing) = disk
         .projects
         .iter()
-        .any(|q| q.name.eq_ignore_ascii_case(&p.name))
+        .find(|q| q.name.eq_ignore_ascii_case(&p.name))
     {
-        disk.projects.push(p.clone());
-        let last = disk.projects.len() - 1;
-        enable_chain_ledger(&mut disk.projects, last);
+        // Idempotent when the same project is already on disk; fail if a
+        // different project claimed the name concurrently.
+        if same_path(&existing.path, &p.path)
+            && existing.kind == p.kind
+            && existing.command == p.command
+        {
+            return Ok(());
+        }
+        bail!(
+            "Project '{}' was already registered by another process",
+            p.name
+        );
     }
+    disk.projects.push(p.clone());
+    let last = disk.projects.len() - 1;
+    enable_chain_ledger(&mut disk.projects, last);
     save(&disk)
 }
 /// Unregister `name` on disk, re-reading the file first (see `persist_add`).
@@ -471,10 +483,18 @@ pub fn subordinates(projects: &[Project], i: usize) -> Vec<usize> {
         .filter(|&j| superior(projects, j) == Some(i))
         .collect()
 }
+/// Compare two paths using the host filesystem's case rules (case-insensitive
+/// on Windows, case-sensitive elsewhere).
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
 pub fn same_dir(a: &Project, b: &Project) -> bool {
-    a.path
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&b.path.to_string_lossy())
+    same_path(&a.path, &b.path)
 }
 /// Commanders: agents with agents under them. An agent becomes one the
 /// moment another agent attaches to it.
@@ -648,13 +668,29 @@ pub fn resolve_dir(anchor: &str) -> Result<(PathBuf, String), String> {
     }
     Ok((path, dir_name))
 }
+/// Rename project `i` to `name` and point it at `path`, updating any
+/// subordinates' `reports_to` references.
+pub fn apply_relocate(projects: &mut [Project], i: usize, path: PathBuf, name: &str) {
+    let old = projects[i].name.clone();
+    if name != old {
+        for p in projects.iter_mut() {
+            if p.reports_to
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(&old))
+            {
+                p.reports_to = Some(name.to_string());
+            }
+        }
+        projects[i].name = name.to_string();
+    }
+    projects[i].path = path;
+}
 /// Point project `i` at `path`. An agent is named after its folder, so it
 /// takes the new folder's name (made unique among the others) and everyone
 /// who reported to the old name follows it; a service is named after its
 /// program and keeps its name. Returns the project's name afterwards.
 pub fn relocate(projects: &mut [Project], i: usize, path: PathBuf) -> String {
-    let old = projects[i].name.clone();
-    if projects[i].kind == Kind::Agent {
+    let target_name = if projects[i].kind == Kind::Agent {
         let dir = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -666,21 +702,14 @@ pub fn relocate(projects: &mut [Project], i: usize, path: PathBuf) -> String {
                 .filter(|&(j, _)| j != i)
                 .map(|(_, p)| p.clone())
                 .collect();
-            let name = unique_name(&dir, &others);
-            if name != old {
-                for p in projects.iter_mut() {
-                    if p.reports_to
-                        .as_deref()
-                        .is_some_and(|c| c.eq_ignore_ascii_case(&old))
-                    {
-                        p.reports_to = Some(name.clone());
-                    }
-                }
-                projects[i].name = name;
-            }
+            unique_name(&dir, &others)
+        } else {
+            projects[i].name.clone()
         }
-    }
-    projects[i].path = path;
+    } else {
+        projects[i].name.clone()
+    };
+    apply_relocate(projects, i, path, &target_name);
     projects[i].name.clone()
 }
 /// Build and validate a project from user inputs, without touching disk state.

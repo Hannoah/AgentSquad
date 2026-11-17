@@ -3,7 +3,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+    pub(crate) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         self.dirty = true;
         let k = normalize_ctrl_alt_key(k);
         // Any key drops the highlight. Ctrl+C on a selection copies it and is
@@ -122,6 +122,15 @@ impl App {
                 self.mode = Mode::Manager;
                 self.send_buf.clear();
             }
+            KeyCode::Tab if self.send_to == SendTo::Under => {
+                if let Some(&pi) = self.order.get(self.selected) {
+                    if let Some(next) =
+                        complete_agent_name(&self.cfg.projects, &self.send_buf.as_str(), Some(pi))
+                    {
+                        self.send_buf.set(&next);
+                    }
+                }
+            }
             KeyCode::Enter => {
                 let line = self.send_buf.take();
                 self.mode = Mode::Manager;
@@ -167,9 +176,7 @@ impl App {
         match k.code {
             KeyCode::Esc => {
                 self.mode = Mode::Manager;
-                self.filter_buf.clear();
-                self.order = display_order(&self.cfg.projects);
-                self.selected = 0;
+                self.clear_filter();
             }
             KeyCode::Enter => self.mode = Mode::Manager,
             KeyCode::Down if !self.order.is_empty() => {
@@ -203,7 +210,11 @@ impl App {
     pub(super) fn path_edited(&mut self) {
         // No shell here: expand a leading `~` in the field itself, or a new
         // folder would be made as a literal `~` under the current directory.
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        let home = if cfg!(windows) {
+            std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+        } else {
+            std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+        };
         if let Some(full) =
             home.and_then(|h| pathpick::expand_home(&self.add_path.as_str(), &h.to_string_lossy()))
         {
@@ -216,6 +227,7 @@ impl App {
             pathpick::suggest(&text)
         };
         self.add_sel = None;
+        self.add_top.set(0);
         self.add_state = pathpick::check(&text);
         self.add_err.clear();
     }
@@ -323,13 +335,11 @@ impl App {
             }
             KeyCode::Enter => {
                 self.add_err.clear();
-                // A new project must be visible, so drop any filter.
-                self.filter_buf.clear();
                 match load() {
                     Err(e) => self.add_err = format!("Config reload failed: {e:#}"),
                     Ok(disk) => {
                         merge_projects(&mut self.cfg, &mut self.sessions, disk);
-                        self.order = display_order(&self.cfg.projects);
+                        self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                     }
                 }
                 // A missing folder is made on the spot (the field says so).
@@ -367,12 +377,16 @@ impl App {
                                 Err(e) => {
                                     self.cfg.projects.pop();
                                     self.sessions.pop();
-                                    self.order = display_order(&self.cfg.projects);
-                                    self.selected = 0;
+                                    self.order =
+                                        apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                                    self.selected =
+                                        self.selected.min(self.order.len().saturating_sub(1));
                                     self.add_err = format!("Save failed: {e:#}");
                                 }
                                 Ok(()) => {
                                     self.cfg.projects.last().map(ledger::ensure_agent);
+                                    // A new project must be visible, so drop any filter.
+                                    self.filter_buf.clear();
                                     self.order = display_order(&self.cfg.projects);
                                     self.selected = self
                                         .order
@@ -393,9 +407,27 @@ impl App {
                 }
             }
             KeyCode::Tab if self.add_field == 0 => self.complete_path(),
+            KeyCode::Tab if self.add_field == 4 => {
+                if let Some(next) =
+                    complete_agent_name(&self.cfg.projects, &self.add_under.as_str(), None)
+                {
+                    self.add_under.set(&next);
+                    self.add_err.clear();
+                }
+            }
             KeyCode::Tab => self.add_field = (self.add_field + 1) % 5,
             KeyCode::Up if self.add_field == 0 => self.step_path_list(false),
             KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
+            KeyCode::PageDown if self.add_field == 0 && !self.add_picks.is_empty() => {
+                let last = self.add_picks.len() - 1;
+                self.add_sel = Some(self.add_sel.map_or(0, |i| (i + 6).min(last)));
+            }
+            KeyCode::PageUp if self.add_field == 0 && !self.add_picks.is_empty() => {
+                self.add_sel = match self.add_sel {
+                    Some(0) | None => None,
+                    Some(i) => Some(i.saturating_sub(6)),
+                };
+            }
             KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
             KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
             // The toggle fields flip on Space or a sideways arrow.
@@ -500,9 +532,7 @@ impl App {
             }
             // Esc in the manager drops a kept filter, or dismisses exit banner.
             KeyCode::Esc if !self.filter_buf.is_empty() => {
-                self.filter_buf.clear();
-                self.order = display_order(&self.cfg.projects);
-                self.selected = 0;
+                self.clear_filter();
             }
             KeyCode::Esc => {
                 if let Some(&pi) = self.order.get(self.selected) {

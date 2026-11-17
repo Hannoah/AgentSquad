@@ -145,3 +145,14 @@ fn tree_walk_drops_children_older_than_their_parent() {
     all.sort_unstable();
     assert_eq!(all, vec![1, 2, 3, 4]);
 }
+
+#[test]
+fn parse_cputime_handles_days_hours_minutes_seconds() {
+    assert_eq!(crate::sys::parse_cputime("0:01.50"), 15_000_000);
+    assert_eq!(crate::sys::parse_cputime("1:02:03"), 37_230_000_000);
+    assert_eq!(
+        crate::sys::parse_cputime("1-00:00:05"),
+        (86_405.0 * 1e7) as u64
+    );
+    assert_eq!(crate::sys::parse_cputime("invalid"), 0);
+}

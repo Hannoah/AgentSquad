@@ -38,19 +38,36 @@ fn a_finished_task_is_recorded_without_the_agent() {
         .success());
 
     // The "agent": waits for a line, works for 7 s while writing a file, repeats.
-    let script = root.join("agent.ps1");
-    fs::write(
-        &script,
-        "while ($true) {\n  $null = [Console]::ReadLine()\n  1..7 | ForEach-Object { \"working step $_\"; Start-Sleep -Seconds 1 }\n  Set-Content -Path (Join-Path $PWD 'made.txt') -Value 'x'\n  'finished'\n}\n",
-    )
-    .unwrap();
+    let (script_name, command_toml) = if cfg!(windows) {
+        let script = root.join("agent.ps1");
+        fs::write(
+            &script,
+            "while ($true) {\n  $null = [Console]::ReadLine()\n  1..7 | ForEach-Object { \"working step $_\"; Start-Sleep -Seconds 1 }\n  Set-Content -Path (Join-Path $PWD 'made.txt') -Value 'x'\n  'finished'\n}\n",
+        )
+        .unwrap();
+        (
+            script.clone(),
+            format!(
+                "['powershell.exe', '-NoLogo', '-NoProfile', '-File', '{}']",
+                script.display()
+            ),
+        )
+    } else {
+        let script = root.join("agent.sh");
+        fs::write(
+            &script,
+            "#!/usr/bin/env sh\nwhile IFS= read -r _line; do\n  i=1\n  while [ \"$i\" -le 7 ]; do\n    echo \"working step $i\"\n    sleep 1\n    i=$((i + 1))\n  done\n  printf 'x' > made.txt\n  echo finished\ndone\n",
+        )
+        .unwrap();
+        (script.clone(), format!("['sh', '{}']", script.display()))
+    };
+    let _ = script_name;
     let config = root.join("config.toml");
     fs::write(
         &config,
         format!(
-            "version = 1\n\n[[projects]]\nname = \"demo\"\npath = '{}'\nkind = \"agent\"\ncommand = ['powershell.exe', '-NoLogo', '-NoProfile', '-File', '{}']\n",
+            "version = 1\n\n[[projects]]\nname = \"demo\"\npath = '{}'\nkind = \"agent\"\ncommand = {command_toml}\n",
             project.display(),
-            script.display()
         ),
     )
     .unwrap();

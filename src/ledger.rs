@@ -249,13 +249,21 @@ pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
     Some(files)
 }
 
-/// When the agent last filed: the newest SITREP, else the last thing squad
-/// logged in this ledger.
+/// When the agent last filed: the newest agent-written SITREP (ignoring
+/// squad's own `-auto.md` history entries), else the last thing squad logged
+/// in this ledger.
 fn last_filed(ledger: &Path) -> Option<SystemTime> {
     let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
     fs::read_dir(ledger.join("log"))
         .ok()?
-        .filter_map(|e| mtime(&e.ok()?.path()))
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().into_string().ok()?;
+            if crate::history::is_auto(&name) {
+                return None;
+            }
+            mtime(&e.path())
+        })
         .max()
         .or_else(|| mtime(&ledger.join("events.log")))
 }
@@ -322,7 +330,18 @@ fn hook_settings(exe: &Path) -> String {
 /// mangle the quotes.
 pub fn write_hook_settings(project: &Path) -> Option<PathBuf> {
     let file = project.join(DIR).join("hook.json");
-    fs::write(&file, hook_settings(&crate::updater::install_path()?)).ok()?;
+    let content = hook_settings(&crate::updater::install_path()?);
+    if fs::read_to_string(&file).ok().as_deref() == Some(content.as_str()) {
+        return Some(file);
+    }
+    let tmp = project
+        .join(DIR)
+        .join(format!("hook.json.tmp{}", std::process::id()));
+    let written = fs::write(&tmp, &content).and_then(|()| fs::rename(&tmp, &file));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+        return None;
+    }
     Some(file)
 }
 
@@ -362,7 +381,7 @@ pub fn list_entries(dir: &Path) -> Vec<(String, PathBuf)> {
 pub fn sitrep_label(name: &str, offset_secs: i64) -> String {
     let stem = name.strip_suffix(".md").unwrap_or(name);
     let b = stem.as_bytes();
-    if b.len() > 16 && b[8] == b'T' && b[15] == b'Z' && stem.is_char_boundary(16) {
+    if b.len() >= 16 && b[8] == b'T' && b[15] == b'Z' && stem.is_char_boundary(16) {
         let (d, t, slug) = (&stem[..8], &stem[9..15], stem[16..].trim_start_matches('-'));
         if d.bytes().chain(t.bytes()).all(|c| c.is_ascii_digit()) {
             let n = |s: &str| s.parse::<i64>().unwrap_or(0);

@@ -452,6 +452,12 @@ fn needs_input_and_working_ignore_false_positives() {
     assert!(!is_working_text(
         "Finished reading 12 files and writing output."
     ));
+    // Stale verbs higher up in the response above an idle prompt do not trigger Working,
+    // nor do middle-dot markdown bullets ending in `...`.
+    assert!(!is_working_text(
+        "Reading the configuration...\nDone.\nEverything is ready.\n> "
+    ));
+    assert!(!is_working_text("· item one...\n> "));
 }
 
 #[test]

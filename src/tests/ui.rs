@@ -411,6 +411,11 @@ fn input_window_keeps_cursor_visible() {
         input_window("abcdef", 'g', "hij", 5),
         ("cdef".into(), 'g', "".into())
     );
+    // Zero width clips everything instead of overflowing.
+    assert_eq!(
+        input_window("abcdef", 'g', "hij", 0),
+        (String::new(), ' ', String::new())
+    );
 }
 #[test]
 fn shorten_middle_keeps_both_ends() {
@@ -672,17 +677,23 @@ fn pane_usage_note_labels_numbers() {
 #[test]
 fn context_menu_offers_start_for_stopped() {
     let running = context_menu_items(true);
-    assert_eq!(running.len(), 5);
+    assert_eq!(running.len(), 9);
     assert!(running.iter().any(|(_, l)| l.contains("Focus")));
     assert!(running.iter().any(|(_, l)| l.contains("Stop")));
+    assert!(running.iter().any(|(_, l)| l.contains("Edit")));
+    assert!(running.iter().any(|(_, l)| l.contains("history")));
     let stopped = context_menu_items(false);
-    assert_eq!(stopped.len(), 3);
+    assert_eq!(stopped.len(), 7);
     assert!(stopped.iter().any(|(_, l)| l.contains("Start")));
     assert!(!stopped.iter().any(|(_, l)| l.contains("Stop")));
     // Number keys are 1-based in order with no gaps.
     assert_eq!(
         running.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        ['1', '2', '3', '4', '5']
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+    );
+    assert_eq!(
+        stopped.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        ['1', '2', '3', '4', '5', '6', '7']
     );
 }
 
@@ -754,15 +765,42 @@ fn confirm_click_hits_yes_and_no() {
 #[test]
 fn procs_list_rect_leaves_room_for_detail_and_footer() {
     use ratatui::layout::Rect;
-    // Tall: border, 5-row detail box and footer come off the list.
+    // Tall: border, 1-row column header, 5-row detail box and footer come off the list.
     assert_eq!(
         procs_list_rect(Rect::new(0, 0, 40, 20)),
-        Rect::new(1, 1, 38, 12)
+        Rect::new(1, 2, 38, 11)
     );
-    // Short: no detail box, only the footer.
+    // Short: no detail box, only column header and footer.
     assert_eq!(
         procs_list_rect(Rect::new(0, 0, 40, 8)),
-        Rect::new(1, 1, 38, 5)
+        Rect::new(1, 2, 38, 4)
+    );
+}
+
+#[test]
+fn confirm_quit_title_matches_destructive_red_bold_style() {
+    let lines = confirm_quit_lines(2);
+    assert_eq!(
+        lines[0].spans[0].style,
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
+fn input_line_keeps_hint_when_input_grows() {
+    let mut inp = LineInput::new();
+    inp.set("abcdefghijklmnopqrstuvwxyz");
+    let spans = input_line("Send: ".into(), &inp, " (Enter sends)".into(), 32);
+    let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        rendered.ends_with(" (Enter sends)"),
+        "hint must stay visible: {rendered:?}"
+    );
+    assert!(
+        crate::config::width(&rendered) <= 32,
+        "must fit within 32 cols: {rendered:?}"
     );
 }
 

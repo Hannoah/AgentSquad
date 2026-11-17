@@ -37,14 +37,14 @@ use crate::sys::*;
 use crate::ui::*;
 use crate::updater::*;
 
-mod actions;
-mod draw;
-mod keys;
-mod mouse;
+pub(crate) mod actions;
+pub(crate) mod draw;
+pub(crate) mod keys;
+pub(crate) mod mouse;
 
 /// The memory monitor: biggest processes, the picked row, and the process
 /// waiting for a yes/no before it is killed.
-pub struct ProcList {
+pub(crate) struct ProcList {
     items: Vec<ProcInfo>,
     sel: usize,
     confirm: Option<ProcInfo>,
@@ -63,6 +63,15 @@ impl ProcList {
         if self.cmd.as_ref().is_none_or(|(pid, _)| *pid != it.pid) {
             self.cmd = Some((it.pid, command_line(it.pid)));
         }
+    }
+    /// Reload the process list while keeping the same PID selected if still alive.
+    fn refresh(&mut self) {
+        let prev_pid = self.items.get(self.sel).map(|it| it.pid);
+        self.items = top_processes(PROC_ROWS);
+        self.sel = prev_pid
+            .and_then(|pid| self.items.iter().position(|it| it.pid == pid))
+            .unwrap_or_else(|| self.sel.min(self.items.len().saturating_sub(1)));
+        self.load_cmd();
     }
 }
 /// Rows the memory monitor lists.
@@ -139,7 +148,7 @@ type Started = (String, Result<Session>);
 /// `App` owns state, drawing and input handling.
 /// Where the text typed into the status-bar input line goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SendTo {
+pub(crate) enum SendTo {
     /// A message for the selected session.
     One,
     /// An order for everyone under the selected commander.
@@ -148,103 +157,105 @@ enum SendTo {
     Under,
 }
 
-struct App {
-    cfg: Config,
-    sessions: Vec<Option<Session>>,
+pub(crate) struct App {
+    pub(crate) cfg: Config,
+    pub(crate) sessions: Vec<Option<Session>>,
     /// Sidebar order (filtered); `selected` indexes into it.
-    order: Vec<usize>,
-    selected: usize,
-    list_offset: usize,
+    pub(crate) order: Vec<usize>,
+    pub(crate) selected: usize,
+    pub(crate) list_offset: usize,
     // Last drawn geometry, so mouse clicks can be mapped to rows:
     // `row_targets[i]` is the position in `order` of list item `i` (None for headers).
-    side_rect: Rect,
-    row_targets: Vec<Option<usize>>,
-    pane_rect: Rect,
-    mode: Mode,
-    send_buf: LineInput,
+    pub(crate) side_rect: Rect,
+    pub(crate) row_targets: Vec<Option<usize>>,
+    pub(crate) pane_rect: Rect,
+    pub(crate) mode: Mode,
+    pub(crate) send_buf: LineInput,
     /// What the status-bar input line does with the text typed into it.
-    send_to: SendTo,
-    filter_buf: LineInput,
-    add_field: usize,
-    add_path: LineInput,
-    add_kind: Kind,
-    add_cmd: LineInput,
-    add_under: LineInput,
-    add_autostart: bool,
+    pub(crate) send_to: SendTo,
+    pub(crate) filter_buf: LineInput,
+    pub(crate) add_field: usize,
+    pub(crate) add_path: LineInput,
+    pub(crate) add_kind: Kind,
+    pub(crate) add_cmd: LineInput,
+    pub(crate) add_under: LineInput,
+    pub(crate) add_autostart: bool,
     /// Name of the project the form is editing; None when it adds one.
-    add_edit: Option<String>,
-    add_err: String,
+    pub(crate) add_edit: Option<String>,
+    pub(crate) add_err: String,
     /// What the Path field points at (checked on edits, not per frame).
-    add_state: PathState,
+    pub(crate) add_state: PathState,
     /// The folders listed under the Path field: the parents your projects live in
     /// while it is empty, otherwise the subfolders matching what is typed.
-    add_picks: Vec<Pick>,
+    pub(crate) add_picks: Vec<Pick>,
     /// The highlighted row of `add_picks`; None until the user steps into the list.
-    add_sel: Option<usize>,
+    pub(crate) add_sel: Option<usize>,
+    /// First visible row of `add_picks`, kept steady while stepping with arrows.
+    pub(crate) add_top: std::cell::Cell<usize>,
     /// Text being selected (or just copied) in the terminal pane.
-    sel: Option<Selection>,
-    confirm_stop: Option<usize>,
-    confirm_remove: Option<usize>,
-    confirm_restart: Option<usize>,
+    pub(crate) sel: Option<Selection>,
+    pub(crate) confirm_stop: Option<usize>,
+    pub(crate) confirm_remove: Option<usize>,
+    pub(crate) confirm_restart: Option<usize>,
     /// Right-click quick-action menu target, if open.
-    context_menu: Option<usize>,
-    confirm_quit: bool,
-    confirm_start_all: bool,
-    message: (String, Notice),
+    pub(crate) context_menu: Option<usize>,
+    pub(crate) confirm_quit: bool,
+    pub(crate) confirm_start_all: bool,
+    pub(crate) message: (String, Notice),
     /// Idle hint text, restored when a message expires.
-    hints: String,
+    pub(crate) hints: String,
     /// Last message seen and when it first appeared, for expiry.
-    msg_seen: String,
-    msg_at: Instant,
-    dirty: bool,
+    pub(crate) msg_seen: String,
+    pub(crate) msg_at: Instant,
+    pub(crate) dirty: bool,
     /// `squad start <name>`: start and focus the first selection once.
-    first: bool,
-    cores: usize,
-    sys: SysUsage,
+    pub(crate) first: bool,
+    pub(crate) cores: usize,
+    pub(crate) sys: SysUsage,
     // Measuring walks the process table, so it runs on its own thread and
     // the UI only ever does a non-blocking `try_recv` for the result.
-    req_tx: mpsc::Sender<Vec<(usize, u32)>>,
-    res_rx: mpsc::Receiver<Measurement>,
-    last_sample: Instant,
-    sampling: bool,
+    pub(crate) req_tx: mpsc::Sender<Vec<(usize, u32)>>,
+    pub(crate) res_rx: mpsc::Receiver<Measurement>,
+    pub(crate) last_sample: Instant,
+    pub(crate) sampling: bool,
     // Self-update: the check runs on a worker so it can never delay startup.
-    upd_tx: mpsc::Sender<UpdateMsg>,
-    upd_rx: mpsc::Receiver<UpdateMsg>,
-    update_offer: Option<String>,
-    confirm_update: bool,
+    pub(crate) upd_tx: mpsc::Sender<UpdateMsg>,
+    pub(crate) upd_rx: mpsc::Receiver<UpdateMsg>,
+    pub(crate) update_offer: Option<String>,
+    pub(crate) confirm_update: bool,
     /// An installed update waiting for the decision to restart into it.
-    applied: Option<String>,
-    confirm_apply: bool,
+    pub(crate) applied: Option<String>,
+    pub(crate) confirm_apply: bool,
     /// Restart squad into the new build once the manager has shut down.
-    relaunch: bool,
-    updating: bool,
-    tick: u64,
-    last_anim_tick: Instant,
+    pub(crate) relaunch: bool,
+    pub(crate) updating: bool,
+    pub(crate) tick: u64,
+    pub(crate) last_anim_tick: Instant,
     /// A background agent wants attention; `take_bell` decides if it rings.
-    bell: bool,
-    last_bell: Option<Instant>,
+    pub(crate) bell: bool,
+    pub(crate) last_bell: Option<Instant>,
     /// Projects with `autostart` start once, on the first loop pass.
-    autostart_pending: bool,
+    pub(crate) autostart_pending: bool,
     /// Sessions to start again after an update restart (`squad resume`).
-    resume: Vec<usize>,
+    pub(crate) resume: Vec<usize>,
     /// The SITREP reader (`h`), open over the manager.
-    history: Option<History>,
+    pub(crate) history: Option<History>,
     /// The memory monitor (`M`), open over the manager.
-    procs: Option<ProcList>,
+    pub(crate) procs: Option<ProcList>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
-    starting: HashMap<String, Vec<u8>>,
-    start_tx: mpsc::Sender<Started>,
-    start_rx: mpsc::Receiver<Started>,
+    pub(crate) starting: HashMap<String, Vec<u8>>,
+    pub(crate) start_tx: mpsc::Sender<Started>,
+    pub(crate) start_rx: mpsc::Receiver<Started>,
     /// Rows and columns the sessions were last sized to.
-    pane: (u16, u16),
+    pub(crate) pane: (u16, u16),
     /// `z`: a focused terminal takes the sidebar's columns too.
-    zoom: bool,
-    quit: bool,
+    pub(crate) zoom: bool,
+    pub(crate) quit: bool,
 }
 
 impl App {
-    fn new(cfg: Config, initial: Option<usize>) -> Self {
+    pub(crate) fn new(cfg: Config, initial: Option<usize>) -> Self {
         ledger::write_rosters(&cfg.projects);
         let sessions = (0..cfg.projects.len()).map(|_| None).collect();
         let order = display_order(&cfg.projects);
@@ -293,6 +304,7 @@ impl App {
             add_state: PathState::Blank,
             add_picks: Vec::new(),
             add_sel: None,
+            add_top: Default::default(),
             sel: None,
             confirm_stop: None,
             confirm_remove: None,
@@ -475,11 +487,12 @@ impl App {
         if self.last_anim_tick.elapsed() >= Duration::from_millis(200) {
             self.last_anim_tick = Instant::now();
             self.tick = self.tick.wrapping_add(1);
-            if self
-                .sessions
-                .iter()
-                .flatten()
-                .any(|s| s.status.is_running())
+            if !self.starting.is_empty()
+                || self
+                    .sessions
+                    .iter()
+                    .flatten()
+                    .any(|s| s.status.is_running())
             {
                 self.dirty = true;
             }
@@ -529,10 +542,39 @@ impl App {
         if self.say_if_starting(pi) {
             return;
         }
+        if let (Some(p), Some(Some(s))) = (self.cfg.projects.get(pi), self.sessions.get_mut(pi)) {
+            if p.kind == Kind::Agent && s.status.is_running() {
+                file_history(s, p, "restarted by user".into());
+            }
+        }
         if let Some(p) = self.cfg.projects.get(pi) {
             self.message = (format!("Restarting {}", p.name), Notice::Info);
         }
         self.begin_start(pi, rows, cols, Vec::new());
+    }
+
+    /// Drop any active filter while keeping the currently selected project selected.
+    pub(crate) fn clear_filter(&mut self) {
+        let sel_pi = self.order.get(self.selected).copied();
+        self.filter_buf.clear();
+        self.order = display_order(&self.cfg.projects);
+        self.selected = sel_pi
+            .and_then(|pi| self.order.iter().position(|&x| x == pi))
+            .unwrap_or(0);
+    }
+
+    /// File work history if an agent session was mid-task, then stop it off-thread.
+    pub(crate) fn stop_slot(&mut self, pi: usize, reason: &str) {
+        if let Some(slot) = self.sessions.get_mut(pi) {
+            if let Some(mut old) = slot.take() {
+                if let Some(p) = self.cfg.projects.get(pi) {
+                    if p.kind == Kind::Agent && old.status.is_running() {
+                        file_history(&mut old, p, reason.to_string());
+                    }
+                }
+                stop_in_background(old);
+            }
+        }
     }
 
     /// The pane changed size (window resize, zoom): tell every session.
@@ -562,7 +604,7 @@ impl App {
     }
 
     /// Fold in measurements, update messages and finished sessions.
-    fn pump(&mut self) {
+    pub(crate) fn pump(&mut self) {
         self.expire_message();
         while let Ok(started) = self.start_rx.try_recv() {
             self.finish_start(started);
@@ -678,10 +720,9 @@ impl App {
                 let acked = phase_now == AgentPhase::Done && (s.acked || selected);
                 self.dirty |= acked != s.acked;
                 s.acked = acked;
-                self.dirty |= changed
-                    && (selected
-                        || phase_now != phase_before
-                        || s.status.is_running() != was_running);
+                self.dirty |= phase_now != phase_before
+                    || s.status.is_running() != was_running
+                    || (changed && selected);
                 if self.cfg.projects[pi].kind == Kind::Agent && phase_now != s.last_phase {
                     // No bell for the session you are typing into.
                     let watching = selected && self.mode == Mode::Focus;
@@ -701,12 +742,14 @@ impl App {
                     // The work history: squad files it, whatever the agent does.
                     if phase_now == AgentPhase::Working {
                         s.work_started.get_or_insert_with(SystemTime::now);
-                    } else if matches!(phase_now, AgentPhase::Done | AgentPhase::NeedsInput) {
-                        // A task ends when the agent finishes or stops to ask.
-                        let how = if phase_now == AgentPhase::Done {
-                            "task complete"
-                        } else {
-                            "waiting for your input"
+                    } else if matches!(phase_now, AgentPhase::Done | AgentPhase::NeedsInput)
+                        || (phase_now == AgentPhase::Idle && s.last_phase == AgentPhase::Working)
+                    {
+                        // A task ends when the agent finishes, stops to ask, or returns to idle.
+                        let how = match phase_now {
+                            AgentPhase::Done => "task complete",
+                            AgentPhase::NeedsInput => "waiting for your input",
+                            _ => "task complete",
                         };
                         file_history(s, &self.cfg.projects[pi], how.into());
                     }
@@ -800,7 +843,7 @@ impl App {
     /// `e`: the add form, filled with the selected project. The path, command
     /// and autostart can change here (a new path renames an agent after its
     /// folder); kind and chain of command keep their own keys (`u`).
-    fn open_edit(&mut self) {
+    pub(crate) fn open_edit(&mut self) {
         let Some(&pi) = self.order.get(self.selected) else {
             return;
         };
@@ -809,7 +852,7 @@ impl App {
         self.add_edit = Some(p.name);
         self.add_path.set(&p.path.display().to_string());
         self.add_kind = p.kind;
-        if !is_bare_shell(&p.command) {
+        if p.command != shell() {
             self.add_cmd.set(&join_command(&p.command));
         }
         self.add_under.set(p.reports_to.as_deref().unwrap_or(""));
@@ -829,6 +872,7 @@ impl App {
         self.add_autostart = false;
         self.add_err.clear();
         self.add_state = PathState::Blank;
+        self.add_top.set(0);
         self.path_edited();
     }
 
@@ -857,6 +901,63 @@ impl App {
     // ---- drawing ----
 }
 
+/// Tab-complete an agent name for "Reports to" (`u` or the add form).
+/// When `for_pi` is `Some(pi)`, candidates that would create a reporting loop
+/// are excluded. Exact matches cycle to the next valid candidate so repeated
+/// `Tab` steps through commanders.
+pub(crate) fn complete_agent_name(
+    projects: &[Project],
+    typed: &str,
+    for_pi: Option<usize>,
+) -> Option<String> {
+    let prefix = typed.trim();
+    let lower = prefix.to_ascii_lowercase();
+    let valid_for = |candidate: &str| match for_pi {
+        Some(pi) => check_reassign(projects, &projects[pi].name, candidate).is_ok(),
+        None => true,
+    };
+    let all_valid: Vec<&str> = projects
+        .iter()
+        .filter(|p| p.kind == Kind::Agent && valid_for(&p.name))
+        .map(|p| p.name.as_str())
+        .collect();
+    if all_valid.is_empty() {
+        return None;
+    }
+    if let Some(pos) = all_valid
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(prefix))
+    {
+        return Some(all_valid[(pos + 1) % all_valid.len()].to_string());
+    }
+    let matches: Vec<&str> = all_valid
+        .into_iter()
+        .filter(|n| n.to_ascii_lowercase().starts_with(&lower))
+        .collect();
+    if matches.is_empty() {
+        return None;
+    }
+    if matches.len() == 1 {
+        return Some(matches[0].to_string());
+    }
+    let first: Vec<char> = matches[0].chars().collect();
+    let shared: String = (0..first.len())
+        .take_while(|&i| {
+            matches.iter().all(|n| {
+                n.chars()
+                    .nth(i)
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&first[i]))
+            })
+        })
+        .map(|i| first[i])
+        .collect();
+    if shared.len() > prefix.len() {
+        Some(shared)
+    } else {
+        Some(matches[0].to_string())
+    }
+}
+
 /// Run the manager; when an update was installed and the user chose to
 /// restart, start the new build in this console once the screen is restored.
 /// File the work history entry for the task `s` just finished, or was cut off
@@ -882,7 +983,7 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
 
 /// A project's SITREPs open for reading: the list, the picked one's text and
 /// how far it is scrolled.
-struct History {
+pub(crate) struct History {
     project: String,
     items: Vec<(String, std::path::PathBuf)>,
     sel: usize,

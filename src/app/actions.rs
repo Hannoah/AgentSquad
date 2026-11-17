@@ -102,21 +102,23 @@ impl App {
                     });
                 }
             }
-            Some(false) => {
-                self.confirm_update = false;
-                self.update_offer = None;
-                self.message = (
-                    "Update skipped; squad asks again next launch.".to_string(),
-                    Notice::Info,
-                );
-            }
+            Some(false) => self.dismiss_update(),
             None => {}
         }
     }
 
+    pub(super) fn dismiss_update(&mut self) {
+        self.confirm_update = false;
+        self.update_offer = None;
+        self.message = (
+            "Update skipped; squad asks again next launch.".to_string(),
+            Notice::Info,
+        );
+    }
+
     /// Enter in the edit form: save the new path, command and autostart. A
     /// new folder renames an agent after it (see `relocate`).
-    pub(super) fn save_edit(&mut self) {
+    pub(crate) fn save_edit(&mut self) {
         let Some(mut name) = self.add_edit.clone() else {
             return;
         };
@@ -142,11 +144,13 @@ impl App {
                 return;
             }
         };
-        let moved = !new_path
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&self.cfg.projects[pi].path.to_string_lossy());
+        let moved = !same_path(&new_path, &self.cfg.projects[pi].path);
         let was_running = slot_running(&self.sessions, pi);
         if moved {
+            if self.is_starting(pi) {
+                self.add_err = format!("{name} is still starting; wait a moment before moving it.");
+                return;
+            }
             let new_name = match persist_move(&name, &new_path) {
                 Ok(n) => n,
                 Err(e) => {
@@ -154,10 +158,9 @@ impl App {
                     return;
                 }
             };
-            // Same rules as on disk; the file wins if another process
-            // registered a clashing name meanwhile.
-            relocate(&mut self.cfg.projects, pi, new_path);
-            self.cfg.projects[pi].name.clone_from(&new_name);
+            // Follow the authoritative name returned by disk so subordinates in
+            // memory stay aligned even if another process claimed the base name.
+            apply_relocate(&mut self.cfg.projects, pi, new_path, &new_name);
             name = new_name;
             ledger::ensure_agent(&self.cfg.projects[pi]);
             ledger::write_rosters(&self.cfg.projects);
@@ -232,6 +235,8 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => self.history = None,
             KeyCode::Down | KeyCode::Char('j') => h.select(h.sel + 1),
             KeyCode::Up | KeyCode::Char('k') => h.select(h.sel.saturating_sub(1)),
+            KeyCode::Char('J') | KeyCode::Char(']') => h.scroll_by(1),
+            KeyCode::Char('K') | KeyCode::Char('[') => h.scroll_by(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => h.scroll_by(10),
             KeyCode::PageUp => h.scroll_by(-10),
             KeyCode::Home => h.select(0),
@@ -264,9 +269,7 @@ impl App {
             if matches!(k.code, KeyCode::Char('y') | KeyCode::Enter) {
                 kill_trees(&[t.pid]);
                 self.message = (format!("Killed {} ({})", t.name, t.pid), Notice::Info);
-                p.items = top_processes(PROC_ROWS);
-                p.sel = p.sel.min(p.items.len().saturating_sub(1));
-                p.load_cmd();
+                p.refresh();
             }
             return;
         }
@@ -280,8 +283,8 @@ impl App {
             KeyCode::Home => p.sel = 0,
             KeyCode::End => p.sel = last,
             KeyCode::Char('r') => {
-                p.items = top_processes(PROC_ROWS);
-                p.sel = p.sel.min(p.items.len().saturating_sub(1));
+                p.refresh();
+                self.message = ("Process list refreshed.".to_string(), Notice::Info);
             }
             KeyCode::Char('x') | KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(t) = p.items.get(p.sel) {
@@ -379,11 +382,7 @@ impl App {
         match confirm_key(k.code) {
             Some(true) => {
                 if let Some(pi) = self.confirm_stop.take() {
-                    if let Some(slot) = self.sessions.get_mut(pi) {
-                        if let Some(old) = slot.take() {
-                            stop_in_background(old);
-                        }
-                    }
+                    self.stop_slot(pi, "stopped by user");
                     self.message = (
                         "Session stopped. Enter restarts it.".to_string(),
                         Notice::Warn,
@@ -418,9 +417,7 @@ impl App {
                     let name = self.cfg.projects[pi].name.clone();
                     match persist_remove(&name) {
                         Ok(()) => {
-                            if let Some(Some(old)) = self.sessions.get_mut(pi).map(|o| o.take()) {
-                                stop_in_background(old);
-                            }
+                            self.stop_slot(pi, "project removed");
                             remove_project(&mut self.cfg.projects, &mut self.sessions, pi);
                             // Keep an active filter across the removal.
                             self.order =
@@ -457,18 +454,34 @@ impl App {
         if slot_running(&self.sessions, pi) {
             match action {
                 0 => self.mode = Mode::Focus,
-                1 => self.confirm_stop = Some(pi),
-                2 => self.confirm_restart = Some(pi),
-                3 => self.confirm_remove = Some(pi),
-                4 => self.begin_set_superior(pi),
+                1 => {
+                    self.mode = Mode::Send;
+                    self.send_to = SendTo::One;
+                    self.send_buf.clear();
+                }
+                2 => self.confirm_stop = Some(pi),
+                3 => self.confirm_restart = Some(pi),
+                4 => self.open_edit(),
+                5 => self.open_history(),
+                6 => self.toggle_pin(),
+                7 => self.begin_set_superior(pi),
+                8 => self.confirm_remove = Some(pi),
                 _ => {}
             }
             return;
         }
         match action {
             0 => self.open_session(pi, rows, cols),
-            1 => self.confirm_remove = Some(pi),
-            2 => self.begin_set_superior(pi),
+            1 => {
+                self.mode = Mode::Send;
+                self.send_to = SendTo::One;
+                self.send_buf.clear();
+            }
+            2 => self.open_edit(),
+            3 => self.open_history(),
+            4 => self.toggle_pin(),
+            5 => self.begin_set_superior(pi),
+            6 => self.confirm_remove = Some(pi),
             _ => {}
         }
     }
