@@ -194,7 +194,49 @@ pub(crate) fn snapshot_table() -> ProcTable {
     table
 }
 
+/// When `pid` was created (FILETIME ticks); None when it cannot be read.
+#[cfg(windows)]
+fn born(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, FALSE, FILETIME},
+        System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: read-only query on a handle opened and closed here; a null
+    // handle only means the process is gone or out of reach.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
+        CloseHandle(handle);
+        ok.then_some(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
+    }
+}
+/// The unix table comes from `ps`, which reports live parents only.
+#[cfg(not(windows))]
+fn born(_pid: u32) -> Option<u64> {
+    None
+}
+
 fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec<u32> {
+    walk_tree(root, children, born)
+}
+
+/// `root` and everything under it. Windows keeps a dead parent's pid in its
+/// children's records and hands that pid out again, so a child older than
+/// its "parent" belongs to a stranger and is left out: squad kills what
+/// this returns.
+pub(crate) fn walk_tree(
+    root: u32,
+    children: &HashMap<u32, Vec<u32>>,
+    born: impl Fn(u32) -> Option<u64>,
+) -> Vec<u32> {
     let mut ordered = Vec::new();
     let mut visited = HashSet::new();
     let mut stack = vec![root];
@@ -204,7 +246,11 @@ fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec
         }
         ordered.push(pid);
         if let Some(kids) = children.get(&pid) {
-            stack.extend(kids.iter().copied());
+            let parent = born(pid);
+            stack.extend(kids.iter().copied().filter(|&kid| {
+                // An unreadable time keeps the edge, as before.
+                !matches!((parent, born(kid)), (Some(p), Some(k)) if k < p)
+            }));
         }
     }
     ordered

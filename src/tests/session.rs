@@ -519,3 +519,37 @@ fn missing_folder_is_named_in_the_error() {
         .expect("no folder, no session");
     assert!(format!("{err:#}").contains("is missing"), "{err:#}");
 }
+
+#[test]
+fn resize_repaint_is_not_agent_output() {
+    use std::time::{Duration, Instant};
+    let p = Project {
+        name: "resize".into(),
+        path: std::env::temp_dir(),
+        command: crate::config::shell(),
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let mut s = Session::spawn(&p, 30, 100).unwrap();
+    let settle = |s: &mut Session, ms: u64| {
+        let end = Instant::now() + Duration::from_millis(ms);
+        let mut changed = false;
+        while Instant::now() < end {
+            changed |= s.update();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        changed
+    };
+    settle(&mut s, 2000);
+    let before = s.last_output;
+    s.resize(30, 138).unwrap();
+    let repainted = settle(&mut s, 400);
+    assert_eq!(s.last_output, before, "the repaint counted as output");
+    // Windows repaints on resize; without it this test would prove nothing.
+    #[cfg(windows)]
+    assert!(repainted, "no repaint arrived");
+    let _ = repainted;
+}

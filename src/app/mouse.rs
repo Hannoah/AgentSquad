@@ -346,10 +346,9 @@ impl App {
                 } else {
                     // One click switches: a live session takes focus at once.
                     self.selected = i;
-                    let live = self
-                        .order
-                        .get(i)
-                        .is_some_and(|&pi| slot_running(&self.sessions, pi));
+                    let live = self.order.get(i).is_some_and(|&pi| {
+                        slot_running(&self.sessions, pi) || self.is_starting(pi)
+                    });
                     self.mode = if live { Mode::Focus } else { Mode::Manager };
                 }
                 self.dirty = true;

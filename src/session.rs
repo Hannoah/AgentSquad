@@ -434,6 +434,8 @@ pub struct Session {
     pub cpu_prev: u64,
     pub sampled: Option<Instant>,
     pub last_output: Option<Instant>,
+    /// When the pane last changed size; see `RESIZE_ECHO`.
+    pub resized: Option<Instant>,
     pub last_input: Option<Instant>,
     pub had_activity: bool,
     pub dismissed_exit: bool,
@@ -563,6 +565,7 @@ impl Session {
             cpu_prev: 0,
             sampled: None,
             last_output: None,
+            resized: None,
             last_input: None,
             had_activity: false,
             dismissed_exit: false,
@@ -617,6 +620,9 @@ impl Session {
         self.last_flags = Instant::now();
     }
     pub fn update(&mut self) -> bool {
+        // ponytail: fixed window; real output in it is not counted either, the
+        // next chunk after it is. Compare screens if a slow repaint slips past.
+        const RESIZE_ECHO: Duration = Duration::from_millis(500);
         let mut changed = false;
         let mut received_output = false;
         let started = Instant::now();
@@ -624,8 +630,11 @@ impl Session {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     self.parser.process(&bytes);
-                    self.last_output = Some(Instant::now());
-                    self.had_activity = true;
+                    // The terminal repaints after a resize; that is not the agent working.
+                    if self.resized.is_none_or(|t| t.elapsed() >= RESIZE_ECHO) {
+                        self.last_output = Some(Instant::now());
+                        self.had_activity = true;
+                    }
                     received_output = true;
                     changed = true;
                 }
@@ -676,6 +685,7 @@ impl Session {
             NonZero::new(cols.max(1)).unwrap(),
         );
         self.gen += 1;
+        self.resized = Some(Instant::now());
         self.refresh_screen_flags();
         Ok(())
     }

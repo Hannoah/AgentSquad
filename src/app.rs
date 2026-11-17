@@ -368,6 +368,19 @@ impl App {
             .is_some_and(|p| self.starting.contains_key(&p.name))
     }
 
+    /// A start cannot be stopped or restarted half way: say so instead of
+    /// going quiet. True when `pi` is starting.
+    fn say_if_starting(&mut self, pi: usize) -> bool {
+        let starting = self.is_starting(pi);
+        if starting {
+            self.message = (
+                format!("{} is still starting.", self.cfg.projects[pi].name),
+                Notice::Info,
+            );
+        }
+        starting
+    }
+
     /// Start project `pi` on a worker: opening a PTY takes about 150 ms, too
     /// long for the thread that reads keys. `finish_start` files the result.
     /// A session already in the slot is stopped first, on the same worker, so
@@ -513,6 +526,9 @@ impl App {
     /// Replace project `pi`'s session with a fresh one; a failure is
     /// reported when it comes back.
     fn restart(&mut self, pi: usize, rows: u16, cols: u16) {
+        if self.say_if_starting(pi) {
+            return;
+        }
         if let Some(p) = self.cfg.projects.get(pi) {
             self.message = (format!("Restarting {}", p.name), Notice::Info);
         }

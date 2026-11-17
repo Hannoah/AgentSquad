@@ -127,3 +127,21 @@ fn top_processes_knows_its_own_parent() {
         .unwrap();
     assert!(me.ppid > 0 && me.ancestors.first() == Some(&me.ppid));
 }
+
+#[test]
+fn tree_walk_drops_children_older_than_their_parent() {
+    // pid 1 was born at 100. pid 2 names 1 as parent but is older: its real
+    // parent died and 1 is that pid handed out again. 4 hangs under 2.
+    let children = std::collections::HashMap::from([(1, vec![2, 3]), (2, vec![4])]);
+    let born = |pid| {
+        [(1, 100), (2, 50), (3, 150), (4, 60)]
+            .into_iter()
+            .find(|b| b.0 == pid)
+            .map(|b| b.1)
+    };
+    assert_eq!(crate::sys::walk_tree(1, &children, born), vec![1, 3]);
+    // No times to compare: every edge is kept.
+    let mut all = crate::sys::walk_tree(1, &children, |_| None);
+    all.sort_unstable();
+    assert_eq!(all, vec![1, 2, 3, 4]);
+}

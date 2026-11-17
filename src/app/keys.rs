@@ -63,10 +63,11 @@ impl App {
         if let Some(i) = focus_switch_key(k.code, k.modifiers, self.order.len()) {
             self.selected = i;
             // A stopped project has nothing to type into: land on the manager.
+            // One that is starting keeps the keys typed until it is up.
             if !self
                 .order
                 .get(i)
-                .is_some_and(|&pi| slot_running(&self.sessions, pi))
+                .is_some_and(|&pi| slot_running(&self.sessions, pi) || self.is_starting(pi))
             {
                 self.mode = Mode::Manager;
             }
@@ -556,7 +557,11 @@ impl App {
                     .is_some_and(|s| s.status.is_running());
                 if is_running {
                     self.confirm_stop = target;
-                } else if target.is_some() {
+                } else if target.is_none() {
+                    if let Some(&pi) = self.order.get(self.selected) {
+                        self.say_if_starting(pi);
+                    }
+                } else {
                     // `s` never clears the exit banner: `Esc` dismisses it
                     // and `Enter` restarts the session. Say so instead of
                     // going quiet.
