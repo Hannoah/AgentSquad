@@ -71,6 +71,8 @@ fn update_prompt_accepts_only_y() {
 fn only_ctrl_q_leaves_terminal_focus() {
     use crossterm::event::KeyModifiers as M;
     assert!(focus_exit_key(KeyCode::Char('q'), M::CONTROL));
+    assert!(focus_exit_key(KeyCode::Char('ㅂ'), M::CONTROL));
+    assert!(focus_exit_key(KeyCode::Char('ㅃ'), M::CONTROL));
     // Esc and Ctrl+G are the agent's, not ours.
     assert!(!focus_exit_key(KeyCode::Esc, M::NONE));
     assert!(!focus_exit_key(KeyCode::Char('g'), M::CONTROL));

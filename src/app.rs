@@ -296,6 +296,7 @@ pub(crate) struct App {
     pub(crate) pane: (u16, u16),
     /// `z`: a focused terminal takes the sidebar's columns too.
     pub(crate) zoom: bool,
+    pub(crate) hangul_hotkey_seen: bool,
     pub(crate) quit: bool,
 }
 
@@ -400,7 +401,36 @@ impl App {
             start_rx,
             pane: (0, 0),
             zoom: false,
+            hangul_hotkey_seen: false,
             quit: false,
+        }
+    }
+
+    /// True when the active UI state only accepts ASCII/navigation shortcuts
+    /// (no Korean prose composition needed), so the OS IME can temporarily
+    /// switch to English to avoid holding consonants in a preedit box.
+    pub(crate) fn wants_ascii_ime(&self) -> bool {
+        if self.env_modal.as_ref().is_some_and(|m| m.editor.is_some()) {
+            return false;
+        }
+        if self.env_modal.is_some()
+            || self.history.is_some()
+            || self.procs.is_some()
+            || self.context_menu.is_some()
+            || self.confirm_quit
+            || self.confirm_start_all
+            || self.confirm_stop.is_some()
+            || self.confirm_remove.is_some()
+            || self.confirm_restart.is_some()
+            || self.confirm_update
+            || self.confirm_apply
+        {
+            return true;
+        }
+        match self.mode {
+            Mode::Manager | Mode::Help => true,
+            Mode::Add => matches!(self.add_field, 1 | 3 | 5),
+            Mode::Focus | Mode::Send | Mode::Filter => false,
         }
     }
 
@@ -1239,6 +1269,7 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new(c, initial);
     app.resume = resume;
+    let mut ime = crate::ime::ImeGuard::new();
     let mut title = String::new();
     loop {
         let area = terminal.size()?;
@@ -1250,6 +1281,10 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
         app.animate();
         app.start_initial(rows, cols);
         app.pump();
+        ime.sync(
+            app.wants_ascii_ime(),
+            std::mem::take(&mut app.hangul_hotkey_seen),
+        );
         if app.take_bell() {
             let backend = terminal.backend_mut();
             let _ = backend.write_all(b"\x07");
@@ -1286,6 +1321,10 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
                 break;
             }
         }
+        ime.sync(
+            app.wants_ascii_ime(),
+            std::mem::take(&mut app.hangul_hotkey_seen),
+        );
         if app.quit {
             break;
         }

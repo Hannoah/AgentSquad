@@ -576,6 +576,26 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
         "{dotenv_c}"
     );
 
+    // Verify wants_ascii_ime toggles accurately across shortcut vs text-entry modes.
+    app.mode = Mode::Manager;
+    assert!(app.wants_ascii_ime());
+    app.mode = Mode::Focus;
+    assert!(!app.wants_ascii_ime());
+    app.mode = Mode::Send;
+    assert!(!app.wants_ascii_ime());
+    app.mode = Mode::Filter;
+    assert!(!app.wants_ascii_ime());
+    app.mode = Mode::Add;
+    app.add_field = 0; // Path text field
+    assert!(!app.wants_ascii_ime());
+    app.add_field = 1; // Kind toggle
+    assert!(app.wants_ascii_ime());
+    app.add_field = 5; // Env picker field
+    assert!(app.wants_ascii_ime());
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    app.on_key(key(KeyCode::Char('ㅁ')), 27, 70); // Hangul 'ㅁ' -> 'a' (Add)
+    assert_eq!(app.mode, Mode::Add);
+
     drop(app);
     env::remove_var("AGENTSQUAD_ENV");
     let _ = fs::remove_dir_all(&dir);

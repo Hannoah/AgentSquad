@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod envvault;
 pub mod history;
+pub mod ime;
 pub mod input;
 pub mod ledger;
 pub mod pathpick;

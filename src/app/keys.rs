@@ -6,6 +6,11 @@ impl App {
     pub(crate) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         self.dirty = true;
         let k = normalize_ctrl_alt_key(k);
+        if self.wants_ascii_ime()
+            && matches!(k.code, KeyCode::Char(c) if hangul_to_qwerty(c).is_some())
+        {
+            self.hangul_hotkey_seen = true;
+        }
         // Any key drops the highlight. Ctrl+C on a selection copies it and is
         // not sent on; with nothing selected it reaches the session as before.
         if self.sel.is_some_and(|s| s.moved)

@@ -400,7 +400,10 @@ pub fn tilde_bytes(n: u8, shift: bool, ctrl: bool) -> Vec<u8> {
 /// Ctrl+Q leaves terminal focus. Every other key, Esc and Ctrl+G included,
 /// belongs to the session: agents use Esc to interrupt and rewind.
 pub fn focus_exit_key(code: KeyCode, mods: KeyModifiers) -> bool {
-    hotkey_code(code, KeyModifiers::NONE) == KeyCode::Char('q') && mods == KeyModifiers::CONTROL
+    matches!(
+        hotkey_code(code, KeyModifiers::NONE),
+        KeyCode::Char('q' | 'Q')
+    ) && mods == KeyModifiers::CONTROL
 }
 /// What Option+1..9 types on a US Mac keyboard, in digit order. macOS
 /// terminals send these characters instead of an Alt modifier unless
