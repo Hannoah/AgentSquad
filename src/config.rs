@@ -770,7 +770,7 @@ pub fn preview_name(
     base.map(|b| unique_name(&b, existing))
 }
 /// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.
-fn program_stem(prog: &str) -> String {
+pub(crate) fn program_stem(prog: &str) -> String {
     let base = std::path::Path::new(prog)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -786,6 +786,16 @@ fn program_stem(prog: &str) -> String {
         }
     }
     base
+}
+/// Fast binary stem extraction for OS process names (`szExeFile` or `comm`)
+/// without allocating a `Vec<String>` via `split_command`.
+pub fn process_stem(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let stem = program_stem(trimmed);
+    (!stem.is_empty()).then_some(stem)
 }
 /// The command a shell is told to run: what follows `/c`, `/k`, `-c` or
 /// `-Command`. None when the shell is started bare.

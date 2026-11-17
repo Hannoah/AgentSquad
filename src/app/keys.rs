@@ -17,6 +17,10 @@ impl App {
             return;
         }
         self.sel = None;
+        if self.env_modal.is_some() {
+            self.key_env_modal(k);
+            return;
+        }
         match self.mode {
             Mode::Focus => self.key_focus(k, rows),
             Mode::Send => self.key_send(k, rows, cols),
@@ -281,7 +285,9 @@ impl App {
             (false, Some(0)) => self.add_sel = None,
             (false, Some(i)) => self.add_sel = Some(i - 1),
             (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
-            (false, None) => self.add_field = if self.add_edit.is_some() { 3 } else { 4 },
+            (false, None) => {
+                self.add_field = 5;
+            }
         }
     }
 
@@ -318,19 +324,21 @@ impl App {
             KeyCode::Down if self.add_edit.is_some() && self.add_field == 0 => {
                 self.step_path_list(true)
             }
-            // Editing reaches only Path, Command and Autostart.
+            // Editing reaches Path, Command, Autostart, and Env (.env).
             KeyCode::Tab | KeyCode::Down if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
                     0 => 2,
                     2 => 3,
+                    3 => 5,
                     _ => 0,
                 };
             }
             KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
+                    5 => 3,
                     3 => 2,
                     2 => 0,
-                    _ => 3,
+                    _ => 5,
                 };
             }
             KeyCode::Enter => {
@@ -339,6 +347,7 @@ impl App {
                     Err(e) => self.add_err = format!("Config reload failed: {e:#}"),
                     Ok(disk) => {
                         merge_projects(&mut self.cfg, &mut self.sessions, disk);
+                        self.refresh_prefixes();
                         self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                     }
                 }
@@ -358,25 +367,29 @@ impl App {
                         Err(e) => self.add_err = e,
                         Ok(mut p) => {
                             p.autostart = self.add_autostart;
-                            let under = self.add_under.as_str();
-                            let under = under.trim();
-                            if !under.is_empty() {
-                                match check_superior(&self.cfg.projects, p.kind, under) {
-                                    Ok(c) => p.reports_to = Some(c),
-                                    Err(e) => {
-                                        self.add_err = e;
-                                        return;
+                            if p.kind == Kind::Agent {
+                                let under = self.add_under.as_str();
+                                let under = under.trim();
+                                if !under.is_empty() {
+                                    match check_superior(&self.cfg.projects, p.kind, under) {
+                                        Ok(c) => p.reports_to = Some(c),
+                                        Err(e) => {
+                                            self.add_err = e;
+                                            return;
+                                        }
                                     }
                                 }
                             }
                             let name = p.name.clone();
                             let kind_label = p.kind.as_str();
+                            let proj_path = p.path.clone();
                             self.cfg.projects.push(p);
                             self.sessions.push(None);
                             match persist_add(&self.cfg.projects[self.cfg.projects.len() - 1]) {
                                 Err(e) => {
                                     self.cfg.projects.pop();
                                     self.sessions.pop();
+                                    self.refresh_prefixes();
                                     self.order =
                                         apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                                     self.selected =
@@ -387,6 +400,7 @@ impl App {
                                     self.cfg.projects.last().map(ledger::ensure_agent);
                                     // A new project must be visible, so drop any filter.
                                     self.filter_buf.clear();
+                                    self.refresh_prefixes();
                                     self.order = display_order(&self.cfg.projects);
                                     self.selected = self
                                         .order
@@ -398,8 +412,18 @@ impl App {
                                     enable_chain_ledger(&mut self.cfg.projects, last);
                                     ledger::report_transfer(&self.cfg.projects, &name, None);
                                     ledger::write_rosters(&self.cfg.projects);
-                                    self.message =
-                                        (format!("Registered {name} ({kind_label})"), Notice::Info);
+                                    let (env_note, notice) = match self.apply_add_env(&proj_path) {
+                                        Ok(Some((added, updated))) => {
+                                            (format!(" (.env: +{added}, ~{updated})"), Notice::Info)
+                                        }
+                                        Ok(None) => (String::new(), Notice::Info),
+                                        Err(e) => (format!(" ({e})"), Notice::Warn),
+                                    };
+                                    self.add_env.clear();
+                                    self.message = (
+                                        format!("Registered {name} ({kind_label}){env_note}"),
+                                        notice,
+                                    );
                                 }
                             }
                         }
@@ -415,7 +439,9 @@ impl App {
                     self.add_err.clear();
                 }
             }
-            KeyCode::Tab => self.add_field = (self.add_field + 1) % 5,
+            KeyCode::Tab => {
+                self.add_field = next_add_field(self.add_field, self.add_kind, true);
+            }
             KeyCode::Up if self.add_field == 0 => self.step_path_list(false),
             KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
             KeyCode::PageDown if self.add_field == 0 && !self.add_picks.is_empty() => {
@@ -428,14 +454,21 @@ impl App {
                     Some(i) => Some(i.saturating_sub(6)),
                 };
             }
-            KeyCode::BackTab | KeyCode::Up => self.add_field = (self.add_field + 4) % 5,
-            KeyCode::Down => self.add_field = (self.add_field + 1) % 5,
+            KeyCode::BackTab | KeyCode::Up => {
+                self.add_field = next_add_field(self.add_field, self.add_kind, false);
+            }
+            KeyCode::Down => {
+                self.add_field = next_add_field(self.add_field, self.add_kind, true);
+            }
             // The toggle fields flip on Space or a sideways arrow.
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 1 => {
                 self.add_kind = self.add_kind.toggled();
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 3 => {
                 self.add_autostart = !self.add_autostart;
+            }
+            KeyCode::Char(' ') if self.add_field == 5 => {
+                self.open_env_modal(EnvTarget::AddForm);
             }
             _ => {
                 if self.add_input().and_then(|input| input.edit_key(k)) == Some(true) {
@@ -476,6 +509,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') if !self.order.is_empty() => {
                 self.selected = (self.selected + self.order.len() - 1) % self.order.len()
             }
+            KeyCode::Tab if !self.order.is_empty() => self.jump_attention(),
             KeyCode::Char('m') if !self.order.is_empty() => {
                 self.mode = Mode::Send;
                 self.send_to = SendTo::One;
@@ -502,6 +536,14 @@ impl App {
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('h') if !self.order.is_empty() => self.open_history(),
             KeyCode::Char('M') => self.open_procs(),
+            KeyCode::Char('E') => {
+                let target = self
+                    .order
+                    .get(self.selected)
+                    .copied()
+                    .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
+                self.open_env_modal(target);
+            }
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
             KeyCode::Char('z') => {
@@ -616,5 +658,26 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+fn next_add_field(cur: usize, kind: Kind, forward: bool) -> usize {
+    if kind == Kind::Service {
+        match (cur, forward) {
+            (0, true) => 1,
+            (1, true) => 2,
+            (2, true) => 3,
+            (3, true) => 5,
+            (5, true) => 0,
+            (5, false) => 3,
+            (3, false) => 2,
+            (2, false) => 1,
+            (1, false) => 0,
+            _ => 5,
+        }
+    } else if forward {
+        (cur + 1) % 6
+    } else {
+        (cur + 5) % 6
     }
 }

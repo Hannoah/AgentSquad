@@ -28,6 +28,15 @@ impl App {
             }
             self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
             self.selected = 0;
+        } else if let Some(ed) = self.env_modal.as_mut().and_then(|m| m.editor.as_mut()) {
+            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                if ed.field == 0 {
+                    ed.key.insert(ch);
+                } else {
+                    ed.value.insert(ch);
+                }
+            }
+            ed.err.clear();
         } else if self.mode == Mode::Add {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 if let Some(input) = self.add_input() {
@@ -51,7 +60,18 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) || wheel_lines(m.kind).is_some() {
             self.sel = None; // the cells would no longer match the text
         }
-        if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
+        if let (Some(lines), Some(m_env)) = (wheel_lines(m.kind), self.env_modal.as_mut()) {
+            let len = self.env_vault.vars.len();
+            if len > 0 {
+                m_env.confirm_delete = None;
+                m_env.sel = if lines > 0 {
+                    m_env.sel.saturating_sub(1)
+                } else {
+                    (m_env.sel + 1).min(len - 1)
+                };
+                self.dirty = true;
+            }
+        } else if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
             // The memory monitor is modal: the wheel moves its pick.
             p.confirm = None;
             p.sel = if lines > 0 {
@@ -154,7 +174,27 @@ impl App {
             let answer = self.confirm_modals().last().and_then(|(_, _, lines)| {
                 confirm_click(lines, modal_rect(lines, area.into()), m.column, m.row)
             });
-            if let Some(h) = self.history.as_mut() {
+            if let Some(m_env) = self.env_modal.as_mut() {
+                let popup = env_popup(area.into());
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                let list = env_list_rect(popup, m_env.editor.is_some());
+                if !popup.contains(at) {
+                    self.env_modal = None;
+                } else if list.contains(at) {
+                    let i = m_env.top.get() + usize::from(m.row - list.y);
+                    if i < self.env_vault.vars.len() {
+                        m_env.confirm_delete = None;
+                        m_env.sel = i;
+                        if m_env.target != EnvTarget::VaultOnly && m_env.editor.is_none() {
+                            let key = &self.env_vault.vars[i].key;
+                            if !m_env.picked.remove(key) {
+                                m_env.picked.insert(key.clone());
+                            }
+                        }
+                    }
+                }
+                self.dirty = true;
+            } else if let Some(h) = self.history.as_mut() {
                 let popup = history_popup(area.into());
                 let at = ratatui::layout::Position::new(m.column, m.row);
                 let (left_col, _) = history_cols(popup);
@@ -290,6 +330,10 @@ impl App {
                                     self.add_field = 3;
                                     self.add_autostart = !self.add_autostart;
                                 }
+                                5 => {
+                                    self.add_field = 5;
+                                    self.open_env_modal(EnvTarget::AddForm);
+                                }
                                 _ => {}
                             },
                         }
@@ -316,14 +360,18 @@ impl App {
                                 self.add_field = 3;
                                 self.add_autostart = !self.add_autostart;
                             }
-                            4 => self.add_field = 4,
+                            4 if self.add_kind == Kind::Agent => self.add_field = 4,
+                            5 => {
+                                self.add_field = 5;
+                                self.open_env_modal(EnvTarget::AddForm);
+                            }
                             _ => {}
                         },
                     }
                 }
                 self.dirty = true;
-            } else if matches!(self.mode, Mode::Send | Mode::Filter) {
-                // In text input bar, keep input focus
+            } else if self.mode == Mode::Send {
+                // Keep text input focus in Send mode
             } else if let Some(i) = sidebar_click(
                 self.side_rect,
                 self.list_offset,
@@ -331,9 +379,20 @@ impl App {
                 m.column,
                 m.row,
             ) {
+                if self.mode == Mode::Filter {
+                    self.mode = Mode::Manager;
+                }
                 if i == MEMORY_ROW {
                     self.mode = Mode::Manager;
                     self.open_procs();
+                } else if i == ENV_ROW {
+                    self.mode = Mode::Manager;
+                    let target = self
+                        .order
+                        .get(self.selected)
+                        .copied()
+                        .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
+                    self.open_env_modal(target);
                 } else if self.selected == i && self.mode == Mode::Focus {
                     // Clicking the manager while typing in a terminal hands
                     // the keyboard back to the manager.
@@ -376,7 +435,9 @@ impl App {
                 // when released without a drag. With zoom on in Manager mode,
                 // defer focusing a slot until MouseUp so a drag does not widen
                 // `pane_rect` mid-selection.
-                if let Some(&pi) = self.order.get(self.selected) {
+                if self.cfg.projects.is_empty() {
+                    self.open_add();
+                } else if let Some(&pi) = self.order.get(self.selected) {
                     let slot = self.sessions.get(pi).is_some_and(|o| o.is_some());
                     let live = slot && slot_running(&self.sessions, pi);
                     let inner = self.pane_rect.inner(ratatui::layout::Margin::new(1, 1));
@@ -438,6 +499,7 @@ impl App {
             && !self.confirm_apply
             && self.history.is_none()
             && self.procs.is_none()
+            && self.env_modal.is_none()
         {
             // Right-click on a sidebar row opens its quick-action menu.
             // Manager-only, so typing in a terminal is never stolen, and
@@ -449,11 +511,12 @@ impl App {
                 m.column,
                 m.row,
             )
-            .filter(|&i| i != MEMORY_ROW)
+            .filter(|&i| i != MEMORY_ROW && i != ENV_ROW)
             {
                 self.selected = i;
                 if let Some(&pi) = self.order.get(self.selected) {
                     self.context_menu = Some(pi);
+                    self.context_sel = 0;
                 }
                 self.dirty = true;
             }

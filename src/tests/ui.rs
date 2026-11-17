@@ -721,7 +721,17 @@ fn context_menu_lines_match_click_mapping() {
             .map(|s| s.content.as_ref())
             .collect();
         assert!(hint.contains("Esc"), "last row tells how to cancel");
+        assert!(
+            hint.contains("Enter"),
+            "last row tells how to run selected item"
+        );
     }
+    let hl = context_menu_lines_at("web", true, Some(2));
+    assert_eq!(
+        hl[3].spans[0].style.bg,
+        Some(ratatui::style::Color::Cyan),
+        "selected context menu row should be highlighted"
+    );
 }
 #[test]
 fn window_title_names_the_selected_project() {

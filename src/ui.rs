@@ -111,10 +111,10 @@ pub fn help_lines() -> Vec<&'static str> {
         "Enter      open session (starts it if stopped)",
         "Click, drag  focus a project or the pane; drag copies text",
         "Right-click  open quick actions for a project",
-        "j/k, arrows  select project",
+        "j/k, Tab   select project / jump to next needing attention",
         "1-9, Home/End  jump to a project / the first / the last",
         "/          filter projects (Esc clears)",
-        "a          add project",
+        "a, E       add project / shared env vars (.env)",
         "m          message: send a line to session",
         "b          brief the agent on .squad/ (ledger = true)",
         "h          history: read the project's SITREPs",
@@ -448,37 +448,58 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
 /// Rendered lines for the quick-action menu popup, shared by drawing
 /// and click mapping: one row per action, then the key hint.
 pub fn context_menu_lines(name: &str, running: bool) -> Vec<Line<'static>> {
+    context_menu_lines_at(name, running, None)
+}
+pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> Vec<Line<'static>> {
     let items = context_menu_items(running);
-    let mut lines = Vec::with_capacity(items.len() + 2);
+    let mut lines = Vec::with_capacity(items.len() + 3);
     lines.push(Line::from(Span::styled(
         name.to_string(),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(ratatui::style::Modifier::BOLD),
     )));
-    for (key, label) in &items {
+    for (i, (key, label)) in items.iter().enumerate() {
+        let on = sel == Some(i);
+        let row_style = if on {
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let key_style = if on {
+            row_style
+        } else {
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+        };
         lines.push(Line::from(vec![
-            Span::styled(
-                key.to_string(),
-                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            Span::raw(format!("  {label}")),
+            Span::styled(key.to_string(), key_style),
+            Span::styled(format!("  {label}"), row_style),
         ]));
     }
     lines.push(Line::from(""));
     let range = format!("1-{}", items.len());
     lines.push(Line::from(hint_spans(&[
         (range.as_str(), "selects"),
+        ("↑↓/Enter", "runs"),
         ("Esc", "cancels"),
     ])));
     lines
 }
 pub fn dim_area(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) {
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
-            }
+    let clamped = area.intersection(buf.area);
+    let bw = usize::from(buf.area.width);
+    let x_off = usize::from(clamped.x.saturating_sub(buf.area.x));
+    let row_len = usize::from(clamped.width);
+    if row_len == 0 {
+        return;
+    }
+    for y in clamped.top()..clamped.bottom() {
+        let start = usize::from(y.saturating_sub(buf.area.y)) * bw + x_off;
+        for cell in &mut buf.content[start..start + row_len] {
+            cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
         }
     }
 }
@@ -630,6 +651,28 @@ pub fn procs_list_rect(popup: ratatui::layout::Rect) -> ratatui::layout::Rect {
         .min(inner.height.saturating_sub(header_h));
     ratatui::layout::Rect::new(inner.x, inner.y + header_h, inner.width, h)
 }
+pub fn env_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    fixed_rect(
+        area.width.saturating_sub(6).min(76),
+        area.height.saturating_sub(4).min(22),
+        area,
+    )
+}
+pub fn env_list_rect(popup: ratatui::layout::Rect, has_editor: bool) -> ratatui::layout::Rect {
+    let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    let header_h: u16 = u16::from(inner.height >= 4);
+    let editor_h: u16 = if has_editor && inner.height >= 9 {
+        5
+    } else {
+        0
+    };
+    let h = inner
+        .height
+        .saturating_sub(header_h + editor_h + 1)
+        .max(1)
+        .min(inner.height.saturating_sub(header_h));
+    ratatui::layout::Rect::new(inner.x, inner.y + header_h, inner.width, h)
+}
 pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));
     ratatui::layout::Rect::new(
@@ -650,9 +693,10 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [-- cmd]
+  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [-- cmd]
                                                      Register project (path optional for services;
-                                                     --create makes a missing folder)
+                                                     --create makes folder, --env writes .env)
+  squad env <list|set KEY VAL|remove KEY|apply proj> Manage shared env vars and apply to .env
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
@@ -662,7 +706,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · e  edit · f  pin · z  zoom · m  message (send a line) · u  set commander
+  /  filter · a  add · E  shared env (.env) · e  edit · f  pin · z  zoom · m  message · u  commander
   b  brief (ledger) · o  order (all under a commander) · h  history · M  memory monitor
   s  stop · r  restart · d/Del  remove · S  start all · U  install update
   PgUp/PgDn  scroll · q  quit · ?  help

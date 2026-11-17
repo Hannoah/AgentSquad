@@ -323,9 +323,10 @@ pub fn confirm_key(code: KeyCode) -> Option<bool> {
 }
 /// Map a left click to the sidebar's position in `order`, if it landed on
 /// a project row (borders, headers and "(none)" placeholders miss).
-/// Sidebar row target for the Management section's memory monitor entry;
-/// never a valid position in `order`.
+/// Sidebar row targets for the Management section entries; never valid
+/// positions in `order`.
 pub const MEMORY_ROW: usize = usize::MAX;
+pub const ENV_ROW: usize = usize::MAX - 1;
 pub fn sidebar_click(
     side: ratatui::layout::Rect,
     offset: usize,

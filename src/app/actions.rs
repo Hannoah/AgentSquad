@@ -43,6 +43,7 @@ impl App {
         ledger::write_rosters(&self.cfg.projects);
         // The new tree must be visible, so drop any filter and follow the agent.
         self.filter_buf.clear();
+        self.refresh_prefixes();
         self.order = display_order(&self.cfg.projects);
         self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         let msg = match stored {
@@ -166,6 +167,7 @@ impl App {
             ledger::write_rosters(&self.cfg.projects);
             // The new name must be visible, so drop any filter and follow it.
             self.filter_buf.clear();
+            self.refresh_prefixes();
             self.order = display_order(&self.cfg.projects);
             self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         }
@@ -175,17 +177,42 @@ impl App {
             return;
         }
         let autostart = self.add_autostart;
-        let p = &mut self.cfg.projects[pi];
-        p.command = if cmd.is_empty() { shell() } else { cmd };
-        p.autostart = autostart;
+        let path = {
+            let p = &mut self.cfg.projects[pi];
+            p.command = if cmd.is_empty() { shell() } else { cmd };
+            p.autostart = autostart;
+            p.path.clone()
+        };
+        let env_note = match self.apply_add_env(&path) {
+            Ok(Some((added, updated))) => format!("; .env (+{added}, ~{updated})"),
+            Ok(None) => String::new(),
+            Err(e) => {
+                self.add_err = e;
+                return;
+            }
+        };
         self.add_edit = None;
+        self.add_env.clear();
         self.mode = Mode::Manager;
         let note = match (was_running, moved) {
             (true, true) => "; restart it to use the new folder and command",
             (true, false) => "; restart it to use the new command",
             _ => "",
         };
-        self.message = (format!("Saved {name}{note}"), Notice::Info);
+        self.message = (format!("Saved {name}{note}{env_note}"), Notice::Info);
+    }
+
+    pub(crate) fn apply_add_env(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<Option<(usize, usize)>, String> {
+        if self.add_env.is_empty() {
+            return Ok(None);
+        }
+        let keys: Vec<String> = self.add_env.iter().cloned().collect();
+        envvault::apply_dotenv_keys(dir, &self.env_vault, &keys)
+            .map(Some)
+            .map_err(|e| format!(".env failed: {e:#}"))
     }
 
     /// `f`: pin or unpin the selected project. Pinned ones list first in
@@ -203,6 +230,7 @@ impl App {
             return;
         }
         self.cfg.projects[pi].pinned = pinned;
+        self.refresh_prefixes();
         self.order = display_order(&self.cfg.projects);
         self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         let what = if pinned { "Pinned" } else { "Unpinned" };
@@ -419,6 +447,7 @@ impl App {
                         Ok(()) => {
                             self.stop_slot(pi, "project removed");
                             remove_project(&mut self.cfg.projects, &mut self.sessions, pi);
+                            self.refresh_prefixes();
                             // Keep an active filter across the removal.
                             self.order =
                                 apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
@@ -486,9 +515,8 @@ impl App {
         }
     }
 
-    /// Keys while the quick-action menu is open: number rows run, `Enter`
-    /// runs the first row, `Esc` closes. Everything else is ignored so a
-    /// key meant for a session cannot slip through.
+    /// Keys while the quick-action menu is open: arrows/`j`/`k` move highlight,
+    /// `Enter` runs the highlighted row, number keys `1-9` run directly, `Esc` closes.
     pub(super) fn key_context_menu(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         let Some(pi) = self.context_menu else {
             return;
@@ -496,9 +524,16 @@ impl App {
         let count = context_menu_items(slot_running(&self.sessions, pi)).len();
         match k.code {
             KeyCode::Esc => self.context_menu = None,
+            KeyCode::Down | KeyCode::Char('j') if count > 0 => {
+                self.context_sel = (self.context_sel + 1) % count;
+            }
+            KeyCode::Up | KeyCode::Char('k') if count > 0 => {
+                self.context_sel = (self.context_sel + count - 1) % count;
+            }
             KeyCode::Enter => {
+                let action = self.context_sel.min(count.saturating_sub(1));
                 self.context_menu = None;
-                self.run_context_action(pi, 0, rows, cols);
+                self.run_context_action(pi, action, rows, cols);
             }
             KeyCode::Char(c) => {
                 if let Some(d) = c.to_digit(10) {
@@ -506,6 +541,206 @@ impl App {
                     if idx >= 1 && idx <= count {
                         self.context_menu = None;
                         self.run_context_action(pi, idx - 1, rows, cols);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn key_env_modal(&mut self, k: KeyEvent) {
+        let Some(modal) = self.env_modal.as_mut() else {
+            return;
+        };
+        if let Some(target_key) = modal.confirm_delete.clone() {
+            match confirm_key(k.code) {
+                Some(true) => {
+                    modal.confirm_delete = None;
+                    let mut next_vault = self.env_vault.clone();
+                    envvault::remove_env(&mut next_vault, &target_key);
+                    match envvault::save_env(&next_vault) {
+                        Ok(()) => {
+                            self.env_vault = next_vault;
+                            modal.picked.remove(&target_key);
+                            self.add_env.remove(&target_key);
+                            let len = self.env_vault.vars.len();
+                            modal.sel = modal.sel.min(len.saturating_sub(1));
+                        }
+                        Err(e) => {
+                            self.message = (format!("Save failed: {e:#}"), Notice::Error);
+                        }
+                    }
+                }
+                Some(false) => modal.confirm_delete = None,
+                None => {}
+            }
+            return;
+        }
+        if let Some(ed) = modal.editor.as_mut() {
+            match k.code {
+                KeyCode::Esc => {
+                    modal.editor = None;
+                }
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                    ed.field = 1 - ed.field;
+                }
+                KeyCode::Enter => {
+                    let raw_key = ed.key.as_str();
+                    let val = ed.value.as_str();
+                    let valid_key = match envvault::validate_env_key(&raw_key) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            ed.err = e;
+                            return;
+                        }
+                    };
+                    let mut next_vault = self.env_vault.clone();
+                    if let Some(old) = ed.editing_key.as_deref() {
+                        if old != valid_key {
+                            if next_vault.vars.iter().any(|v| v.key == valid_key) {
+                                ed.err = format!("{valid_key} already exists.");
+                                return;
+                            }
+                            if let Some(pos) = next_vault.vars.iter().position(|v| v.key == old) {
+                                next_vault.vars[pos] = envvault::EnvEntry {
+                                    key: valid_key.clone(),
+                                    value: val,
+                                };
+                            }
+                            modal.picked.remove(old);
+                            self.add_env.remove(old);
+                        } else if let Err(e) =
+                            envvault::upsert_env(&mut next_vault, &valid_key, &val)
+                        {
+                            ed.err = e;
+                            return;
+                        }
+                    } else if let Err(e) = envvault::upsert_env(&mut next_vault, &valid_key, &val) {
+                        ed.err = e;
+                        return;
+                    }
+                    if let Err(e) = envvault::save_env(&next_vault) {
+                        ed.err = format!("Save failed: {e:#}");
+                        return;
+                    }
+                    self.env_vault = next_vault;
+                    if let Some(pos) = self.env_vault.vars.iter().position(|v| v.key == valid_key) {
+                        modal.sel = pos;
+                    }
+                    if modal.target != EnvTarget::VaultOnly {
+                        modal.picked.insert(valid_key);
+                    }
+                    modal.editor = None;
+                }
+                _ => {
+                    let input = if ed.field == 0 {
+                        &mut ed.key
+                    } else {
+                        &mut ed.value
+                    };
+                    if input.edit_key(k) == Some(true) {
+                        ed.err.clear();
+                    }
+                }
+            }
+            return;
+        }
+        let kh = hotkey_event(k);
+        let len = self.env_vault.vars.len();
+        let can_pick = modal.target != EnvTarget::VaultOnly;
+        match kh.code {
+            KeyCode::Esc | KeyCode::Char('E') => {
+                self.env_modal = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                modal.sel = (modal.sel + len - 1) % len;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                modal.sel = (modal.sel + 1) % len;
+            }
+            KeyCode::Char(' ') if can_pick && len > 0 => {
+                if let Some(entry) = self.env_vault.vars.get(modal.sel) {
+                    if !modal.picked.remove(&entry.key) {
+                        modal.picked.insert(entry.key.clone());
+                    }
+                }
+            }
+            KeyCode::Char('a') if can_pick && len > 0 => {
+                if modal.picked.len() == len {
+                    modal.picked.clear();
+                } else {
+                    for entry in &self.env_vault.vars {
+                        modal.picked.insert(entry.key.clone());
+                    }
+                }
+            }
+            KeyCode::Char('v') => {
+                modal.reveal = !modal.reveal;
+            }
+            KeyCode::Char('n') => {
+                modal.editor = Some(EnvEditor {
+                    key: LineInput::new(),
+                    value: LineInput::new(),
+                    field: 0,
+                    editing_key: None,
+                    err: String::new(),
+                });
+            }
+            KeyCode::Char('e') if len > 0 => {
+                if let Some(entry) = self.env_vault.vars.get(modal.sel) {
+                    let mut key_in = LineInput::new();
+                    key_in.set(&entry.key);
+                    let mut val_in = LineInput::new();
+                    val_in.set(&entry.value);
+                    modal.editor = Some(EnvEditor {
+                        key: key_in,
+                        value: val_in,
+                        field: 1,
+                        editing_key: Some(entry.key.clone()),
+                        err: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete if len > 0 => {
+                if let Some(entry) = self.env_vault.vars.get(modal.sel) {
+                    modal.confirm_delete = Some(entry.key.clone());
+                }
+            }
+            KeyCode::Enter => {
+                let target = modal.target;
+                let picked: Vec<String> = modal.picked.iter().cloned().collect();
+                match target {
+                    EnvTarget::AddForm => {
+                        self.add_env = picked.into_iter().collect();
+                        self.env_modal = None;
+                    }
+                    EnvTarget::Project(pi) => {
+                        if picked.is_empty() {
+                            self.env_modal = None;
+                            return;
+                        }
+                        if let Some(p) = self.cfg.projects.get(pi) {
+                            match envvault::apply_dotenv_keys(&p.path, &self.env_vault, &picked) {
+                                Ok((added, updated)) => {
+                                    self.message = (
+                                        format!(
+                                            "Updated {}/.env (+{added} added, {updated} updated)",
+                                            p.name
+                                        ),
+                                        Notice::Info,
+                                    );
+                                    self.env_modal = None;
+                                }
+                                Err(e) => {
+                                    self.message = (format!(".env failed: {e:#}"), Notice::Error);
+                                }
+                            }
+                        } else {
+                            self.env_modal = None;
+                        }
+                    }
+                    EnvTarget::VaultOnly => {
+                        self.env_modal = None;
                     }
                 }
             }

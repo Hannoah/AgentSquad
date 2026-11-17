@@ -57,6 +57,7 @@ impl App {
         self.draw_pane(f, panels[1]);
         self.draw_status(f, vertical[1]);
         let has_modal = matches!(self.mode, Mode::Help | Mode::Add)
+            || self.env_modal.is_some()
             || self.history.is_some()
             || self.procs.is_some()
             || self.confirm_stop.is_some()
@@ -81,6 +82,7 @@ impl App {
         if self.mode == Mode::Add {
             self.draw_add(f);
         }
+        self.draw_env_modal(f);
     }
 
     /// The SITREP reader: filed entries on the left, the picked one's text on
@@ -319,7 +321,11 @@ impl App {
     pub(super) fn draw_context_menu(&self, f: &mut Frame) {
         if let Some(pi) = self.context_menu {
             if let Some(p) = self.cfg.projects.get(pi) {
-                let lines = context_menu_lines(&p.name, slot_running(&self.sessions, pi));
+                let lines = context_menu_lines_at(
+                    &p.name,
+                    slot_running(&self.sessions, pi),
+                    Some(self.context_sel),
+                );
                 modal(f, "Actions", Color::Cyan, lines);
             }
         }
@@ -367,7 +373,7 @@ impl App {
                     .unwrap_or(std::borrow::Cow::Borrowed(self.idle_word(pi)));
                 let status: &str = &status_text;
                 let fg = sess.and_then(|s| s.fg_name.as_deref());
-                let tree = rank_prefix(&self.cfg.projects, pi);
+                let tree = self.rank_prefixes.get(pi).map(String::as_str).unwrap_or("");
                 let pin = if p.pinned { "*" } else { "" };
                 let shown = format!("{tree}{}{pin}", live_name(p, fg));
                 let shown_name: &str = &shown;
@@ -383,6 +389,8 @@ impl App {
                             if let Some(note) = idle_note(s.phase(), quiet) {
                                 detail.push_str(" · ");
                                 detail.push_str(&note);
+                            } else if s.phase() == AgentPhase::Done && !s.acked {
+                                detail.push_str(" · new");
                             }
                         }
                         if let Some(u) = s.usage {
@@ -414,13 +422,24 @@ impl App {
                 } else {
                     None
                 };
-                // Waiting agents get a yellow bar and name so they stand out
-                // at a glance, even in rows that are not selected.
+                // Waiting agents get a yellow bar, and unread finished agents
+                // get a green bar so they stand out at a glance in the list.
                 let needs_input = agent_phase == Some(AgentPhase::NeedsInput) && Some(pi) != sel_pi;
-                let mark = if needs_input { "▎" } else { mark };
+                let done_unacked = agent_phase == Some(AgentPhase::Done)
+                    && sess.is_some_and(|s| !s.acked)
+                    && Some(pi) != sel_pi;
+                let mark = if needs_input || done_unacked {
+                    "▎"
+                } else {
+                    mark
+                };
                 let mark_style = if needs_input {
                     Style::default()
                         .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD)
+                } else if done_unacked {
+                    Style::default()
+                        .fg(Color::Green)
                         .add_modifier(ratatui::style::Modifier::BOLD)
                 } else {
                     row_style
@@ -573,6 +592,22 @@ impl App {
             .style(memory_style),
         );
         targets.push(Some(MEMORY_ROW));
+        let env_style = if self.env_modal.is_some() {
+            selected_row_style()
+        } else {
+            Style::default()
+        };
+        items.push(
+            ListItem::new(Line::from(vec![
+                Span::raw("  Env vault "),
+                Span::styled(
+                    "E",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ),
+            ]))
+            .style(env_style),
+        );
+        targets.push(Some(ENV_ROW));
         let total_items = items.len();
         let visible_rows = (panel.height as usize).saturating_sub(2).max(1);
         if let Some(sr) = sel_row {
@@ -689,17 +724,17 @@ impl App {
             .border_type(BorderType::Rounded)
             .border_style(pane_border_style(self.mode == Mode::Focus))
             .title(title);
-        // Usage, scroll position, and zoom indicator ride on the right edge;
-        // on a narrow pane only a compact ZOOM badge stays.
-        let right_note = [zoom_note.clone(), usage_note, scroll_note]
+        // Usage and zoom ride in the top-right title; scroll position goes in
+        // the bottom-right border so standard 80-column terminals can still see it.
+        let top_right = [zoom_note.clone(), usage_note.clone()]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
             .join(" · ");
-        if !right_note.is_empty() && panel.width >= 60 {
+        if !top_right.is_empty() && panel.width >= 48 {
             block = block.title_top(
                 Line::from(Span::styled(
-                    format!(" {right_note} "),
+                    format!(" {top_right} "),
                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
                 ))
                 .right_aligned(),
@@ -710,6 +745,17 @@ impl App {
                     " ZOOM ",
                     Style::default()
                         .fg(Color::Green)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ))
+                .right_aligned(),
+            );
+        }
+        if let Some(scroll) = scroll_note.filter(|_| panel.width >= 30) {
+            block = block.title_bottom(
+                Line::from(Span::styled(
+                    format!(" {scroll} "),
+                    Style::default()
+                        .fg(Color::Yellow)
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ))
                 .right_aligned(),
@@ -779,6 +825,24 @@ impl App {
         } else if let Some(pi) = sel_pi.filter(|&pi| !self.is_starting(pi)) {
             let p = &self.cfg.projects[pi];
             let max_val = usize::from(inner.width).saturating_sub(14).max(10);
+            let mut rows = vec![
+                (
+                    "Folder   ",
+                    shorten_middle(&p.path.display().to_string(), max_val),
+                ),
+                ("Command  ", fit(&join_command(&p.command), max_val)),
+            ];
+            if let Some(sup) = &p.reports_to {
+                rows.push(("Reports  ", sup.clone()));
+            }
+            if p.autostart {
+                rows.push(("Auto     ", "starts with manager".to_string()));
+            }
+            let row_w = rows
+                .iter()
+                .map(|(k, v)| k.chars().count() + v.chars().count())
+                .max()
+                .unwrap_or(0);
             let mut card = vec![
                 Line::from(vec![
                     Span::styled(
@@ -796,33 +860,21 @@ impl App {
                     ),
                 ]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("Folder   ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(shorten_middle(&p.path.display().to_string(), max_val)),
-                ]),
-                Line::from(vec![
-                    Span::styled("Command  ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(fit(&join_command(&p.command), max_val)),
-                ]),
             ];
-            if let Some(sup) = &p.reports_to {
+            for (k, v) in rows {
+                let pad_r = row_w.saturating_sub(k.chars().count() + v.chars().count());
                 card.push(Line::from(vec![
-                    Span::styled("Reports  ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(sup.clone()),
+                    Span::styled(k, Style::default().fg(Color::DarkGray)),
+                    Span::raw(v),
+                    Span::raw(" ".repeat(pad_r)),
                 ]));
             }
-            if p.autostart {
-                card.push(Line::from(vec![
-                    Span::styled("Auto     ", Style::default().fg(Color::DarkGray)),
-                    Span::raw("starts with manager"),
-                ]));
+            let mut hints = vec![("Enter", "start"), ("m", "message"), ("e", "edit")];
+            if p.has_ledger() {
+                hints.push(("h", "history"));
             }
             card.push(Line::from(""));
-            card.push(Line::from(hint_spans(&[
-                ("Enter", "start"),
-                ("m", "message"),
-                ("e", "edit"),
-            ])));
+            card.push(Line::from(hint_spans(&hints)));
             let pad = inner.height.saturating_sub(card.len() as u16) / 2;
             let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
             lines.extend(card);
@@ -1029,7 +1081,7 @@ impl App {
                 let (key, desc) = split_help_line(l);
                 Line::from(vec![
                     Span::styled(
-                        key.to_string(),
+                        format!("{key:<13}"),
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(ratatui::style::Modifier::BOLD),
@@ -1139,11 +1191,26 @@ impl App {
     }
 
     /// Does the typed path exist? Shown at the right end of the Path row.
-    fn add_mark(&self) -> (&'static str, Color) {
+    fn add_mark(&self, modal_w: usize) -> (&'static str, Color) {
+        let compact = modal_w < 60;
         match self.add_state {
             PathState::Folder => ("✓ folder", Color::Green),
-            PathState::Missing => ("✗ not found · Enter creates", Color::Red),
-            PathState::NotFolder => ("✗ not a folder", Color::Red),
+            PathState::Missing => (
+                if compact {
+                    "✗ missing"
+                } else {
+                    "✗ not found · Enter creates"
+                },
+                Color::Red,
+            ),
+            PathState::NotFolder => (
+                if compact {
+                    "✗ not dir"
+                } else {
+                    "✗ not a folder"
+                },
+                Color::Red,
+            ),
             PathState::Blank => ("", Color::Reset),
         }
     }
@@ -1213,7 +1280,7 @@ impl App {
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
         let modal_w = usize::from(72u16.min(area.width)).saturating_sub(2);
         let err_rows = self.add_err_lines(modal_w).len() as u16;
-        let rows = 5 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
+        let rows = 6 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
         fixed_rect(72, rows + 2, area)
     }
 
@@ -1313,8 +1380,24 @@ impl App {
             } else {
                 format!("{cur} (use u in manager)")
             }
+        } else if self.add_kind == Kind::Service {
+            "(agents only)".to_string()
         } else {
             self.add_under.as_str()
+        };
+        let env_text = if self.add_env.is_empty() {
+            if self.env_vault.vars.is_empty() {
+                "(none · Space creates)".to_string()
+            } else {
+                format!("({} shared · Space picks)", self.env_vault.vars.len())
+            }
+        } else {
+            let first = self.add_env.iter().next().map(String::as_str).unwrap_or("");
+            if self.add_env.len() == 1 {
+                format!("{first} (Space edits)")
+            } else {
+                format!("{first} +{} (Space edits)", self.add_env.len() - 1)
+            }
         };
         let fields = [
             (path_label, self.add_path.as_str()),
@@ -1322,8 +1405,9 @@ impl App {
             ("Command", cmd_text),
             ("Autostart", autostart_hint),
             ("Reports to", under_text),
+            ("Env (.env)", env_text),
         ];
-        let (path_mark, path_mark_color) = self.add_mark();
+        let (path_mark, path_mark_color) = self.add_mark(modal_w);
         let mark_w = if path_mark.is_empty() {
             0
         } else {
@@ -1332,7 +1416,8 @@ impl App {
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
-            let locked = editing && !matches!(i, 0 | 2 | 3);
+            let locked = (editing && !matches!(i, 0 | 2 | 3 | 5))
+                || (!editing && self.add_kind == Kind::Service && i == 4);
             let mark = if active { ">" } else { " " };
             let label_style = if active {
                 Style::default().add_modifier(ratatui::style::Modifier::BOLD)
@@ -1417,7 +1502,7 @@ impl App {
                     .border_type(BorderType::Rounded)
                     .title(Line::from(Span::styled(
                         if editing {
-                            " Edit project: path, command, autostart (Enter save, Esc cancel) "
+                            " Edit project: path, cmd, autostart, .env (Enter save, Esc cancel) "
                         } else {
                             " Add project (Enter save, Esc cancel) "
                         },
@@ -1428,6 +1513,256 @@ impl App {
             ),
             popup,
         );
+    }
+
+    fn draw_env_modal(&self, f: &mut Frame) {
+        let Some(m) = &self.env_modal else {
+            return;
+        };
+        let popup = env_popup(f.area());
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let title = match m.target {
+            EnvTarget::AddForm => " Shared Env Vault -> new project .env ".to_string(),
+            EnvTarget::Project(pi) => {
+                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                format!(" Shared Env Vault -> {name}/.env ")
+            }
+            EnvTarget::VaultOnly => " Shared Env Vault ".to_string(),
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        if inner.height == 0 {
+            return;
+        }
+        let has_editor = m.editor.is_some() && inner.height >= 9;
+        let header_h: u16 = u16::from(inner.height >= 4);
+        let editor_h: u16 = if has_editor { 5 } else { 0 };
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_h),
+                Constraint::Min(1),
+                Constraint::Length(editor_h),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let can_pick = m.target != EnvTarget::VaultOnly;
+        let key_w = 22usize.min(usize::from(inner.width) / 3);
+        let badge_w = if matches!(m.target, EnvTarget::Project(_)) {
+            9usize
+        } else {
+            0
+        };
+        if header_h > 0 {
+            let prefix = if can_pick { "    " } else { "  " };
+            let head = if badge_w > 0 {
+                format!(
+                    "{prefix}{:<kw$}  {:<vw$}  .env",
+                    "Key",
+                    "Value",
+                    kw = key_w,
+                    vw =
+                        usize::from(inner.width).saturating_sub(prefix.len() + key_w + badge_w + 5)
+                )
+            } else {
+                format!("{prefix}{:<kw$}  Value", "Key", kw = key_w)
+            };
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    head,
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))),
+                parts[0],
+            );
+        }
+        let rows = usize::from(parts[1].height).max(1);
+        let vars = &self.env_vault.vars;
+        if vars.is_empty() {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "  No shared env vars registered yet. Press n to create one.",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))),
+                parts[1],
+            );
+        } else {
+            let start = keep_visible(m.top.get(), m.sel.min(vars.len() - 1), rows);
+            m.top.set(start);
+            let val_w = usize::from(inner.width)
+                .saturating_sub(if can_pick { 6 } else { 4 } + key_w + badge_w + 3)
+                .max(6);
+            let list: Vec<Line> = vars
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(rows)
+                .map(|(i, entry)| {
+                    let active = i == m.sel;
+                    let checked = m.picked.contains(&entry.key);
+                    let row_style = if active {
+                        Style::default().bg(Color::Cyan).fg(Color::Black)
+                    } else {
+                        Style::default()
+                    };
+                    let mut spans = Vec::new();
+                    if can_pick {
+                        let mark = if checked { "[x] " } else { "[ ] " };
+                        let mark_style = if active {
+                            row_style.add_modifier(ratatui::style::Modifier::BOLD)
+                        } else if checked {
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(ratatui::style::Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        spans.push(Span::styled(mark, mark_style));
+                    } else {
+                        spans.push(Span::styled(if active { "▸ " } else { "  " }, row_style));
+                    }
+                    let shown_val = if m.reveal {
+                        entry.value.clone()
+                    } else {
+                        envvault::mask_value(&entry.value)
+                    };
+                    let k_fit = format!("{:<kw$}", fit(&entry.key, key_w), kw = key_w);
+                    let v_fit = format!("{:<vw$}", fit(&shown_val, val_w), vw = val_w);
+                    spans.push(Span::styled(
+                        k_fit,
+                        row_style.add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled("  ", row_style));
+                    spans.push(Span::styled(
+                        v_fit,
+                        if active || m.reveal {
+                            row_style
+                        } else {
+                            row_style.add_modifier(ratatui::style::Modifier::DIM)
+                        },
+                    ));
+                    if badge_w > 0 {
+                        let (badge, b_color) = match m.project_dotenv.get(&entry.key) {
+                            Some(cur) if cur == &entry.value => ("  in .env", Color::Green),
+                            Some(_) => ("  differs", Color::Yellow),
+                            None => ("         ", Color::Reset),
+                        };
+                        let b_style = if active {
+                            row_style
+                        } else {
+                            Style::default().fg(b_color)
+                        };
+                        spans.push(Span::styled(badge, b_style));
+                    }
+                    Line::from(spans)
+                })
+                .collect();
+            f.render_widget(Paragraph::new(list), parts[1]);
+            if vars.len() > rows {
+                scrollbar(f, popup, vars.len(), m.sel);
+            }
+        }
+        if let (true, Some(ed)) = (has_editor, m.editor.as_ref()) {
+            let ed_title = if ed.editing_key.is_some() {
+                " Edit Shared Env Var "
+            } else {
+                " New Shared Env Var "
+            };
+            let ed_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(Line::from(Span::styled(
+                    ed_title,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                )));
+            let ed_inner = ed_block.inner(parts[2]);
+            f.render_widget(ed_block, parts[2]);
+            let avail = usize::from(ed_inner.width).saturating_sub(10).max(4);
+            let mut ed_lines = Vec::with_capacity(3);
+            for (fi, (label, input)) in [("Key", &ed.key), ("Value", &ed.value)].iter().enumerate()
+            {
+                let active = ed.field == fi;
+                let mark = if active { ">" } else { " " };
+                let lbl_style = if active {
+                    Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let mut row = vec![Span::styled(format!("{mark} {label:<5}: "), lbl_style)];
+                if active {
+                    let (l, c, r) = input.render_parts();
+                    let (l, c, r) = input_window(&l, c, &r, avail);
+                    let vs = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+                    row.push(Span::styled(l, vs));
+                    row.push(Span::styled(
+                        c.to_string(),
+                        vs.bg(Color::White).fg(Color::Black),
+                    ));
+                    row.push(Span::styled(r, vs));
+                } else {
+                    row.push(Span::raw(fit(&input.as_str(), avail)));
+                }
+                ed_lines.push(Line::from(row));
+            }
+            let third = if !ed.err.is_empty() {
+                Line::from(Span::styled(
+                    fit(&ed.err, usize::from(ed_inner.width)),
+                    Style::default().fg(Color::Red),
+                ))
+            } else {
+                Line::from(hint_spans(&[
+                    ("Tab", "switch field"),
+                    ("Enter", "save"),
+                    ("Esc", "cancel"),
+                ]))
+            };
+            ed_lines.push(third);
+            f.render_widget(Paragraph::new(ed_lines), ed_inner);
+        }
+        let foot = if let Some(k) = &m.confirm_delete {
+            let mut spans = vec![Span::styled(
+                format!("Delete shared env '{k}'?  "),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )];
+            spans.extend(hint_spans(&[
+                ("y / Enter", "deletes"),
+                ("n / Esc", "cancels"),
+            ]));
+            Line::from(spans)
+        } else if m.editor.is_some() {
+            Line::from(Span::styled(
+                "Saved entries stay in your shared vault for any project",
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else {
+            let mut hints: Vec<(&str, &str)> = Vec::new();
+            if can_pick {
+                hints.push(("Space", "pick"));
+                hints.push(("a", "all"));
+            }
+            hints.extend([("n", "new"), ("e", "edit"), ("d", "del"), ("v", "reveal")]);
+            match m.target {
+                EnvTarget::AddForm => hints.push(("Enter", "done")),
+                EnvTarget::Project(_) => hints.push(("Enter", "write .env")),
+                EnvTarget::VaultOnly => {}
+            }
+            hints.push(("Esc", "close"));
+            Line::from(hint_spans(&hints))
+        };
+        f.render_widget(Paragraph::new(foot), parts[3]);
     }
 
     // ---- input ----

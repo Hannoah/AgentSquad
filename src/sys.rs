@@ -1,4 +1,4 @@
-use crate::config::{is_shell_program, program_name, split_command};
+use crate::config::{is_shell_program, process_stem, split_command};
 use ratatui::style::{Color, Style};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -106,6 +106,19 @@ pub struct ProcTable {
     pub pgid: HashMap<u32, u32>,
 }
 
+impl ProcTable {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            children: HashMap::with_capacity(cap),
+            names: HashMap::with_capacity(cap),
+            #[cfg(unix)]
+            usage: HashMap::with_capacity(cap),
+            #[cfg(unix)]
+            pgid: HashMap::with_capacity(cap),
+        }
+    }
+}
+
 #[cfg(windows)]
 fn snapshot_table() -> ProcTable {
     use windows_sys::Win32::{
@@ -115,7 +128,7 @@ fn snapshot_table() -> ProcTable {
             TH32CS_SNAPPROCESS,
         },
     };
-    let mut table = ProcTable::default();
+    let mut table = ProcTable::with_capacity(256);
     // SAFETY: process snapshot of our own machine; the handle is closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
@@ -164,7 +177,7 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(unix)]
 pub(crate) fn snapshot_table() -> ProcTable {
-    let mut table = ProcTable::default();
+    let mut table = ProcTable::with_capacity(256);
     let out = std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,rss=,cputime=,comm="])
         .output();
@@ -187,11 +200,16 @@ pub(crate) fn snapshot_table() -> ProcTable {
         };
         table.children.entry(ppid).or_default().push(pid);
         table.pgid.insert(pid, pgid);
-        let name = f.collect::<Vec<_>>().join(" ");
+        let mut rest = line.trim_start();
+        for _ in 0..5 {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            rest = rest[end..].trim_start();
+        }
+        let raw_name = rest.trim_end();
         // A login shell shows up as "-zsh".
-        let name = match name.strip_prefix('-') {
-            Some(rest) if !rest.contains('/') => rest.to_string(),
-            _ => name,
+        let name = match raw_name.strip_prefix('-') {
+            Some(stripped) if !stripped.contains('/') => stripped.to_string(),
+            _ => raw_name.to_string(),
         };
         table.names.insert(pid, name);
         table.usage.insert(pid, (parse_cputime(cpu), rss * 1024));
@@ -240,10 +258,11 @@ fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec
 pub(crate) fn walk_tree(
     root: u32,
     children: &HashMap<u32, Vec<u32>>,
-    born: impl Fn(u32) -> Option<u64>,
+    mut born: impl FnMut(u32) -> Option<u64>,
 ) -> Vec<u32> {
     let mut ordered = Vec::new();
     let mut visited = HashSet::new();
+    let mut born_cache: HashMap<u32, Option<u64>> = HashMap::new();
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
         if !visited.insert(pid) {
@@ -251,10 +270,11 @@ pub(crate) fn walk_tree(
         }
         ordered.push(pid);
         if let Some(kids) = children.get(&pid) {
-            let parent = born(pid);
+            let parent = *born_cache.entry(pid).or_insert_with(|| born(pid));
             stack.extend(kids.iter().copied().filter(|&kid| {
+                let k_born = *born_cache.entry(kid).or_insert_with(|| born(kid));
                 // An unreadable time keeps the edge, as before.
-                !matches!((parent, born(kid)), (Some(p), Some(k)) if k < p)
+                !matches!((parent, k_born), (Some(p), Some(k)) if k < p)
             }));
         }
     }
@@ -275,11 +295,7 @@ fn foreground_proc(root: u32, table: &ProcTable) -> Option<(u32, String)> {
     let mut queue = VecDeque::from([root]);
     while let Some(pid) = queue.pop_front() {
         if pid != root {
-            if let Some(stem) = table
-                .names
-                .get(&pid)
-                .and_then(|n| program_name(std::slice::from_ref(n)))
-            {
+            if let Some(stem) = table.names.get(&pid).and_then(|n| process_stem(n)) {
                 if !is_shell_program(&stem) {
                     return Some((pid, stem));
                 }
@@ -585,7 +601,7 @@ fn fill_relations(
     }
 }
 /// The `n` biggest by RAM, ties by pid so the order never flickers.
-#[cfg(any(windows, unix))]
+#[cfg(unix)]
 fn sort_top(mut all: Vec<ProcInfo>, n: usize) -> Vec<ProcInfo> {
     all.sort_by(|a, b| b.mem.cmp(&a.mem).then(a.pid.cmp(&b.pid)));
     all.truncate(n);
@@ -627,47 +643,70 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
     };
     let t = snapshot_table();
     let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
-    let all = t
-        .names
-        .iter()
-        .filter_map(|(&pid, name)| {
-            // SAFETY: read-only queries on a handle opened and closed here; a
-            // null handle only means the process is gone or out of reach.
-            unsafe {
+    // Phase 1: probe only working-set RAM so we skip GetProcessTimes and
+    // String clones for the majority of processes outside the top `n`.
+    let mut candidates: Vec<(u32, u64)> = Vec::with_capacity(t.names.len());
+    for &pid in t.names.keys() {
+        // SAFETY: read-only query on a handle opened and closed here.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if handle.is_null() {
+                continue;
+            }
+            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ok = GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0;
+            CloseHandle(handle);
+            if ok {
+                candidates.push((pid, counters.WorkingSetSize as u64));
+            }
+        }
+    }
+    candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    candidates.truncate(n);
+    // Phase 2: query CPU time and copy process names only for the `n` winners.
+    let mut top: Vec<ProcInfo> = candidates
+        .into_iter()
+        .filter_map(|(pid, mem)| {
+            let name = t.names.get(&pid)?.clone();
+            // SAFETY: read-only GetProcessTimes on an owned handle.
+            let cpu_secs = unsafe {
                 let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
                 if handle.is_null() {
-                    return None;
-                }
-                let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-                counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-                let ok = GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0;
-                let zero = FILETIME {
-                    dwLowDateTime: 0,
-                    dwHighDateTime: 0,
-                };
-                let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-                let cpu =
-                    if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user)
-                        != 0
+                    0
+                } else {
+                    let zero = FILETIME {
+                        dwLowDateTime: 0,
+                        dwHighDateTime: 0,
+                    };
+                    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+                    let secs = if GetProcessTimes(
+                        handle,
+                        &mut created,
+                        &mut exited,
+                        &mut kernel,
+                        &mut user,
+                    ) != 0
                     {
                         (ticks(kernel) + ticks(user)) / 10_000_000
                     } else {
                         0
                     };
-                CloseHandle(handle);
-                ok.then_some(ProcInfo {
-                    pid,
-                    name: name.clone(),
-                    mem: counters.WorkingSetSize as u64,
-                    ppid: 0,
-                    parent: String::new(),
-                    cpu_secs: cpu,
-                    ancestors: Vec::new(),
-                })
-            }
+                    CloseHandle(handle);
+                    secs
+                }
+            };
+            Some(ProcInfo {
+                pid,
+                name,
+                mem,
+                ppid: 0,
+                parent: String::new(),
+                cpu_secs,
+                ancestors: Vec::new(),
+            })
         })
         .collect();
-    let mut top = sort_top(all, n);
     fill_relations(&mut top, &t.children, &t.names);
     top
 }
@@ -700,7 +739,7 @@ pub fn tree_usage(root: u32) -> Option<(u64, u64)> {
 }
 
 #[cfg(windows)]
-fn tree_usage_with_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Option<(u64, u64)> {
+fn win_proc_stats(pid: u32) -> (Option<u64>, u64, u64) {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, FILETIME},
         System::{
@@ -709,30 +748,47 @@ fn tree_usage_with_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Option<(
         },
     };
     let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
-    let (mut cpu, mut mem) = (0u64, 0u64);
-    for pid in descendant_pids_from_map(root, children) {
-        // SAFETY: read-only queries on a handle we open and close here; a
-        // null handle only means the process is gone or out of reach.
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            if handle.is_null() {
-                continue;
-            }
-            let zero = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-            if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0 {
-                cpu += ticks(kernel) + ticks(user);
-            }
-            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-            if GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0 {
-                mem += counters.WorkingSetSize as u64;
-            }
-            CloseHandle(handle);
+    // SAFETY: read-only queries on an owned handle opened and closed here.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if handle.is_null() {
+            return (None, 0, 0);
         }
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        let (born, cpu) =
+            if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0 {
+                (Some(ticks(created)), ticks(kernel) + ticks(user))
+            } else {
+                (None, 0)
+            };
+        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let mem = if GetProcessMemoryInfo(handle, &mut counters, counters.cb) != 0 {
+            counters.WorkingSetSize as u64
+        } else {
+            0
+        };
+        CloseHandle(handle);
+        (born, cpu, mem)
+    }
+}
+
+#[cfg(windows)]
+fn tree_usage_with_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Option<(u64, u64)> {
+    // Query created time, CPU time, and working set in a single handle open per PID.
+    let mut stats: HashMap<u32, (Option<u64>, u64, u64)> = HashMap::new();
+    let pids = walk_tree(root, children, |pid| {
+        stats.entry(pid).or_insert_with(|| win_proc_stats(pid)).0
+    });
+    let (mut cpu, mut mem) = (0u64, 0u64);
+    for pid in pids {
+        let (_, c, m) = *stats.entry(pid).or_insert_with(|| win_proc_stats(pid));
+        cpu += c;
+        mem += m;
     }
     Some((cpu, mem))
 }

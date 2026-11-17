@@ -5,15 +5,15 @@ use crate::sys::kill_group;
 use crate::sys::{cpu_percent, Usage};
 use crate::sys::{kill_tree_by_pid, kill_trees};
 use crate::ui::{
-    pane_status_text, screen_lines, spinner_frame, status_glyph, status_style, uptime_label, Notice,
+    color as ui_color, pane_status_text, spinner_frame, status_glyph, status_style, uptime_label,
+    Notice,
 };
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
-    widgets::{Paragraph, Widget},
+    style::{Color, Modifier, Style},
 };
 use std::{
     borrow::Cow,
@@ -216,7 +216,8 @@ fn is_choice_line(line: &str) -> bool {
 /// active spinner wins over everything: the agent may print "do you want to"
 /// or code containing `"[y/n]"` in its own output while it works.
 pub fn is_needs_input(screen_text: &str) -> bool {
-    !is_working_text(screen_text) && has_prompt(screen_text)
+    let tail = tail_lines(screen_text, 6);
+    !is_working_lines(&tail) && has_prompt_lines(&tail)
 }
 /// Phrases that mean an agent is waiting on the user.
 const STRONG: [&str; 17] = [
@@ -247,13 +248,10 @@ const QUESTION: [&str; 6] = [
     "permission to",
 ];
 
-/// The prompt half of `is_needs_input`, for callers that already know the
-/// agent is not working.
-fn has_prompt(screen_text: &str) -> bool {
-    let lines: Vec<String> = tail_lines(screen_text, 6)
-        .into_iter()
-        .filter(|l| !is_code_or_diff_line(l))
-        .collect();
+/// The prompt half of `is_needs_input`, for callers that already have
+/// `tail_lines(screen_text, 6)`.
+fn has_prompt_lines(tail: &[String]) -> bool {
+    let lines: Vec<&String> = tail.iter().filter(|l| !is_code_or_diff_line(l)).collect();
     if lines.iter().any(|l| {
         STRONG.iter().any(|p| {
             // Ignore quoted string literals like `"[y/n]"` in code output.
@@ -303,7 +301,7 @@ fn is_spinner_line(line: &str) -> bool {
     glyph && (line.contains('…') || line.contains("..."))
 }
 
-pub fn is_working_text(screen_text: &str) -> bool {
+fn is_working_lines(tail: &[String]) -> bool {
     const VERBS: [&str; 13] = [
         "thinking",
         "running tool",
@@ -319,8 +317,8 @@ pub fn is_working_text(screen_text: &str) -> bool {
         "pondering",
         "synthesizing",
     ];
-    for (idx, lower) in tail_lines(screen_text, 5).into_iter().enumerate() {
-        if has_busy_hint(&lower) || is_spinner_line(&lower) {
+    for (idx, lower) in tail.iter().take(5).enumerate() {
+        if has_busy_hint(lower) || is_spinner_line(lower) {
             return true;
         }
         // Verbs count only near the very bottom (last 2 lines) at line start,
@@ -333,6 +331,10 @@ pub fn is_working_text(screen_text: &str) -> bool {
         }
     }
     false
+}
+
+pub fn is_working_text(screen_text: &str) -> bool {
+    is_working_lines(&tail_lines(screen_text, 5))
 }
 
 /// Status segment for the terminal pane title: "◐ Running 7s".
@@ -610,9 +612,10 @@ impl Session {
     /// full-screen text dump per output chunk was the hot spot.
     pub fn refresh_screen_flags(&mut self) {
         let tail = self.tail_text(12);
-        let working = is_working_text(&tail);
+        let lines = tail_lines(&tail, 6);
+        let working = is_working_lines(&lines);
         self.cached_working_text = working;
-        self.cached_needs_input = !working && has_prompt(&tail);
+        self.cached_needs_input = !working && has_prompt_lines(&lines);
         self.prompt_hint = if self.cached_needs_input {
             prompt_summary(&tail)
         } else {
@@ -628,7 +631,7 @@ impl Session {
         let mut changed = false;
         let mut received_output = false;
         let started = Instant::now();
-        for _ in 0..32 {
+        for i in 0..64 {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     self.parser.process(&bytes);
@@ -642,7 +645,7 @@ impl Session {
                 }
                 Err(_) => break,
             }
-            if started.elapsed() >= DRAIN_BUDGET {
+            if i & 3 == 3 && started.elapsed() >= DRAIN_BUDGET {
                 break;
             }
         }
@@ -787,18 +790,24 @@ impl Session {
         self.scroll = 0;
         self.parser.screen_mut().set_scrollback(0);
     }
-    /// Paint the terminal screen into `buf` at `area`. The cells are built
-    /// once per screen change and copied afterwards, so spinner ticks and
-    /// status updates redraw the frame without re-walking every cell.
+    /// Paint the terminal screen into `buf` at `area`. Cells are populated
+    /// directly into the cached `Buffer` (reusing its allocation when `area`
+    /// matches) and blitted row-by-row so spinner ticks copy without allocating
+    /// intermediate `Line`/`Span`/`String` buffers.
     pub fn paint(&self, buf: &mut Buffer, area: Rect) {
         let mut cache = self.render.borrow_mut();
         let fresh = cache
             .as_ref()
             .is_some_and(|c| c.gen == self.gen && c.area == area);
         if !fresh {
-            let mut cells = Buffer::empty(area);
-            Paragraph::new(screen_lines(self.parser.screen(), area.width, area.height))
-                .render(area, &mut cells);
+            let mut cells = match cache.take() {
+                Some(mut prev) if prev.area == area => {
+                    prev.buf.reset();
+                    prev.buf
+                }
+                _ => Buffer::empty(area),
+            };
+            paint_screen_to_buffer(self.parser.screen(), &mut cells, area);
             *cache = Some(RenderCache {
                 gen: self.gen,
                 area,
@@ -806,13 +815,61 @@ impl Session {
             });
         }
         if let Some(c) = cache.as_ref() {
-            for y in area.top()..area.bottom() {
-                for x in area.left()..area.right() {
-                    if let (Some(dst), Some(src)) = (buf.cell_mut((x, y)), c.buf.cell((x, y))) {
-                        dst.clone_from(src);
-                    }
-                }
+            let clamped = area.intersection(buf.area);
+            let row_len = usize::from(clamped.width);
+            if row_len == 0 {
+                return;
             }
+            let src_w = usize::from(c.buf.area.width);
+            let dst_w = usize::from(buf.area.width);
+            let src_x = usize::from(clamped.x.saturating_sub(c.buf.area.x));
+            let dst_x = usize::from(clamped.x.saturating_sub(buf.area.x));
+            for y in clamped.top()..clamped.bottom() {
+                let src_start = usize::from(y - c.buf.area.y) * src_w + src_x;
+                let dst_start = usize::from(y - buf.area.y) * dst_w + dst_x;
+                buf.content[dst_start..dst_start + row_len]
+                    .clone_from_slice(&c.buf.content[src_start..src_start + row_len]);
+            }
+        }
+    }
+}
+
+fn paint_screen_to_buffer(screen: &vt100::Screen, cells: &mut Buffer, area: Rect) {
+    let w = usize::from(area.width);
+    for row in 0..area.height {
+        let row_start = usize::from(row) * w;
+        for col in 0..area.width {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let mut style = Style::default()
+                .fg(ui_color(cell.fgcolor()))
+                .bg(ui_color(cell.bgcolor()));
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.dim() {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if cell.inverse() {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            let dst = &mut cells.content[row_start + usize::from(col)];
+            if cell.has_contents() {
+                dst.set_symbol(cell.contents());
+            } else {
+                dst.set_symbol(" ");
+            }
+            dst.set_style(style);
         }
     }
 }

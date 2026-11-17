@@ -357,3 +357,226 @@ fn stopped_project_card_zoom_badge_and_tab_complete_work() {
     drop(app);
     let _ = fs::remove_dir_all(&hist_dir);
 }
+
+#[test]
+fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
+    // 1. Empty pane left-click opens Add form.
+    let mut empty = App::new(Config::default(), None);
+    let mut term80 = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let area80 = Size::new(80, 24);
+    term80.draw(|f| empty.draw(f)).unwrap();
+    empty.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), 45, 10),
+        area80,
+        24,
+        54,
+    );
+    assert_eq!(empty.mode, Mode::Add);
+
+    // 2. Service Add form skips Reports-to (field 4) on Tab/Down and reaches Env (field 5).
+    empty.add_kind = Kind::Service;
+    empty.add_field = 3; // Autostart
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(
+        empty.add_field, 5,
+        "Tab from Autostart on Service skips Reports-to and goes to Env"
+    );
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(empty.add_field, 0, "Tab from Env wraps to Path");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(empty.add_field, 5, "BackTab from Path wraps to Env");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(
+        empty.add_field, 3,
+        "BackTab from Env on Service skips Reports-to to Autostart"
+    );
+    term80.draw(|f| empty.draw(f)).unwrap();
+
+    // 3. Context menu keyboard navigation (Down/j/Up/k wrapping + Enter executes selection).
+    let dir = scratch_dir("ux-suite");
+    crate::ledger::ensure(&dir).unwrap();
+    fs::write(dir.join(".squad/log/20261108T061300Z-sitrep.md"), "sitrep").unwrap();
+    let mut p0 = proj("alpha", dir.to_str().unwrap(), &["claude"]);
+    p0.ledger = true;
+    let p1 = proj("beta", dir.to_str().unwrap(), &["claude"]);
+    let cfg = Config {
+        projects: vec![p0, p1],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    app.context_menu = Some(0);
+    app.context_sel = 0;
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.context_sel, 6, "Up wraps to last stopped menu item");
+    app.on_key(key(KeyCode::Char('j')), 24, 54);
+    assert_eq!(app.context_sel, 0, "j wraps back to first item");
+    // Item index 3 on stopped menu is View history.
+    for _ in 0..3 {
+        app.on_key(key(KeyCode::Down), 24, 54);
+    }
+    assert_eq!(app.context_sel, 3);
+    app.on_key(key(KeyCode::Enter), 24, 54);
+    assert!(app.context_menu.is_none());
+    assert!(
+        app.history.is_some(),
+        "Enter executed selected item (View history)"
+    );
+    app.on_key(key(KeyCode::Esc), 24, 54);
+
+    // 4. Filter mode allows left-clicking a sidebar row to exit Filter and select it.
+    app.selected = 0;
+    app.on_key(key(KeyCode::Char('/')), 24, 54);
+    assert_eq!(app.mode, Mode::Filter);
+    term80.draw(|f| app.draw(f)).unwrap();
+    app.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), 4, 3),
+        area80,
+        24,
+        54,
+    );
+    assert_eq!(app.mode, Mode::Manager);
+    assert_eq!(app.selected, 1);
+
+    // 5. Tab in Manager mode jumps to project needing attention (failed or running).
+    let mut bad = Session::spawn(
+        &Project {
+            command: if cfg!(windows) {
+                vec!["cmd.exe".into(), "/c".into(), "exit 1".into()]
+            } else {
+                vec!["sh".into(), "-c".into(), "exit 1".into()]
+            },
+            ..app.cfg.projects[0].clone()
+        },
+        24,
+        54,
+    )
+    .unwrap();
+    bad.status = crate::session::SessionStatus::Exited(1);
+    app.sessions[0] = Some(bad);
+    app.selected = 1;
+    app.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(app.selected, 0, "Tab jumps to Failed project");
+
+    // 6. 80x24 pane renders scroll_note in split view and ZOOM when zoomed.
+    app.mode = Mode::Focus;
+    app.zoom = false;
+    app.selected = 0;
+    if let Some(s) = app.sessions[0].as_mut() {
+        s.status = crate::session::SessionStatus::Running;
+        for i in 0..40 {
+            s.parser.process(format!("line {i}\r\n").as_bytes());
+        }
+        s.parser.screen_mut().set_scrollback(4);
+    }
+    term80.draw(|f| app.draw(f)).unwrap();
+    let buf_to_string = |t: &Terminal<TestBackend>| -> String {
+        let b = t.backend().buffer();
+        (0..b.area.height)
+            .map(|y| {
+                (0..b.area.width)
+                    .map(|x| b[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let screen80 = buf_to_string(&term80);
+    assert!(
+        screen80.contains("history 4"),
+        "80-col split terminal shows scroll_note in bottom border:\n{screen80}"
+    );
+    app.zoom = true;
+    term80.draw(|f| app.draw(f)).unwrap();
+    let screen80_zoom = buf_to_string(&term80);
+    assert!(
+        screen80_zoom.contains("ZOOM"),
+        "80-col terminal shows ZOOM:\n{screen80_zoom}"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn env_vault_registers_shares_and_applies_to_project_dotenv() {
+    let dir = scratch_dir("env-modal-e2e");
+    let proj_a = dir.join("agent-a");
+    let proj_b = dir.join("agent-b");
+    fs::create_dir_all(&proj_a).unwrap();
+    fs::create_dir_all(&proj_b).unwrap();
+    let env_file = dir.join("env.toml");
+
+    // Isolate the vault path from the user's real env.toml without touching AGENTSQUAD_CONFIG.
+    env::set_var("AGENTSQUAD_ENV", &env_file);
+
+    let cfg = Config {
+        projects: vec![
+            proj("agent-a", proj_a.to_str().unwrap(), &["claude"]),
+            proj("agent-b", proj_b.to_str().unwrap(), &["claude"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    // Open Shared Env Vault via `E` on agent-a.
+    app.selected = 0;
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    assert!(app.env_modal.is_some());
+    // Vault is empty, so inline editor opens on Key automatically.
+    for ch in "SHARED_API_KEY".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "secret-12345".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.env_vault.vars.len(), 1);
+    assert_eq!(app.env_vault.vars[0].key, "SHARED_API_KEY");
+    // Newly created entry is persisted & auto-checked; Enter writes agent-a/.env.
+    term.draw(|f| app.draw(f)).unwrap();
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.env_modal.is_none());
+    let dotenv_a = fs::read_to_string(proj_a.join(".env")).unwrap();
+    assert!(
+        dotenv_a.contains("SHARED_API_KEY=secret-12345"),
+        "{dotenv_a}"
+    );
+
+    // Switch to agent-b, open `E`, verify shared entry is reusable without retyping, pick with Space, apply.
+    app.selected = 1;
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    assert!(app.env_modal.as_ref().unwrap().editor.is_none());
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    let dotenv_b = fs::read_to_string(proj_b.join(".env")).unwrap();
+    assert!(
+        dotenv_b.contains("SHARED_API_KEY=secret-12345"),
+        "{dotenv_b}"
+    );
+
+    // Also test selecting from Add modal's Env (.env) field (field 5).
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    assert_eq!(app.mode, Mode::Add);
+    app.add_field = 5;
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    assert!(app.env_modal.is_some());
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.env_modal.is_none());
+    assert!(app.add_env.contains("SHARED_API_KEY"));
+    term.draw(|f| app.draw(f)).unwrap();
+    let proj_c = dir.join("agent-c");
+    fs::create_dir_all(&proj_c).unwrap();
+    assert_eq!(app.apply_add_env(&proj_c), Ok(Some((1, 0))));
+    let dotenv_c = fs::read_to_string(proj_c.join(".env")).unwrap();
+    assert!(
+        dotenv_c.contains("SHARED_API_KEY=secret-12345"),
+        "{dotenv_c}"
+    );
+
+    drop(app);
+    env::remove_var("AGENTSQUAD_ENV");
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -19,7 +19,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::{self, IsTerminal, Write},
     sync::mpsc,
     thread,
@@ -27,6 +27,7 @@ use std::{
 };
 
 use crate::config::*;
+use crate::envvault::{self, EnvVault};
 use crate::history;
 use crate::input::*;
 use crate::ledger;
@@ -157,11 +158,49 @@ pub(crate) enum SendTo {
     Under,
 }
 
+/// Target for the shared environment variable modal (`E` or Add form).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnvTarget {
+    /// Opened from the Add/Edit project modal; `Enter` confirms selection back to `add_env`.
+    AddForm,
+    /// Opened from Manager on project `pi`; `Enter` writes checked keys to `<project>/.env`.
+    Project(usize),
+    /// Opened from Manager with no projects registered; manages the shared vault only.
+    VaultOnly,
+}
+
+/// Inline form inside `EnvModal` for registering or editing a shared env variable.
+pub(crate) struct EnvEditor {
+    pub(crate) key: LineInput,
+    pub(crate) value: LineInput,
+    /// Active input field: `0` = key, `1` = value.
+    pub(crate) field: usize,
+    /// Original key when editing an existing entry; `None` when creating a new one.
+    pub(crate) editing_key: Option<String>,
+    pub(crate) err: String,
+}
+
+/// Shared Environment Variable Vault & `.env` assignment popup.
+pub(crate) struct EnvModal {
+    pub(crate) target: EnvTarget,
+    pub(crate) sel: usize,
+    pub(crate) top: std::cell::Cell<usize>,
+    pub(crate) picked: BTreeSet<String>,
+    /// Existing keys/values parsed from the target project's `.env` file.
+    pub(crate) project_dotenv: BTreeMap<String, String>,
+    pub(crate) reveal: bool,
+    pub(crate) confirm_delete: Option<String>,
+    pub(crate) editor: Option<EnvEditor>,
+}
+
 pub(crate) struct App {
     pub(crate) cfg: Config,
     pub(crate) sessions: Vec<Option<Session>>,
     /// Sidebar order (filtered); `selected` indexes into it.
     pub(crate) order: Vec<usize>,
+    /// Cached `rank_prefix` per project index in `cfg.projects` to avoid `O(N^2)`
+    /// tree traversals on every redraw.
+    pub(crate) rank_prefixes: Vec<String>,
     pub(crate) selected: usize,
     pub(crate) list_offset: usize,
     // Last drawn geometry, so mouse clicks can be mapped to rows:
@@ -180,6 +219,8 @@ pub(crate) struct App {
     pub(crate) add_cmd: LineInput,
     pub(crate) add_under: LineInput,
     pub(crate) add_autostart: bool,
+    /// Shared env keys selected in Add/Edit mode to apply to `.env` on save.
+    pub(crate) add_env: BTreeSet<String>,
     /// Name of the project the form is editing; None when it adds one.
     pub(crate) add_edit: Option<String>,
     pub(crate) add_err: String,
@@ -199,6 +240,7 @@ pub(crate) struct App {
     pub(crate) confirm_restart: Option<usize>,
     /// Right-click quick-action menu target, if open.
     pub(crate) context_menu: Option<usize>,
+    pub(crate) context_sel: usize,
     pub(crate) confirm_quit: bool,
     pub(crate) confirm_start_all: bool,
     pub(crate) message: (String, Notice),
@@ -242,6 +284,9 @@ pub(crate) struct App {
     pub(crate) history: Option<History>,
     /// The memory monitor (`M`), open over the manager.
     pub(crate) procs: Option<ProcList>,
+    /// Shared environment variable vault & `.env` assignment modal (`E` or Add form).
+    pub(crate) env_vault: EnvVault,
+    pub(crate) env_modal: Option<EnvModal>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
     pub(crate) starting: HashMap<String, Vec<u8>>,
@@ -258,7 +303,9 @@ impl App {
     pub(crate) fn new(cfg: Config, initial: Option<usize>) -> Self {
         ledger::write_rosters(&cfg.projects);
         let sessions = (0..cfg.projects.len()).map(|_| None).collect();
+        let rank_prefixes = compute_rank_prefixes(&cfg.projects);
         let order = display_order(&cfg.projects);
+        let env_vault = envvault::load_env().unwrap_or_default();
         let selected = start_selection(
             &cfg.projects,
             &order,
@@ -284,6 +331,7 @@ impl App {
             cfg,
             sessions,
             order,
+            rank_prefixes,
             selected,
             list_offset: 0,
             side_rect: Rect::default(),
@@ -299,6 +347,7 @@ impl App {
             add_cmd: LineInput::new(),
             add_under: LineInput::new(),
             add_autostart: false,
+            add_env: BTreeSet::new(),
             add_edit: None,
             add_err: String::new(),
             add_state: PathState::Blank,
@@ -310,6 +359,7 @@ impl App {
             confirm_remove: None,
             confirm_restart: None,
             context_menu: None,
+            context_sel: 0,
             confirm_quit: false,
             confirm_start_all: false,
             message: (mode_hints(Mode::Manager).to_string(), Notice::Info),
@@ -343,6 +393,8 @@ impl App {
             resume: Vec::new(),
             history: None,
             procs: None,
+            env_vault,
+            env_modal: None,
             starting: HashMap::new(),
             start_tx,
             start_rx,
@@ -481,22 +533,42 @@ impl App {
         }
     }
 
-    /// Spinner clock; redraws only while something is running, in every
-    /// mode so background rows never look frozen while typing in Focus.
+    /// Spinner clock; redraws at 200 ms only while spinners move (starting,
+    /// running services, or working agents). Static running sessions refresh
+    /// once per second for uptime/idle labels, saving idle CPU and frame copies.
     fn animate(&mut self) {
-        if self.last_anim_tick.elapsed() >= Duration::from_millis(200) {
-            self.last_anim_tick = Instant::now();
-            self.tick = self.tick.wrapping_add(1);
-            if !self.starting.is_empty()
-                || self
+        if self.last_anim_tick.elapsed() < Duration::from_millis(200) {
+            return;
+        }
+        self.last_anim_tick = Instant::now();
+        self.tick = self.tick.wrapping_add(1);
+        if self.has_active_spinner()
+            || (self.tick.is_multiple_of(5)
+                && self
                     .sessions
                     .iter()
                     .flatten()
-                    .any(|s| s.status.is_running())
-            {
-                self.dirty = true;
-            }
+                    .any(|s| s.status.is_running()))
+        {
+            self.dirty = true;
         }
+    }
+
+    fn has_active_spinner(&self) -> bool {
+        if !self.starting.is_empty() {
+            return true;
+        }
+        self.sessions.iter().enumerate().any(|(pi, slot)| {
+            slot.as_ref().is_some_and(|s| {
+                s.status.is_running()
+                    && (self
+                        .cfg
+                        .projects
+                        .get(pi)
+                        .is_some_and(|p| p.kind == Kind::Service)
+                        || s.last_phase == AgentPhase::Working)
+            })
+        })
     }
 
     fn start_initial(&mut self, rows: u16, cols: u16) {
@@ -557,10 +629,86 @@ impl App {
     pub(crate) fn clear_filter(&mut self) {
         let sel_pi = self.order.get(self.selected).copied();
         self.filter_buf.clear();
+        self.refresh_prefixes();
         self.order = display_order(&self.cfg.projects);
         self.selected = sel_pi
             .and_then(|pi| self.order.iter().position(|&x| x == pi))
             .unwrap_or(0);
+    }
+
+    pub(crate) fn refresh_prefixes(&mut self) {
+        self.rank_prefixes = compute_rank_prefixes(&self.cfg.projects);
+    }
+
+    pub(crate) fn open_env_modal(&mut self, target: EnvTarget) {
+        if let Ok(fresh) = envvault::load_env() {
+            self.env_vault = fresh;
+        }
+        let (picked, project_dotenv) = match target {
+            EnvTarget::AddForm => (self.add_env.clone(), BTreeMap::new()),
+            EnvTarget::Project(pi) => {
+                let dotenv = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| envvault::read_dotenv(&p.path))
+                    .unwrap_or_default();
+                (BTreeSet::new(), dotenv)
+            }
+            EnvTarget::VaultOnly => (BTreeSet::new(), BTreeMap::new()),
+        };
+        let editor = if self.env_vault.vars.is_empty() {
+            Some(EnvEditor {
+                key: LineInput::new(),
+                value: LineInput::new(),
+                field: 0,
+                editing_key: None,
+                err: String::new(),
+            })
+        } else {
+            None
+        };
+        self.env_modal = Some(EnvModal {
+            target,
+            sel: 0,
+            top: Default::default(),
+            picked,
+            project_dotenv,
+            reveal: false,
+            confirm_delete: None,
+            editor,
+        });
+    }
+
+    /// Jump to the next project needing attention (`?`, failed/errored, or
+    /// unseen finished task), falling back to the next running session.
+    pub(crate) fn jump_attention(&mut self) {
+        let n = self.order.len();
+        if n <= 1 {
+            return;
+        }
+        let needs_att = |pi: usize| {
+            self.sessions
+                .get(pi)
+                .and_then(|o| o.as_ref())
+                .is_some_and(|s| {
+                    s.status.needs_attention()
+                        || (s.status.is_running()
+                            && matches!(
+                                (s.phase(), s.acked),
+                                (AgentPhase::NeedsInput, _) | (AgentPhase::Done, false)
+                            ))
+                })
+        };
+        let is_up = |pi: usize| slot_running(&self.sessions, pi);
+        let next_matching = |pred: &dyn Fn(usize) -> bool| -> Option<usize> {
+            (1..=n)
+                .map(|off| (self.selected + off) % n)
+                .find(|&pos| pred(self.order[pos]))
+        };
+        if let Some(pos) = next_matching(&needs_att).or_else(|| next_matching(&is_up)) {
+            self.selected = pos;
+        }
     }
 
     /// File work history if an agent session was mid-task, then stop it off-thread.
@@ -686,6 +834,7 @@ impl App {
         // Ask only when nothing else owns the keyboard, so a prompt never
         // swallows keystrokes meant for a session or another input.
         let keyboard_free = !(self.mode != Mode::Manager
+            || self.env_modal.is_some()
             || self.history.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
@@ -813,8 +962,8 @@ impl App {
     }
 
     /// Adaptive poll: 10 ms while output or typing is recent so echo feels
-    /// instant; 40 ms when sessions are quiet, and keys still wake it
-    /// immediately. Quieter polling keeps idle CPU low with many sessions.
+    /// instant; 40 ms while spinners run; 150-200 ms when sessions are static
+    /// or stopped so idle CPU stays near zero.
     fn poll_duration(&self) -> Duration {
         let recently_active = self
             .sessions
@@ -828,15 +977,18 @@ impl App {
             || !self.starting.is_empty()
         {
             Duration::from_millis(10)
-        } else if self
-            .sessions
-            .iter()
-            .flatten()
-            .any(|s| s.status.is_running())
-        {
+        } else if self.has_active_spinner() {
             Duration::from_millis(40)
+        } else if self.message.0 != self.hints
+            || self
+                .sessions
+                .iter()
+                .flatten()
+                .any(|s| s.status.is_running())
+        {
+            Duration::from_millis(150)
         } else {
-            Duration::from_millis(50)
+            Duration::from_millis(200)
         }
     }
 
@@ -870,6 +1022,7 @@ impl App {
         self.add_cmd.clear();
         self.add_under.clear();
         self.add_autostart = false;
+        self.add_env.clear();
         self.add_err.clear();
         self.add_state = PathState::Blank;
         self.add_top.set(0);
@@ -899,6 +1052,12 @@ impl App {
     }
 
     // ---- drawing ----
+}
+
+fn compute_rank_prefixes(projects: &[Project]) -> Vec<String> {
+    (0..projects.len())
+        .map(|i| rank_prefix(projects, i))
+        .collect()
 }
 
 /// Tab-complete an agent name for "Reports to" (`u` or the add form).

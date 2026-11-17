@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod envvault;
 pub mod history;
 pub mod input;
 pub mod ledger;
@@ -100,7 +101,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -112,6 +113,7 @@ fn main() -> Result<()> {
             let mut ledger = false;
             let mut create = false;
             let mut under: Option<String> = None;
+            let mut env_keys: Vec<String> = Vec::new();
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
             while i < tail.len() {
@@ -137,6 +139,13 @@ fn main() -> Result<()> {
                         under = Some(tail.get(i + 1).context(USAGE)?.clone());
                         i += 2;
                     }
+                    "--env" => {
+                        let raw = tail.get(i + 1).context(USAGE)?;
+                        for k in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                            env_keys.push(k.to_string());
+                        }
+                        i += 2;
+                    }
                     "--" => {
                         if i + 1 >= tail.len() {
                             bail!("Use -- before command: squad add [<path>] -- claude");
@@ -145,7 +154,7 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander> or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY or -- command")
                     }
                 }
             }
@@ -159,6 +168,17 @@ fn main() -> Result<()> {
                     clean_path(path_raw)
                 );
             }
+            let vault = if env_keys.is_empty() {
+                None
+            } else {
+                let v = envvault::load_env()?;
+                for k in &env_keys {
+                    if !v.vars.iter().any(|e| e.key == *k) {
+                        bail!("Unknown shared env key: {k}. Register it with `squad env set {k} <value>`.");
+                    }
+                }
+                Some(v)
+            };
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
@@ -173,6 +193,13 @@ fn main() -> Result<()> {
             if p.reports_to.is_some() {
                 // Report in to the commander (it learns its head count).
                 ledger::report_transfer(&load()?.projects, &p.name, None);
+            }
+            if let Some(v) = vault {
+                let (added, updated) = envvault::apply_dotenv_keys(&p.path, &v, &env_keys)?;
+                println!(
+                    "Updated {}/.env (+{added} added, {updated} updated)",
+                    p.name
+                );
             }
             match &p.reports_to {
                 Some(c) => println!("Registered {} ({}) under {c}", p.name, kind.as_str()),
@@ -228,6 +255,71 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Project not registered: {name}"))?;
             run(c, Some(i), Vec::new())
         }
+        Some("env") => run_env_cli(&c, args.get(1..).unwrap_or(&[])),
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
+    }
+}
+
+fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
+    const USAGE: &str =
+        "Usage: squad env <list | set KEY VALUE | remove KEY | apply <project> [KEY...]>";
+    match args.first().map(String::as_str) {
+        Some("list") | None => {
+            let vault = envvault::load_env()?;
+            if vault.vars.is_empty() {
+                println!("No shared environment variables registered.");
+                println!("Add one with: squad env set KEY VALUE");
+                return Ok(());
+            }
+            for e in &vault.vars {
+                println!("{}={}", e.key, envvault::mask_value(&e.value));
+            }
+            Ok(())
+        }
+        Some("set") => {
+            let key = args.get(1).context(USAGE)?;
+            let value = args.get(2).context(USAGE)?;
+            let mut vault = envvault::load_env()?;
+            let inserted =
+                envvault::upsert_env(&mut vault, key, value).map_err(anyhow::Error::msg)?;
+            envvault::save_env(&vault)?;
+            let action = if inserted { "Registered" } else { "Updated" };
+            println!("{action} shared env var {}", key.trim());
+            Ok(())
+        }
+        Some("remove" | "rm") => {
+            let key = args.get(1).context(USAGE)?;
+            let mut vault = envvault::load_env()?;
+            if !envvault::remove_env(&mut vault, key.trim()) {
+                bail!("Unknown shared env key: {key}");
+            }
+            envvault::save_env(&vault)?;
+            println!("Removed shared env var {}", key.trim());
+            Ok(())
+        }
+        Some("apply") => {
+            let name = args.get(1).context(USAGE)?;
+            let p = c
+                .projects
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .with_context(|| format!("Unknown project: {name}"))?;
+            let vault = envvault::load_env()?;
+            let keys: Vec<String> = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                vault.vars.iter().map(|v| v.key.clone()).collect()
+            };
+            if keys.is_empty() {
+                bail!("No shared env vars to apply. Register one with `squad env set KEY VALUE`.");
+            }
+            let (added, updated) = envvault::apply_dotenv_keys(&p.path, &vault, &keys)?;
+            println!(
+                "Updated {}/.env (+{added} added, {updated} updated)",
+                p.name
+            );
+            Ok(())
+        }
+        Some(_) => bail!("{USAGE}"),
     }
 }

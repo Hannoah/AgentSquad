@@ -21,6 +21,7 @@ use crate::updater::*;
 
 mod app;
 mod config;
+mod envvault;
 mod history;
 mod input;
 mod ledger;
