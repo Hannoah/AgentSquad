@@ -249,7 +249,7 @@ fn manual_stop_records_work_history_and_timer_phase_change_marks_dirty() {
     s2.work_started = Some(std::time::SystemTime::now() - Duration::from_secs(10));
     app.sessions[0] = Some(s2);
     app.stop_slot(0, "stopped by user");
-    crate::history::flush(Duration::from_secs(3));
+    crate::history::flush(Duration::from_secs(10));
     let entries = crate::ledger::sitreps(&dir);
     assert!(
         entries.iter().any(|(n, _)| crate::history::is_auto(n)),
@@ -728,4 +728,112 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     app.on_key(key(KeyCode::Esc), 24, 54);
     assert!(app.env_info.is_none());
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn collapsible_mini_sidebar_keyboard_and_mouse_interactions() {
+    let mut svc = proj("api", "/tmp/api", &["npm", "run", "dev"]);
+    svc.kind = Kind::Service;
+    let cfg = Config {
+        projects: vec![
+            proj("alpha", "/tmp/a", &["claude"]),
+            proj("beta", "/tmp/b", &["claude"]),
+            svc,
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let area = Size::new(100, 30);
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    let buf_str = |t: &Terminal<TestBackend>| -> String {
+        let b = t.backend().buffer();
+        (0..b.area.height)
+            .map(|y| {
+                (0..b.area.width)
+                    .map(|x| b[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(!app.sidebar_collapsed);
+    assert_eq!(app.side_rect.width, sidebar_width(area.width));
+    assert_eq!(app.pane_rect.width, area.width - sidebar_width(area.width));
+    assert!(buf_str(&term).contains("[<]"));
+
+    // Keyboard toggle: `[` / `]` and `<` / `>`.
+    app.on_key(key(KeyCode::Char('[')), 27, 92);
+    assert!(app.sidebar_collapsed);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.side_rect.width, COLLAPSED_SIDEBAR_WIDTH);
+    assert_eq!(app.pane_rect.width, area.width - COLLAPSED_SIDEBAR_WIDTH);
+    let collapsed_screen = buf_str(&term);
+    assert!(collapsed_screen.contains("[>]"));
+    assert!(collapsed_screen.contains("A 0/2"));
+    assert!(collapsed_screen.contains("S 0/1"));
+    assert!(collapsed_screen.contains("Mgmt"));
+
+    app.on_key(key(KeyCode::Char(']')), 27, 75);
+    assert!(!app.sidebar_collapsed);
+    app.on_key(key(KeyCode::Char('<')), 27, 92);
+    assert!(app.sidebar_collapsed);
+    app.on_key(key(KeyCode::Char('>')), 27, 75);
+    assert!(!app.sidebar_collapsed);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.side_rect.width, sidebar_width(area.width));
+
+    // Click `[<]` on top border to collapse.
+    app.on_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            app.side_rect.right().saturating_sub(2),
+            app.side_rect.y,
+        ),
+        area,
+        27,
+        75,
+    );
+    assert!(app.sidebar_collapsed);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.side_rect.width, COLLAPSED_SIDEBAR_WIDTH);
+
+    // Clicking project row 2 (row 3: border 0, A header 1, alpha 2, beta 3) selects beta.
+    app.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), 2, 3),
+        area,
+        27,
+        92,
+    );
+    assert_eq!(app.selected, 1);
+
+    // Right-clicking project row 1 (row 2) opens its context menu.
+    app.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Right), 2, 2),
+        area,
+        27,
+        92,
+    );
+    assert_eq!(app.selected, 0);
+    assert_eq!(app.context_menu, Some(0));
+    app.on_key(key(KeyCode::Esc), 27, 92);
+    assert!(app.context_menu.is_none());
+
+    // Clicking `[>]` while in Focus mode expands sidebar without dropping terminal focus.
+    app.mode = Mode::Focus;
+    app.on_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            app.side_rect.x + 2,
+            app.side_rect.y,
+        ),
+        area,
+        27,
+        92,
+    );
+    assert!(!app.sidebar_collapsed);
+    assert_eq!(app.mode, Mode::Focus);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.side_rect.width, sidebar_width(area.width));
 }

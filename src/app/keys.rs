@@ -600,6 +600,7 @@ impl App {
                 };
                 self.message = (note.to_string(), Notice::Info);
             }
+            KeyCode::Char('[' | ']' | '<' | '>') => self.toggle_sidebar(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             // Open the update prompt on demand; it also pops up by
             // itself whenever the manager has the keyboard.

@@ -318,6 +318,8 @@ pub(crate) struct App {
     pub(crate) pane: (u16, u16),
     /// `z`: a focused terminal takes the sidebar's columns too.
     pub(crate) zoom: bool,
+    /// `[` / `]` or `[<]` / `[>]`: collapse the sidebar into a compact mini-rail.
+    pub(crate) sidebar_collapsed: bool,
     pub(crate) hangul_hotkey_seen: bool,
     /// Arrow keys past the last project land on the Management rows:
     /// `0` = Memory monitor, `1` = Env vault. None while a project is picked.
@@ -428,6 +430,7 @@ impl App {
             start_rx,
             pane: (0, 0),
             zoom: false,
+            sidebar_collapsed: false,
             hangul_hotkey_seen: false,
             mgmt_sel: None,
             env_info: None,
@@ -468,9 +471,26 @@ impl App {
     fn side_w(&self, area_w: u16) -> u16 {
         if self.zoom && self.mode == Mode::Focus {
             0
+        } else if self.sidebar_collapsed {
+            if area_w < 48 {
+                0
+            } else {
+                COLLAPSED_SIDEBAR_WIDTH
+            }
         } else {
             sidebar_width(area_w)
         }
+    }
+
+    pub(crate) fn toggle_sidebar(&mut self) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        let note = if self.sidebar_collapsed {
+            "Sidebar collapsed (] or > expands)"
+        } else {
+            "Sidebar expanded ([ or < collapses)"
+        };
+        self.message = (note.to_string(), Notice::Info);
+        self.dirty = true;
     }
 
     /// Rows and columns left for a session's terminal inside the frame.

@@ -121,7 +121,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "M          memory: biggest processes, kill one (x)",
         "o          order: message every agent under a commander",
         "u          set whom the selected agent reports to",
-        "e, f, z    edit project; pin (*); zoom: full-width terminal",
+        "e, f, [/z  edit project; pin (*); collapse sidebar / zoom",
         "s, r       stop / restart session (asks to confirm)",
         "d/Del      remove project (asks to confirm)",
         "S, U       start all stopped / install a found update",
@@ -721,7 +721,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · E  shared env (.env) · e  edit · f  pin · z  zoom · m  message · u  commander
+  /  filter · a  add · E  shared env (.env) · e  edit · f  pin · [/]  collapse · z  zoom · m  message · u  commander
   b  brief (ledger) · o  order (all under a commander) · h  history · M  memory monitor
   s  stop · r  restart · d/Del  remove · S  start all · U  install update
   PgUp/PgDn  scroll · q  quit · ?  help
@@ -826,6 +826,9 @@ pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
         })
         .collect()
 }
+/// Collapsed mini-sidebar width in columns (2 border cols + 6 inner cols).
+pub const COLLAPSED_SIDEBAR_WIDTH: u16 = 8;
+
 /// Sidebar width in columns: hidden on very narrow terminals, a quarter
 /// of the width (clamped) otherwise so names and commands stay readable.
 pub fn sidebar_width(area_w: u16) -> u16 {
@@ -956,6 +959,26 @@ pub fn group_header(title: &str, kind: Kind, up: usize, total: usize) -> Line<'s
         ),
         Span::styled(
             format!(" ({up}/{total})"),
+            Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ),
+    ])
+}
+
+/// Compact group header for the collapsed mini-sidebar (`A 1/2`, `S 0/1`).
+pub fn compact_group_header(kind: Kind, up: usize, total: usize) -> Line<'static> {
+    let tag = match kind {
+        Kind::Agent => "A",
+        Kind::Service => "S",
+    };
+    Line::from(vec![
+        Span::styled(
+            tag.to_string(),
+            Style::default()
+                .fg(kind_color(kind))
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {up}/{total}"),
             Style::default().add_modifier(ratatui::style::Modifier::DIM),
         ),
     ])

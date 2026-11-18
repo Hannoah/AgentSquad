@@ -99,6 +99,9 @@ pub fn write_entry(dir: &Path, t: &Task, files: &[String], commits: &[String]) -
 /// What git saw since `started`: files changed (still uncommitted) and the
 /// commits made. Both empty outside a repository.
 pub fn gather(path: &Path, started: SystemTime) -> (Vec<String>, Vec<String>) {
+    if !path.ancestors().any(|a| a.join(".git").exists()) {
+        return (Vec::new(), Vec::new());
+    }
     let files = changed_files(path)
         .unwrap_or_default()
         .into_iter()

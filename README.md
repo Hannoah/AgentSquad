@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.24
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.25
 ```
 
 To install elsewhere:
@@ -164,6 +164,7 @@ case-insensitively by `remove` and `start`.
 | `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`??/`?? pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
 | `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
+| `[` / `]`, `<` / `>`, click `[<]` / `[>]` | Collapse / expand the manager sidebar into a compact status rail (number + live status icon; clicking rows still switches or opens quick actions) |
 | `z` | Zoom: a focused terminal takes the full width (the project list comes back in the manager; `z` again turns it off) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |
@@ -394,6 +395,12 @@ The helper script bootstraps a portable toolchain automatically (one-time
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 build
 powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 test
+```
+
+To bump the version, run all CI checks (`fmt`, `clippy`, `test`), build and install `squad.exe` locally, commit, tag, and push a release:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\release.ps1 -Summary "short summary" -Notes "릴리스 노트"
 ```
 
 Tests cover config round-trips, kind parsing, sidebar ordering, filtering,

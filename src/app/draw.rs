@@ -361,6 +361,7 @@ impl App {
         } else {
             self.order.get(self.selected).copied()
         };
+        let collapsed = self.sidebar_collapsed;
         let inner_w = (panel.width as usize).saturating_sub(2);
         let mut items: Vec<ListItem> = Vec::new();
         let mut targets: Vec<Option<usize>> = Vec::new();
@@ -373,7 +374,12 @@ impl App {
             .collect();
         for (title, k) in [("Agents", Kind::Agent), ("Services", Kind::Service)] {
             let (up, total) = group_counts(&self.cfg.projects, &running, k);
-            items.push(ListItem::new(group_header(title, k, up, total)));
+            let hdr = if collapsed {
+                compact_group_header(k, up, total)
+            } else {
+                group_header(title, k, up, total)
+            };
+            items.push(ListItem::new(hdr));
             targets.push(None);
             let mut any = false;
             for &pi in self
@@ -497,6 +503,55 @@ impl App {
                 } else {
                     Style::default().add_modifier(ratatui::style::Modifier::DIM)
                 };
+                if Some(pi) == sel_pi {
+                    sel_row = Some(items.len());
+                }
+                targets.push(Some(n - 1));
+                let tree_style = if Some(pi) == sel_pi {
+                    row_style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                if collapsed {
+                    let icon_str = if let Some(ph) = agent_phase {
+                        ph.icon(self.tick).0
+                    } else if is_running || status == "Starting" {
+                        spinner_frame(self.tick).to_string()
+                    } else {
+                        status_glyph(status, self.tick).to_string()
+                    };
+                    let num_str = if n < 10 {
+                        format!("{n} ")
+                    } else {
+                        format!("{n:>2}")
+                    };
+                    let badge_span = if needs_att {
+                        Span::styled(" !", status_span_style)
+                    } else if tree.contains('★') {
+                        Span::styled(" ★", tree_style)
+                    } else if p.pinned {
+                        Span::styled(" *", row_style)
+                    } else {
+                        Span::raw("  ")
+                    };
+                    let num_style = if needs_input {
+                        mark_style
+                    } else {
+                        row_name_style(Some(pi) == sel_pi, status, p.kind)
+                    };
+                    let row = ListItem::new(Line::from(vec![
+                        Span::styled(mark, mark_style),
+                        Span::styled(num_str, num_style),
+                        Span::styled(icon_str, status_span_style),
+                        badge_span,
+                    ]));
+                    items.push(if Some(pi) == sel_pi {
+                        row.style(selected_row_style())
+                    } else {
+                        row
+                    });
+                    continue;
+                }
                 let prefix = format!("{mark}{n} ");
                 let status_full = if let Some(ph) = agent_phase {
                     ph.icon(self.tick).0
@@ -513,10 +568,6 @@ impl App {
                     width(&status_full),
                     width(shown_name),
                 );
-                if Some(pi) == sel_pi {
-                    sel_row = Some(items.len());
-                }
-                targets.push(Some(n - 1));
                 // Tree lines recede; the star and the name keep the row's colors.
                 let name_fit = fit(shown_name, name_w);
                 let lines_w = tree.chars().take_while(|&c| c != '★').count();
@@ -526,11 +577,6 @@ impl App {
                     .map_or(name_fit.len(), |(at, _)| at);
                 let (name_head, name_tail) =
                     (name_fit[..split].to_string(), name_fit[split..].to_string());
-                let tree_style = if Some(pi) == sel_pi {
-                    row_style
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
                 let row = ListItem::new(Line::from(vec![
                     Span::styled(mark, mark_style),
                     Span::styled(format!("{n} "), row_style),
@@ -583,13 +629,13 @@ impl App {
             if !any {
                 targets.push(None);
                 items.push(
-                    ListItem::new("  (none)")
+                    ListItem::new(if collapsed { "  -" } else { "  (none)" })
                         .style(Style::default().add_modifier(ratatui::style::Modifier::DIM)),
                 );
             }
         }
         items.push(ListItem::new(Line::from(Span::styled(
-            "Management",
+            if collapsed { "Mgmt" } else { "Management" },
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(ratatui::style::Modifier::BOLD),
@@ -603,16 +649,18 @@ impl App {
         } else {
             Style::default()
         };
-        items.push(
-            ListItem::new(Line::from(vec![
+        let memory_line = if collapsed {
+            Line::from("  M")
+        } else {
+            Line::from(vec![
                 Span::raw("  Memory monitor "),
                 Span::styled(
                     "M",
                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
                 ),
-            ]))
-            .style(memory_style),
-        );
+            ])
+        };
+        items.push(ListItem::new(memory_line).style(memory_style));
         targets.push(Some(MEMORY_ROW));
         if self.mgmt_sel == Some(1) {
             sel_row = Some(items.len());
@@ -622,16 +670,18 @@ impl App {
         } else {
             Style::default()
         };
-        items.push(
-            ListItem::new(Line::from(vec![
+        let env_line = if collapsed {
+            Line::from("  E")
+        } else {
+            Line::from(vec![
                 Span::raw("  Env vault "),
                 Span::styled(
                     "E",
                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
                 ),
-            ]))
-            .style(env_style),
-        );
+            ])
+        };
+        items.push(ListItem::new(env_line).style(env_style));
         targets.push(Some(ENV_ROW));
         let total_items = items.len();
         let visible_rows = (panel.height as usize).saturating_sub(2).max(1);
@@ -659,19 +709,31 @@ impl App {
         let mut block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(sidebar_border_style(self.mode == Mode::Focus))
-            .title(list_title(self.cfg.projects.len(), self.order.len()));
-        if !self.filter_buf.is_empty() && panel.width >= 28 {
-            let q = fit(&self.filter_buf.as_str(), 8);
-            block = block.title_top(
-                Line::from(Span::styled(
+            .border_style(sidebar_border_style(self.mode == Mode::Focus));
+        if collapsed {
+            block = block.title(Line::from(Span::styled(
+                " [>] ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        } else {
+            block = block.title(list_title(self.cfg.projects.len(), self.order.len()));
+            let mut right_spans = Vec::new();
+            if !self.filter_buf.is_empty() && panel.width >= 28 {
+                let q = fit(&self.filter_buf.as_str(), 8);
+                right_spans.push(Span::styled(
                     format!(" /{q} "),
                     Style::default()
                         .fg(Color::Magenta)
                         .add_modifier(ratatui::style::Modifier::BOLD),
-                ))
-                .right_aligned(),
-            );
+                ));
+            }
+            right_spans.push(Span::styled(
+                "[<]",
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ));
+            block = block.title_top(Line::from(right_spans).right_aligned());
         }
         f.render_widget(List::new(window).block(block), panel);
         if total_items > visible_rows {

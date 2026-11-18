@@ -346,6 +346,24 @@ pub fn sidebar_click(
         .copied()
         .flatten()
 }
+
+/// True when a left click landed on the sidebar's `[<]` / `[>]` collapse/expand
+/// toggle in its top border.
+pub fn sidebar_toggle_click(
+    side: ratatui::layout::Rect,
+    collapsed: bool,
+    col: u16,
+    row: u16,
+) -> bool {
+    if side.width == 0 || row != side.y {
+        return false;
+    }
+    if collapsed {
+        col >= side.x && col < side.right()
+    } else {
+        col >= side.right().saturating_sub(5) && col < side.right()
+    }
+}
 /// Mouse wheel notch to scrolled lines: up moves into history.
 pub fn wheel_lines(kind: MouseEventKind) -> Option<isize> {
     match kind {

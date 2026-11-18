@@ -385,6 +385,9 @@ impl App {
                 self.dirty = true;
             } else if self.mode == Mode::Send {
                 // Keep text input focus in Send mode
+            } else if sidebar_toggle_click(self.side_rect, self.sidebar_collapsed, m.column, m.row)
+            {
+                self.toggle_sidebar();
             } else if let Some(i) = sidebar_click(
                 self.side_rect,
                 self.list_offset,

@@ -859,3 +859,25 @@ fn list_table_aligns_hangul_names() {
     let kind_col = |r: &str| width(&r[..r.find("agent").unwrap()]);
     assert_eq!(kind_col(&rows[0]), kind_col(&rows[1]));
 }
+
+#[test]
+fn compact_group_header_and_toggle_hit_testing() {
+    use ratatui::layout::Rect;
+    assert_eq!(COLLAPSED_SIDEBAR_WIDTH, 8);
+    assert_eq!(compact_group_header(Kind::Agent, 1, 2).to_string(), "A 1/2");
+    assert_eq!(
+        compact_group_header(Kind::Service, 0, 1).to_string(),
+        "S 0/1"
+    );
+
+    let expanded = Rect::new(0, 0, 25, 20);
+    assert!(!sidebar_toggle_click(expanded, false, 10, 0));
+    assert!(sidebar_toggle_click(expanded, false, 22, 0));
+    assert!(!sidebar_toggle_click(expanded, false, 22, 1));
+
+    let collapsed = Rect::new(0, 0, COLLAPSED_SIDEBAR_WIDTH, 20);
+    assert!(sidebar_toggle_click(collapsed, true, 1, 0));
+    assert!(sidebar_toggle_click(collapsed, true, 6, 0));
+    assert!(!sidebar_toggle_click(collapsed, true, 1, 1));
+    assert!(!sidebar_toggle_click(Rect::ZERO, true, 0, 0));
+}
