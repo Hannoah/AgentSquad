@@ -263,7 +263,7 @@ fn main() -> Result<()> {
 
 fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
     const USAGE: &str =
-        "Usage: squad env <list | set KEY VALUE | remove KEY | apply <project> [KEY...]>";
+        "Usage: squad env <list | set KEY VALUE | remove KEY | apply <project> [KEY...] | unapply <project> KEY...>";
     match args.first().map(String::as_str) {
         Some("list") | None => {
             let vault = envvault::load_env()?;
@@ -319,6 +319,20 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
                 "Updated {}/.env (+{added} added, {updated} updated)",
                 p.name
             );
+            Ok(())
+        }
+        Some("unapply") => {
+            let name = args.get(1).context(USAGE)?;
+            if args.len() < 3 {
+                bail!("{USAGE}");
+            }
+            let p = c
+                .projects
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .with_context(|| format!("Unknown project: {name}"))?;
+            let removed = envvault::remove_dotenv(&p.path, &args[2..])?;
+            println!("Updated {}/.env (-{removed} removed)", p.name);
             Ok(())
         }
         Some(_) => bail!("{USAGE}"),

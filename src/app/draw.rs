@@ -1679,6 +1679,7 @@ impl App {
                     ));
                     if badge_w > 0 {
                         let (badge, b_color) = match m.project_dotenv.get(&entry.key) {
+                            Some(_) if !checked => ("  removes", Color::Red),
                             Some(cur) if cur == &entry.value => ("  in .env", Color::Green),
                             Some(_) => ("  differs", Color::Yellow),
                             None => ("         ", Color::Reset),
@@ -1803,7 +1804,7 @@ impl App {
         } else {
             let mut hints: Vec<(&str, &str)> = Vec::new();
             if can_pick {
-                hints.push(("Space", "pick"));
+                hints.push(("Space", "toggle"));
                 hints.push(("a", "all"));
             }
             hints.extend([("n", "new"), ("e", "edit"), ("d", "del"), ("v", "reveal")]);

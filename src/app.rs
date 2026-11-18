@@ -724,7 +724,16 @@ impl App {
                     .get(pi)
                     .map(|p| envvault::read_dotenv(&p.path))
                     .unwrap_or_default();
-                (BTreeSet::new(), dotenv)
+                // Checked = assigned: start from the vault keys this .env
+                // already has, so unchecking one removes it on Enter.
+                let picked = self
+                    .env_vault
+                    .vars
+                    .iter()
+                    .filter(|e| dotenv.contains_key(&e.key))
+                    .map(|e| e.key.clone())
+                    .collect();
+                (picked, dotenv)
             }
             EnvTarget::VaultOnly => (BTreeSet::new(), BTreeMap::new()),
         };

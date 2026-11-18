@@ -276,6 +276,40 @@ pub fn apply_dotenv(dir: &Path, entries: &[EnvEntry]) -> Result<(usize, usize)> 
         }
     }
 
+    write_dotenv(dir, &lines, line_ending)?;
+    Ok((added, updated))
+}
+
+/// Remove every assignment of `keys` from `<dir>/.env`, keeping all other
+/// lines. Returns how many lines were dropped (0 when the file is absent).
+pub fn remove_dotenv(dir: &Path, keys: &[String]) -> Result<usize> {
+    let dotenv = dir.join(".env");
+    if keys.is_empty() || !dotenv.exists() {
+        return Ok(0);
+    }
+    let existing =
+        fs::read_to_string(&dotenv).with_context(|| format!("Cannot read {}", dotenv.display()))?;
+    let line_ending = if existing.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let before = existing.lines().count();
+    let lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !parse_dotenv_line(l).is_some_and(|(k, _)| keys.contains(&k)))
+        .map(str::to_string)
+        .collect();
+    let removed = before - lines.len();
+    if removed > 0 {
+        write_dotenv(dir, &lines, line_ending)?;
+    }
+    Ok(removed)
+}
+
+/// Atomically replace `<dir>/.env` with `lines` (temp file + rename).
+fn write_dotenv(dir: &Path, lines: &[String], line_ending: &str) -> Result<()> {
+    let dotenv = dir.join(".env");
     let mut out = lines.join(line_ending);
     if !out.is_empty() {
         out.push_str(line_ending);
@@ -296,7 +330,7 @@ pub fn apply_dotenv(dir: &Path, entries: &[EnvEntry]) -> Result<(usize, usize)> 
         let _ = fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("Cannot write {}", dotenv.display()));
     }
-    Ok((added, updated))
+    Ok(())
 }
 
 /// Resolve `keys` from `vault` and apply them to `<dir>/.env`.

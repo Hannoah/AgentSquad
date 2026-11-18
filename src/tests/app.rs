@@ -556,6 +556,31 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
         "{dotenv_b}"
     );
 
+    // Reopening shows assigned keys checked; unchecking removes only that
+    // key, leaving vars that are not in the vault alone.
+    fs::write(proj_b.join(".env"), format!("{dotenv_b}LOCAL_ONLY=1\n")).unwrap();
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    assert!(app
+        .env_modal
+        .as_ref()
+        .unwrap()
+        .picked
+        .contains("SHARED_API_KEY"));
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    term.draw(|f| app.draw(f)).unwrap();
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.env_modal.is_none());
+    let unassigned = fs::read_to_string(proj_b.join(".env")).unwrap();
+    assert_eq!(unassigned, "LOCAL_ONLY=1\n");
+    assert!(app.message.0.contains("-1 removed"), "{}", app.message.0);
+    // Enter with nothing changed writes nothing.
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(
+        fs::read_to_string(proj_b.join(".env")).unwrap(),
+        "LOCAL_ONLY=1\n"
+    );
+
     // Also test selecting from Add modal's Env (.env) field (field 5).
     app.on_key(key(KeyCode::Char('a')), 27, 70);
     assert_eq!(app.mode, Mode::Add);

@@ -756,16 +756,42 @@ impl App {
                         self.env_modal = None;
                     }
                     EnvTarget::Project(pi) => {
-                        if picked.is_empty() {
+                        // Write checked keys that are missing or differ; drop
+                        // unchecked vault keys the .env still has. Keys not in
+                        // the vault are never touched.
+                        let current = &modal.project_dotenv;
+                        let (write, remove): (Vec<String>, Vec<String>) = (
+                            picked
+                                .iter()
+                                .filter(|k| {
+                                    let want = self.env_vault.vars.iter().find(|e| &e.key == *k);
+                                    want.map(|e| &e.value) != current.get(*k)
+                                })
+                                .cloned()
+                                .collect(),
+                            self.env_vault
+                                .vars
+                                .iter()
+                                .filter(|e| {
+                                    current.contains_key(&e.key) && !modal.picked.contains(&e.key)
+                                })
+                                .map(|e| e.key.clone())
+                                .collect(),
+                        );
+                        if write.is_empty() && remove.is_empty() {
                             self.env_modal = None;
                             return;
                         }
                         if let Some(p) = self.cfg.projects.get(pi) {
-                            match envvault::apply_dotenv_keys(&p.path, &self.env_vault, &picked) {
-                                Ok((added, updated)) => {
+                            let res = envvault::apply_dotenv_keys(&p.path, &self.env_vault, &write)
+                                .and_then(|(a, u)| {
+                                    envvault::remove_dotenv(&p.path, &remove).map(|r| (a, u, r))
+                                });
+                            match res {
+                                Ok((added, updated, removed)) => {
                                     self.message = (
                                         format!(
-                                            "Updated {}/.env (+{added} added, {updated} updated)",
+                                            "Updated {}/.env (+{added} added, {updated} updated, -{removed} removed)",
                                             p.name
                                         ),
                                         Notice::Info,
