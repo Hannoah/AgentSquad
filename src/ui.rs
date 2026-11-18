@@ -1222,8 +1222,9 @@ pub fn env_info_lines(
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(hint_spans(&[
+        ("a", "add"),
+        ("e/E", "edit"),
         ("v", if reveal { "masks" } else { "reveals" }),
-        ("E", "edits in vault"),
         ("Esc", "closes"),
     ])));
     lines

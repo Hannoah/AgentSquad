@@ -649,6 +649,68 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert_eq!(app.env_vault.vars.len(), before + 1);
 
+    // `a` inside EnvModal opens the Add variable editor (`A` toggles all);
+    // local-only `.env` keys also render in the modal list.
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    app.selected = 1; // agent-b has LOCAL_ONLY=1 in .env
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    term.draw(|f| app.draw(f)).unwrap();
+    let modal_screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        modal_screen.contains("LOCAL_ONLY") && modal_screen.contains("local"),
+        "local-only .env entry shows in EnvModal"
+    );
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    assert!(app.env_modal.as_ref().unwrap().editor.is_some());
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    app.on_key(key(KeyCode::Char('A')), 27, 70);
+    assert_eq!(
+        app.env_modal.as_ref().unwrap().picked.len(),
+        app.env_vault.vars.len()
+    );
+    app.on_key(key(KeyCode::Esc), 27, 70);
+
+    // Edit project (`e`) loads existing `.env` vault keys into `add_env`,
+    // and Enter on the Env (.env) row opens the picker with `.env` badges.
+    app.selected = 0; // agent-a has SHARED_API_KEY
+    app.open_edit();
+    assert!(app.add_env.contains("SHARED_API_KEY"));
+    app.add_field = 5;
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.env_modal.is_some());
+    assert!(app
+        .env_modal
+        .as_ref()
+        .unwrap()
+        .project_dotenv
+        .contains_key("SHARED_API_KEY"));
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    app.on_key(key(KeyCode::Esc), 27, 70);
+
+    // sync_project_dotenv removes unchecked vault keys while keeping local-only keys.
+    let cur_b = crate::envvault::read_dotenv(&proj_b);
+    let mut keep_none = std::collections::BTreeSet::new();
+    keep_none.insert("SHARED_API_KEY".to_string());
+    assert_eq!(
+        app.sync_project_dotenv(&proj_b, &keep_none, &cur_b),
+        Ok((1, 0, 0))
+    );
+    let cur_b2 = crate::envvault::read_dotenv(&proj_b);
+    assert_eq!(
+        app.sync_project_dotenv(&proj_b, &std::collections::BTreeSet::new(), &cur_b2),
+        Ok((0, 0, 1))
+    );
+    assert_eq!(
+        fs::read_to_string(proj_b.join(".env")).unwrap(),
+        "LOCAL_ONLY=1\n"
+    );
+
     drop(app);
     env::remove_var("AGENTSQUAD_ENV");
     let _ = fs::remove_dir_all(&dir);
@@ -725,8 +787,11 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     term.draw(|f| app.draw(f)).unwrap();
     app.on_key(key(KeyCode::Char('v')), 24, 54);
     assert!(text(&app).contains("supersecret"), "v reveals");
-    app.on_key(key(KeyCode::Esc), 24, 54);
+    // Pressing `a` inside Environment variables jumps straight to adding an env var.
+    app.on_key(key(KeyCode::Char('a')), 24, 54);
     assert!(app.env_info.is_none());
+    assert!(app.env_modal.as_ref().is_some_and(|m| m.editor.is_some()));
+    app.env_modal = None;
     let _ = fs::remove_dir_all(&dir);
 }
 

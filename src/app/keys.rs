@@ -357,6 +357,9 @@ impl App {
             KeyCode::Enter if self.add_field == 0 && self.add_sel.is_some() => {
                 self.pick_path(self.add_sel.unwrap_or(0));
             }
+            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 5 => {
+                self.open_env_modal(EnvTarget::AddForm);
+            }
             KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
             KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
             KeyCode::Up if self.add_edit.is_some() && self.add_field == 0 => {
@@ -507,9 +510,6 @@ impl App {
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 3 => {
                 self.add_autostart = !self.add_autostart;
-            }
-            KeyCode::Char(' ') if self.add_field == 5 => {
-                self.open_env_modal(EnvTarget::AddForm);
             }
             _ => {
                 if self.add_input().and_then(|input| input.edit_key(k)) == Some(true) {

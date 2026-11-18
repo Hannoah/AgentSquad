@@ -854,7 +854,20 @@ impl App {
             self.env_vault = fresh;
         }
         let (picked, project_dotenv) = match target {
-            EnvTarget::AddForm => (self.add_env.clone(), BTreeMap::new()),
+            EnvTarget::AddForm => {
+                let dotenv = if self.add_edit.is_some() {
+                    let raw = self.add_path.as_str();
+                    let p = std::path::Path::new(clean_path(&raw));
+                    if p.is_dir() {
+                        envvault::read_dotenv(p)
+                    } else {
+                        BTreeMap::new()
+                    }
+                } else {
+                    BTreeMap::new()
+                };
+                (self.add_env.clone(), dotenv)
+            }
             EnvTarget::Project(pi) => {
                 let dotenv = self
                     .cfg
@@ -1210,6 +1223,17 @@ impl App {
         };
         let p = self.cfg.projects[pi].clone();
         self.open_add();
+        if let Ok(fresh) = envvault::load_env() {
+            self.env_vault = fresh;
+        }
+        let dotenv = envvault::read_dotenv(&p.path);
+        self.add_env = self
+            .env_vault
+            .vars
+            .iter()
+            .filter(|e| dotenv.contains_key(&e.key))
+            .map(|e| e.key.clone())
+            .collect();
         self.add_edit = Some(p.name);
         self.add_path.set(&p.path.display().to_string());
         self.add_kind = p.kind;

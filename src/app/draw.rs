@@ -1921,16 +1921,16 @@ impl App {
         };
         let env_text = if self.add_env.is_empty() {
             if self.env_vault.vars.is_empty() {
-                "(none · Space creates)".to_string()
+                "(none · Space/Enter adds)".to_string()
             } else {
-                format!("({} shared · Space picks)", self.env_vault.vars.len())
+                format!("({} shared · Space/Enter picks)", self.env_vault.vars.len())
             }
         } else {
             let first = self.add_env.iter().next().map(String::as_str).unwrap_or("");
             if self.add_env.len() == 1 {
-                format!("{first} (Space edits)")
+                format!("{first} (Space/Enter edits)")
             } else {
-                format!("{first} +{} (Space edits)", self.add_env.len() - 1)
+                format!("{first} +{} (Space/Enter edits)", self.add_env.len() - 1)
             }
         };
         let fields = [
@@ -2092,7 +2092,7 @@ impl App {
             .split(inner);
         let can_pick = m.target != EnvTarget::VaultOnly;
         let key_w = 22usize.min(usize::from(inner.width) / 3);
-        let badge_w = if matches!(m.target, EnvTarget::Project(_)) {
+        let badge_w = if matches!(m.target, EnvTarget::Project(_)) || !m.project_dotenv.is_empty() {
             9usize
         } else {
             0
@@ -2121,22 +2121,42 @@ impl App {
         }
         let rows = usize::from(parts[1].height).max(1);
         let vars = &self.env_vault.vars;
+        let local_only: Vec<(&String, &String)> = m
+            .project_dotenv
+            .iter()
+            .filter(|(k, _)| !vars.iter().any(|v| v.key == **k))
+            .collect();
+        let val_w = usize::from(inner.width)
+            .saturating_sub(if can_pick { 6 } else { 4 } + key_w + badge_w + 3)
+            .max(6);
         if vars.is_empty() {
-            f.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    "  No shared env vars registered yet. Press n to create one.",
+            let mut empty_lines = vec![Line::from(Span::styled(
+                "  No shared env vars registered yet. Press a to create one.",
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ))];
+            for (k, v) in local_only.iter().take(rows.saturating_sub(1)) {
+                let shown_val = if m.reveal {
+                    (*v).clone()
+                } else {
+                    envvault::mask_value(v)
+                };
+                empty_lines.push(Line::from(Span::styled(
+                    format!(
+                        "    {:<kw$}  {:<vw$}  local",
+                        fit(k, key_w),
+                        fit(&shown_val, val_w),
+                        kw = key_w,
+                        vw = val_w
+                    ),
                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
-                ))),
-                parts[1],
-            );
+                )));
+            }
+            f.render_widget(Paragraph::new(empty_lines), parts[1]);
         } else {
             // One row past the variables: "+ New variable".
             let total = vars.len() + 1;
             let start = keep_visible(m.top.get(), m.sel.min(total - 1), rows);
             m.top.set(start);
-            let val_w = usize::from(inner.width)
-                .saturating_sub(if can_pick { 6 } else { 4 } + key_w + badge_w + 3)
-                .max(6);
             let mut list: Vec<Line> = vars
                 .iter()
                 .enumerate()
@@ -2220,7 +2240,7 @@ impl App {
                         style.add_modifier(ratatui::style::Modifier::BOLD),
                     ),
                     Span::styled(
-                        "  (n)",
+                        "  (a)",
                         if active {
                             style
                         } else {
@@ -2228,6 +2248,26 @@ impl App {
                         },
                     ),
                 ]));
+            }
+            if !local_only.is_empty() && list.len() < rows {
+                let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
+                for (k, v) in local_only.iter().take(rows - list.len()) {
+                    let shown_val = if m.reveal {
+                        (*v).clone()
+                    } else {
+                        envvault::mask_value(v)
+                    };
+                    list.push(Line::from(Span::styled(
+                        format!(
+                            "    {:<kw$}  {:<vw$}  local",
+                            fit(k, key_w),
+                            fit(&shown_val, val_w),
+                            kw = key_w,
+                            vw = val_w
+                        ),
+                        dim,
+                    )));
+                }
             }
             f.render_widget(Paragraph::new(list), parts[1]);
             if total > rows {
@@ -2321,10 +2361,12 @@ impl App {
             }
             if can_pick {
                 hints.push(("Space", "toggle"));
-                hints.push(("a", "all"));
             }
-            hints.extend([("n", "new"), ("e", "edit"), ("d", "del"), ("v", "reveal")]);
-            hints.push(("Esc", "close"));
+            hints.extend([("a", "add"), ("e", "edit"), ("d", "del")]);
+            if can_pick {
+                hints.push(("A", "all"));
+            }
+            hints.extend([("v", "reveal"), ("Esc", "close")]);
             Line::from(hint_spans(hints_that_fit(
                 &hints,
                 usize::from(parts[3].width),

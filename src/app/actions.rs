@@ -190,9 +190,10 @@ impl App {
             p.autostart = autostart;
             p.path.clone()
         };
-        let env_note = match self.apply_add_env(&path) {
-            Ok(Some((added, updated))) => format!("; .env (+{added}, ~{updated})"),
-            Ok(None) => String::new(),
+        let current_dotenv = envvault::read_dotenv(&path);
+        let env_note = match self.sync_project_dotenv(&path, &self.add_env, &current_dotenv) {
+            Ok((0, 0, 0)) => String::new(),
+            Ok((added, updated, removed)) => format!("; .env (+{added}, ~{updated}, -{removed})"),
             Err(e) => {
                 self.add_err = e;
                 return;
@@ -219,6 +220,37 @@ impl App {
         let keys: Vec<String> = self.add_env.iter().cloned().collect();
         envvault::apply_dotenv_keys(dir, &self.env_vault, &keys)
             .map(Some)
+            .map_err(|e| format!(".env failed: {e:#}"))
+    }
+
+    /// Write checked vault keys whose value is missing/changed and remove
+    /// unchecked vault keys from `<dir>/.env`, leaving non-vault keys untouched.
+    pub(crate) fn sync_project_dotenv(
+        &self,
+        dir: &std::path::Path,
+        picked: &BTreeSet<String>,
+        current: &BTreeMap<String, String>,
+    ) -> Result<(usize, usize, usize), String> {
+        let write: Vec<String> = picked
+            .iter()
+            .filter(|k| {
+                let want = self.env_vault.vars.iter().find(|e| &e.key == *k);
+                want.map(|e| &e.value) != current.get(*k)
+            })
+            .cloned()
+            .collect();
+        let remove: Vec<String> = self
+            .env_vault
+            .vars
+            .iter()
+            .filter(|e| current.contains_key(&e.key) && !picked.contains(&e.key))
+            .map(|e| e.key.clone())
+            .collect();
+        if write.is_empty() && remove.is_empty() {
+            return Ok((0, 0, 0));
+        }
+        envvault::apply_dotenv_keys(dir, &self.env_vault, &write)
+            .and_then(|(a, u)| envvault::remove_dotenv(dir, &remove).map(|r| (a, u, r)))
             .map_err(|e| format!(".env failed: {e:#}"))
     }
 
@@ -581,7 +613,17 @@ impl App {
         };
         match k.code {
             KeyCode::Char('v') => info.reveal = !info.reveal,
-            KeyCode::Char('E') => {
+            KeyCode::Char('a') => {
+                let pi = info.pi;
+                self.env_info = None;
+                self.open_env_modal(EnvTarget::Project(pi));
+                if let Some(m) = self.env_modal.as_mut() {
+                    if m.editor.is_none() {
+                        m.editor = Some(EnvEditor::blank());
+                    }
+                }
+            }
+            KeyCode::Char('e' | 'E') => {
                 let pi = info.pi;
                 self.env_info = None;
                 self.open_env_modal(EnvTarget::Project(pi));
@@ -712,7 +754,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('a') if can_pick && len > 0 => {
+            KeyCode::Char('A') if can_pick && len > 0 => {
                 if modal.picked.len() == len {
                     modal.picked.clear();
                 } else {
@@ -724,7 +766,7 @@ impl App {
             KeyCode::Char('v') => {
                 modal.reveal = !modal.reveal;
             }
-            KeyCode::Char('n') => {
+            KeyCode::Char('a' | 'n') => {
                 modal.editor = Some(EnvEditor::blank());
             }
             KeyCode::Char('e') if len > 0 => {
@@ -756,54 +798,29 @@ impl App {
                         self.env_modal = None;
                     }
                     EnvTarget::Project(pi) => {
-                        // Write checked keys that are missing or differ; drop
-                        // unchecked vault keys the .env still has. Keys not in
-                        // the vault are never touched.
-                        let current = &modal.project_dotenv;
-                        let (write, remove): (Vec<String>, Vec<String>) = (
-                            picked
-                                .iter()
-                                .filter(|k| {
-                                    let want = self.env_vault.vars.iter().find(|e| &e.key == *k);
-                                    want.map(|e| &e.value) != current.get(*k)
-                                })
-                                .cloned()
-                                .collect(),
-                            self.env_vault
-                                .vars
-                                .iter()
-                                .filter(|e| {
-                                    current.contains_key(&e.key) && !modal.picked.contains(&e.key)
-                                })
-                                .map(|e| e.key.clone())
-                                .collect(),
-                        );
-                        if write.is_empty() && remove.is_empty() {
+                        let picked_set = modal.picked.clone();
+                        let current_env = modal.project_dotenv.clone();
+                        let Some(p) = self.cfg.projects.get(pi) else {
                             self.env_modal = None;
                             return;
-                        }
-                        if let Some(p) = self.cfg.projects.get(pi) {
-                            let res = envvault::apply_dotenv_keys(&p.path, &self.env_vault, &write)
-                                .and_then(|(a, u)| {
-                                    envvault::remove_dotenv(&p.path, &remove).map(|r| (a, u, r))
-                                });
-                            match res {
-                                Ok((added, updated, removed)) => {
-                                    self.message = (
-                                        format!(
-                                            "Updated {}/.env (+{added} added, {updated} updated, -{removed} removed)",
-                                            p.name
-                                        ),
-                                        Notice::Info,
-                                    );
-                                    self.env_modal = None;
-                                }
-                                Err(e) => {
-                                    self.message = (format!(".env failed: {e:#}"), Notice::Error);
-                                }
+                        };
+                        match self.sync_project_dotenv(&p.path, &picked_set, &current_env) {
+                            Ok((0, 0, 0)) => {
+                                self.env_modal = None;
                             }
-                        } else {
-                            self.env_modal = None;
+                            Ok((added, updated, removed)) => {
+                                self.message = (
+                                    format!(
+                                        "Updated {}/.env (+{added} added, {updated} updated, -{removed} removed)",
+                                        p.name
+                                    ),
+                                    Notice::Info,
+                                );
+                                self.env_modal = None;
+                            }
+                            Err(e) => {
+                                self.message = (e, Notice::Error);
+                            }
                         }
                     }
                     EnvTarget::VaultOnly => {
