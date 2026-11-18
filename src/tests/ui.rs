@@ -224,7 +224,12 @@ fn fixed_rect_fits_short_terminals() {
     assert!(help_lines().len() as u16 + 2 <= 24);
     for l in help_lines() {
         let (key, desc) = split_help_line(l);
-        assert!(key.len() + 2 + desc.len() <= 64, "help row too wide: {l}");
+        // The key column is padded to 13 (draw_help), and must not overflow it.
+        assert!(key.len() <= 13, "help key too wide: {l}");
+        assert!(
+            13 + 2 + desc.chars().count() <= 64,
+            "help row too wide: {l}"
+        );
         assert!(!desc.is_empty(), "help row has no key column: {l}");
     }
 }

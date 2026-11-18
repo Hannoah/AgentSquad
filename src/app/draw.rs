@@ -899,7 +899,10 @@ impl App {
                 hints.push(("h", "history"));
             }
             card.push(Line::from(""));
-            card.push(Line::from(hint_spans(&hints)));
+            card.push(Line::from(hint_spans(hints_that_fit(
+                &hints,
+                usize::from(inner.width),
+            ))));
             let pad = inner.height.saturating_sub(card.len() as u16) / 2;
             let mut lines: Vec<Line> = (0..pad).map(|_| Line::from("")).collect();
             lines.extend(card);
@@ -1802,19 +1805,24 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ))
         } else {
+            // The action that commits comes first: narrow popups drop hints
+            // from the end, and losing "Enter write .env" hid how to save.
             let mut hints: Vec<(&str, &str)> = Vec::new();
-            if can_pick {
-                hints.push(("Space", "toggle"));
-                hints.push(("a", "all"));
-            }
-            hints.extend([("n", "new"), ("e", "edit"), ("d", "del"), ("v", "reveal")]);
             match m.target {
                 EnvTarget::AddForm => hints.push(("Enter", "done")),
                 EnvTarget::Project(_) => hints.push(("Enter", "write .env")),
                 EnvTarget::VaultOnly => {}
             }
+            if can_pick {
+                hints.push(("Space", "toggle"));
+                hints.push(("a", "all"));
+            }
+            hints.extend([("n", "new"), ("e", "edit"), ("d", "del"), ("v", "reveal")]);
             hints.push(("Esc", "close"));
-            Line::from(hint_spans(&hints))
+            Line::from(hint_spans(hints_that_fit(
+                &hints,
+                usize::from(parts[3].width),
+            )))
         };
         f.render_widget(Paragraph::new(foot), parts[3]);
     }

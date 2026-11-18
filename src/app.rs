@@ -1036,11 +1036,15 @@ impl App {
     /// instant; 40 ms while spinners run; 150-200 ms when sessions are static
     /// or stopped so idle CPU stays near zero.
     fn poll_duration(&self) -> Duration {
+        // Only the session on screen needs instant echo; a chatty background
+        // session (a dev server logging) shows as a spinner, which the 40 ms
+        // branch below already covers.
         let recently_active = self
-            .sessions
-            .iter()
-            .flatten()
-            .any(|s| s.is_active(Duration::from_millis(1500)));
+            .order
+            .get(self.selected)
+            .and_then(|&pi| self.sessions.get(pi))
+            .and_then(Option::as_ref)
+            .is_some_and(|s| s.is_active(Duration::from_millis(1500)));
         if recently_active
             || self.sampling
             || self.updating

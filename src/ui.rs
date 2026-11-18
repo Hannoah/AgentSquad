@@ -119,14 +119,14 @@ pub fn help_lines() -> Vec<&'static str> {
         "b          brief the agent on .squad/ (ledger = true)",
         "h          history: read the project's SITREPs",
         "M          memory: biggest processes, kill one (x)",
-        "o          order: send a line to every agent under a commander",
+        "o          order: message every agent under a commander",
         "u          set whom the selected agent reports to",
         "e, f, z    edit project; pin (*); zoom: full-width terminal",
         "s, r       stop / restart session (asks to confirm)",
         "d/Del      remove project (asks to confirm)",
-        "S, U       start all stopped / install the update squad found",
+        "S, U       start all stopped / install a found update",
         "PgUp/PgDn  scroll history (Shift+ inside a terminal)",
-        "Ctrl+Q, middle-click  terminal back to manager",
+        "Ctrl+Q     terminal back to manager (or middle-click)",
         #[cfg(target_os = "macos")]
         "Opt+1-9    switch project from inside a terminal",
         #[cfg(not(target_os = "macos"))]
@@ -287,9 +287,17 @@ pub fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
     if order.is_empty() {
         return hint_spans(full);
     }
+    hint_spans(hints_that_fit(order, width))
+}
+/// The longest leading run of `parts` that fits `width` columns, so a
+/// narrow line drops whole hints instead of clipping one mid-word.
+pub fn hints_that_fit<'a, 'b>(
+    parts: &'a [(&'b str, &'b str)],
+    width: usize,
+) -> &'a [(&'b str, &'b str)] {
     let mut take = 0usize;
     let mut len = 0usize;
-    for (i, (k, d)) in order.iter().enumerate() {
+    for (i, (k, d)) in parts.iter().enumerate() {
         let part =
             k.chars().count() + d.chars().count() + usize::from(!k.is_empty() && !d.is_empty());
         let add = part + if i == 0 { 0 } else { 3 };
@@ -299,7 +307,7 @@ pub fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
         len += add;
         take = i + 1;
     }
-    hint_spans(&order[..take])
+    &parts[..take]
 }
 /// Styled status bar segments: bright keys, dimmed descriptions.
 pub fn hint_spans(parts: &[(&str, &str)]) -> Vec<Span<'static>> {
