@@ -67,7 +67,8 @@ impl App {
             || self.confirm_apply
             || self.confirm_quit
             || self.confirm_start_all
-            || self.context_menu.is_some();
+            || self.context_menu.is_some()
+            || self.env_info.is_some();
         if has_modal {
             let full_area = f.area();
             dim_area(f.buffer_mut(), full_area);
@@ -79,6 +80,9 @@ impl App {
         self.draw_procs(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
+        if let Some(lines) = self.env_info_lines() {
+            modal(f, "Environment", Color::Cyan, lines);
+        }
         if self.mode == Mode::Add {
             self.draw_add(f);
         }
@@ -331,6 +335,13 @@ impl App {
         }
     }
 
+    /// The environment popup's rows, shared by drawing and click mapping.
+    pub(super) fn env_info_lines(&self) -> Option<Vec<Line<'static>>> {
+        let info = self.env_info.as_ref()?;
+        let p = self.cfg.projects.get(info.pi)?;
+        Some(env_info_lines(p, &info.dotenv, info.reveal))
+    }
+
     /// What a project without a session is doing: waiting, or on its way up.
     fn idle_word(&self, pi: usize) -> &'static str {
         if self.is_starting(pi) {
@@ -341,7 +352,15 @@ impl App {
     }
 
     pub(super) fn draw_sidebar(&mut self, f: &mut Frame, panel: Rect) {
-        let sel_pi = self.order.get(self.selected).copied();
+        // A Management pick lives only while the manager has the keyboard.
+        if self.mode != Mode::Manager {
+            self.mgmt_sel = None;
+        }
+        let sel_pi = if self.mgmt_sel.is_some() {
+            None
+        } else {
+            self.order.get(self.selected).copied()
+        };
         let inner_w = (panel.width as usize).saturating_sub(2);
         let mut items: Vec<ListItem> = Vec::new();
         let mut targets: Vec<Option<usize>> = Vec::new();
@@ -576,7 +595,10 @@ impl App {
                 .add_modifier(ratatui::style::Modifier::BOLD),
         ))));
         targets.push(None);
-        let memory_style = if self.procs.is_some() {
+        if self.mgmt_sel == Some(0) {
+            sel_row = Some(items.len());
+        }
+        let memory_style = if self.procs.is_some() || self.mgmt_sel == Some(0) {
             selected_row_style()
         } else {
             Style::default()
@@ -592,7 +614,10 @@ impl App {
             .style(memory_style),
         );
         targets.push(Some(MEMORY_ROW));
-        let env_style = if self.env_modal.is_some() {
+        if self.mgmt_sel == Some(1) {
+            sel_row = Some(items.len());
+        }
+        let env_style = if self.env_modal.is_some() || self.mgmt_sel == Some(1) {
             selected_row_style()
         } else {
             Style::default()
@@ -1596,12 +1621,14 @@ impl App {
                 parts[1],
             );
         } else {
-            let start = keep_visible(m.top.get(), m.sel.min(vars.len() - 1), rows);
+            // One row past the variables: "+ New variable".
+            let total = vars.len() + 1;
+            let start = keep_visible(m.top.get(), m.sel.min(total - 1), rows);
             m.top.set(start);
             let val_w = usize::from(inner.width)
                 .saturating_sub(if can_pick { 6 } else { 4 } + key_w + badge_w + 3)
                 .max(6);
-            let list: Vec<Line> = vars
+            let mut list: Vec<Line> = vars
                 .iter()
                 .enumerate()
                 .skip(start)
@@ -1666,9 +1693,35 @@ impl App {
                     Line::from(spans)
                 })
                 .collect();
+            if (start..start + rows).contains(&vars.len()) {
+                let active = m.sel >= vars.len() && m.editor.is_none();
+                let style = if active {
+                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+                list.push(Line::from(vec![
+                    Span::styled(
+                        if active {
+                            "▸ + New variable…"
+                        } else {
+                            "  + New variable…"
+                        },
+                        style.add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "  (n)",
+                        if active {
+                            style
+                        } else {
+                            Style::default().add_modifier(ratatui::style::Modifier::DIM)
+                        },
+                    ),
+                ]));
+            }
             f.render_widget(Paragraph::new(list), parts[1]);
-            if vars.len() > rows {
-                scrollbar(f, popup, vars.len(), m.sel);
+            if total > rows {
+                scrollbar(f, popup, total, m.sel);
             }
         }
         if let (true, Some(ed)) = (has_editor, m.editor.as_ref()) {

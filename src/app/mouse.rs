@@ -61,16 +61,15 @@ impl App {
             self.sel = None; // the cells would no longer match the text
         }
         if let (Some(lines), Some(m_env)) = (wheel_lines(m.kind), self.env_modal.as_mut()) {
+            // Down to the "+ New variable" row at index `len`.
             let len = self.env_vault.vars.len();
-            if len > 0 {
-                m_env.confirm_delete = None;
-                m_env.sel = if lines > 0 {
-                    m_env.sel.saturating_sub(1)
-                } else {
-                    (m_env.sel + 1).min(len - 1)
-                };
-                self.dirty = true;
-            }
+            m_env.confirm_delete = None;
+            m_env.sel = if lines > 0 {
+                m_env.sel.saturating_sub(1)
+            } else {
+                (m_env.sel + 1).min(len)
+            };
+            self.dirty = true;
         } else if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
             // The memory monitor is modal: the wheel moves its pick.
             p.confirm = None;
@@ -105,6 +104,7 @@ impl App {
         } else if wheel_lines(m.kind).is_some()
             && (self.mode == Mode::Help
                 || self.context_menu.is_some()
+                || self.env_info.is_some()
                 || !self.confirm_modals().is_empty())
         {
             // Keep modal popups isolated: wheel events do not leak into the dimmed background.
@@ -115,6 +115,7 @@ impl App {
                     .side_rect
                     .contains(ratatui::layout::Position::new(m.column, m.row));
             if over_sidebar {
+                self.mgmt_sel = None;
                 if !self.order.is_empty() {
                     if lines > 0 {
                         self.selected = (self.selected + self.order.len() - 1) % self.order.len();
@@ -182,7 +183,11 @@ impl App {
                     self.env_modal = None;
                 } else if list.contains(at) {
                     let i = m_env.top.get() + usize::from(m.row - list.y);
-                    if i < self.env_vault.vars.len() {
+                    if i == self.env_vault.vars.len() && m_env.editor.is_none() {
+                        m_env.confirm_delete = None;
+                        m_env.sel = i;
+                        m_env.editor = Some(EnvEditor::blank());
+                    } else if i < self.env_vault.vars.len() {
                         m_env.confirm_delete = None;
                         m_env.sel = i;
                         if m_env.target != EnvTarget::VaultOnly && m_env.editor.is_none() {
@@ -222,6 +227,14 @@ impl App {
                     }
                 }
                 self.dirty = true;
+            } else if let Some(lines) = self.env_info_lines() {
+                // Read-only popup: a click outside closes it.
+                if !modal_rect(&lines, area.into())
+                    .contains(ratatui::layout::Position::new(m.column, m.row))
+                {
+                    self.env_info = None;
+                    self.dirty = true;
+                }
             } else if self.mode == Mode::Help {
                 // Clicks inside the popup (e.g. selecting text) keep it open.
                 if !help_popup(area.into())
@@ -382,22 +395,18 @@ impl App {
                 if self.mode == Mode::Filter {
                     self.mode = Mode::Manager;
                 }
-                if i == MEMORY_ROW {
-                    self.mode = Mode::Manager;
-                    self.open_procs();
-                } else if i == ENV_ROW {
-                    self.mode = Mode::Manager;
-                    let target = self
-                        .order
-                        .get(self.selected)
-                        .copied()
-                        .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
-                    self.open_env_modal(target);
-                } else if self.selected == i && self.mode == Mode::Focus {
+                // Coming from a Management row, the project row was not
+                // highlighted, so this is a first click on it.
+                let was_mgmt = self.mgmt_sel.take().is_some();
+                if i == MEMORY_ROW || i == ENV_ROW {
+                    let m = usize::from(i == ENV_ROW);
+                    self.mgmt_sel = Some(m);
+                    self.open_mgmt(m);
+                } else if self.selected == i && !was_mgmt && self.mode == Mode::Focus {
                     // Clicking the manager while typing in a terminal hands
                     // the keyboard back to the manager.
                     self.mode = Mode::Manager;
-                } else if self.selected == i {
+                } else if self.selected == i && !was_mgmt {
                     // Re-clicking selected project: start if stopped, focus if running
                     if let Some(&pi) = self.order.get(self.selected) {
                         self.open_session(pi, rows, cols);
@@ -489,7 +498,14 @@ impl App {
             self.mode = Mode::Manager;
             self.dirty = true;
         } else if m.kind == MouseEventKind::Down(MouseButton::Right)
-            && self.mode == Mode::Manager
+            // From a terminal, the filter line or help too: the click hands
+            // the keyboard to the manager first. Send and the add form keep
+            // their typed text, so they are left alone.
+            && matches!(
+                self.mode,
+                Mode::Manager | Mode::Focus | Mode::Filter | Mode::Help
+            )
+            && self.env_info.is_none()
             && !self.confirm_quit
             && !self.confirm_start_all
             && self.confirm_stop.is_none()
@@ -501,8 +517,9 @@ impl App {
             && self.procs.is_none()
             && self.env_modal.is_none()
         {
-            // Right-click on a sidebar row opens its quick-action menu.
-            // Manager-only, so typing in a terminal is never stolen, and
+            // Right-click on a sidebar row opens its quick-action menu, a
+            // Management row opens that tool. Only sidebar rows react, so a
+            // right-click in the terminal pane never steals its keyboard, and
             // nothing runs until a menu row is picked.
             if let Some(i) = sidebar_click(
                 self.side_rect,
@@ -510,13 +527,19 @@ impl App {
                 &self.row_targets,
                 m.column,
                 m.row,
-            )
-            .filter(|&i| i != MEMORY_ROW && i != ENV_ROW)
-            {
-                self.selected = i;
-                if let Some(&pi) = self.order.get(self.selected) {
-                    self.context_menu = Some(pi);
-                    self.context_sel = 0;
+            ) {
+                self.mode = Mode::Manager;
+                if i == MEMORY_ROW || i == ENV_ROW {
+                    let m = usize::from(i == ENV_ROW);
+                    self.mgmt_sel = Some(m);
+                    self.open_mgmt(m);
+                } else {
+                    self.mgmt_sel = None;
+                    self.selected = i;
+                    if let Some(&pi) = self.order.get(self.selected) {
+                        self.context_menu = Some(pi);
+                        self.context_sel = 0;
+                    }
                 }
                 self.dirty = true;
             }

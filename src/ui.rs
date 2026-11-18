@@ -110,8 +110,8 @@ pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
         "Click, drag  focus a project or the pane; drag copies text",
-        "Right-click  open quick actions for a project",
-        "j/k, Tab   select project / jump to next needing attention",
+        "Right-click  quick actions & env vars (from a terminal too)",
+        "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump to a project / the first / the last",
         "/          filter projects (Esc clears)",
         "a, E       add project / shared env vars (.env)",
@@ -432,6 +432,7 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('7', "Toggle pin"),
             ('8', "Set superior…"),
             ('9', "Remove project…"),
+            ('0', "Environment variables"),
         ]
     } else {
         vec![
@@ -442,6 +443,7 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('5', "Toggle pin"),
             ('6', "Set superior…"),
             ('7', "Remove project…"),
+            ('8', "Environment variables"),
         ]
     }
 }
@@ -480,7 +482,12 @@ pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> V
         ]));
     }
     lines.push(Line::from(""));
-    let range = format!("1-{}", items.len());
+    // The tenth row is keyed `0`, as on the number row.
+    let range = if items.len() >= 10 {
+        "0-9".to_string()
+    } else {
+        format!("1-{}", items.len())
+    };
     lines.push(Line::from(hint_spans(&[
         (range.as_str(), "selects"),
         ("↑↓/Enter", "runs"),
@@ -1035,4 +1042,76 @@ pub fn color(c: vt100::Color) -> Color {
         vt100::Color::Idx(n) => Color::Indexed(n),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
+}
+/// Rows of the `.env` list the environment popup shows before "… N more".
+pub const ENV_INFO_ROWS: usize = 15;
+/// The read-only environment popup for one project: its `.env` entries
+/// (masked unless `reveal`), what squad adds to every session, then keys.
+pub fn env_info_lines(
+    p: &Project,
+    dotenv: &std::collections::BTreeMap<String, String>,
+    reveal: bool,
+) -> Vec<Line<'static>> {
+    use crate::config::fit;
+    use ratatui::style::Modifier;
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            p.name.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(fit(&p.path.display().to_string(), 58), dim)),
+        Line::from(""),
+        Line::from(Span::styled(
+            match dotenv.len() {
+                0 => ".env  (none)".to_string(),
+                n => format!(".env  ({n} key{})", if n == 1 { "" } else { "s" }),
+            },
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+    ];
+    let key_w = dotenv
+        .keys()
+        .map(|k| k.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(22);
+    for (k, v) in dotenv.iter().take(ENV_INFO_ROWS) {
+        let shown = if reveal {
+            v.replace(['\r', '\n'], " ")
+        } else {
+            crate::envvault::mask_value(v)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<key_w$}", fit(k, key_w)),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw("  "),
+            Span::raw(fit(&shown, 56usize.saturating_sub(key_w))),
+        ]));
+    }
+    if dotenv.len() > ENV_INFO_ROWS {
+        lines.push(Line::from(Span::styled(
+            format!("  … and {} more", dotenv.len() - ENV_INFO_ROWS),
+            dim,
+        )));
+    }
+    let added: Vec<String> = crate::config::pty_env()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    lines.push(Line::from(Span::styled(
+        format!("squad also sets {}", added.join(" ")),
+        dim,
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(hint_spans(&[
+        ("v", if reveal { "masks" } else { "reveals" }),
+        ("E", "edits in vault"),
+        ("Esc", "closes"),
+    ])));
+    lines
 }

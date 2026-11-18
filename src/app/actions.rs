@@ -146,8 +146,15 @@ impl App {
             }
         };
         let moved = !same_path(&new_path, &self.cfg.projects[pi].path);
+        // An agent whose name drifted from its folder (older registrations,
+        // shared-folder suffixes that no longer clash) takes the folder's name
+        // on save even when the path is unchanged, as the form previews.
+        let renames = self.cfg.projects[pi].kind == Kind::Agent && {
+            let mut probe = self.cfg.projects.clone();
+            relocate(&mut probe, pi, new_path.clone()) != name
+        };
         let was_running = slot_running(&self.sessions, pi);
-        if moved {
+        if moved || renames {
             if self.is_starting(pi) {
                 self.add_err = format!("{name} is still starting; wait a moment before moving it.");
                 return;
@@ -275,6 +282,22 @@ impl App {
     }
 
     /// `M`: list the processes holding the most RAM on the machine.
+    /// Open Management row `m`: `0` Memory monitor, `1` Env vault (for the
+    /// selected project's `.env`, or the vault alone with none registered).
+    pub(super) fn open_mgmt(&mut self, m: usize) {
+        self.mode = Mode::Manager;
+        if m == 0 {
+            self.open_procs();
+        } else {
+            let target = self
+                .order
+                .get(self.selected)
+                .copied()
+                .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
+            self.open_env_modal(target);
+        }
+    }
+
     pub(super) fn open_procs(&mut self) {
         let mut p = ProcList {
             items: top_processes(PROC_ROWS),
@@ -495,6 +518,7 @@ impl App {
                 6 => self.toggle_pin(),
                 7 => self.begin_set_superior(pi),
                 8 => self.confirm_remove = Some(pi),
+                9 => self.open_env_info(pi),
                 _ => {}
             }
             return;
@@ -511,6 +535,7 @@ impl App {
             4 => self.toggle_pin(),
             5 => self.begin_set_superior(pi),
             6 => self.confirm_remove = Some(pi),
+            7 => self.open_env_info(pi),
             _ => {}
         }
     }
@@ -537,13 +562,31 @@ impl App {
             }
             KeyCode::Char(c) => {
                 if let Some(d) = c.to_digit(10) {
-                    let idx = d as usize;
+                    // `0` is the tenth row, as on the number row.
+                    let idx = if d == 0 { 10 } else { d as usize };
                     if idx >= 1 && idx <= count {
                         self.context_menu = None;
                         self.run_context_action(pi, idx - 1, rows, cols);
                     }
                 }
             }
+            _ => {}
+        }
+    }
+
+    /// Keys in the read-only environment popup.
+    pub(super) fn key_env_info(&mut self, k: KeyEvent) {
+        let Some(info) = self.env_info.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Char('v') => info.reveal = !info.reveal,
+            KeyCode::Char('E') => {
+                let pi = info.pi;
+                self.env_info = None;
+                self.open_env_modal(EnvTarget::Project(pi));
+            }
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.env_info = None,
             _ => {}
         }
     }
@@ -652,11 +695,15 @@ impl App {
             KeyCode::Esc | KeyCode::Char('E') => {
                 self.env_modal = None;
             }
-            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
-                modal.sel = (modal.sel + len - 1) % len;
+            // The rows are the variables, then "+ New variable" (index `len`).
+            KeyCode::Up | KeyCode::Char('k') => {
+                modal.sel = (modal.sel + len) % (len + 1);
             }
-            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
-                modal.sel = (modal.sel + 1) % len;
+            KeyCode::Down | KeyCode::Char('j') => {
+                modal.sel = (modal.sel + 1) % (len + 1);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if modal.sel >= len => {
+                modal.editor = Some(EnvEditor::blank());
             }
             KeyCode::Char(' ') if can_pick && len > 0 => {
                 if let Some(entry) = self.env_vault.vars.get(modal.sel) {
@@ -678,13 +725,7 @@ impl App {
                 modal.reveal = !modal.reveal;
             }
             KeyCode::Char('n') => {
-                modal.editor = Some(EnvEditor {
-                    key: LineInput::new(),
-                    value: LineInput::new(),
-                    field: 0,
-                    editing_key: None,
-                    err: String::new(),
-                });
+                modal.editor = Some(EnvEditor::blank());
             }
             KeyCode::Char('e') if len > 0 => {
                 if let Some(entry) = self.env_vault.vars.get(modal.sel) {

@@ -677,23 +677,26 @@ fn pane_usage_note_labels_numbers() {
 #[test]
 fn context_menu_offers_start_for_stopped() {
     let running = context_menu_items(true);
-    assert_eq!(running.len(), 9);
+    assert_eq!(running.len(), 10);
     assert!(running.iter().any(|(_, l)| l.contains("Focus")));
     assert!(running.iter().any(|(_, l)| l.contains("Stop")));
     assert!(running.iter().any(|(_, l)| l.contains("Edit")));
     assert!(running.iter().any(|(_, l)| l.contains("history")));
     let stopped = context_menu_items(false);
-    assert_eq!(stopped.len(), 7);
+    assert_eq!(stopped.len(), 8);
+    for items in [&running, &stopped] {
+        assert!(items.last().unwrap().1.contains("Environment"));
+    }
     assert!(stopped.iter().any(|(_, l)| l.contains("Start")));
     assert!(!stopped.iter().any(|(_, l)| l.contains("Stop")));
-    // Number keys are 1-based in order with no gaps.
+    // Number keys are 1-based in order with no gaps; the tenth is `0`.
     assert_eq!(
         running.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
     );
     assert_eq!(
         stopped.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        ['1', '2', '3', '4', '5', '6', '7']
+        ['1', '2', '3', '4', '5', '6', '7', '8']
     );
 }
 

@@ -41,6 +41,8 @@ impl App {
         let k = hotkey_event(k);
         if self.context_menu.is_some() {
             self.key_context_menu(k, rows, cols);
+        } else if self.env_info.is_some() {
+            self.key_env_info(k);
         } else if self.history.is_some() {
             self.key_history(k);
         } else if self.procs.is_some() {
@@ -491,6 +493,35 @@ impl App {
     }
 
     pub(super) fn key_manager(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+        if let Some(m) = self.mgmt_sel {
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
+                    self.mgmt_sel = (m == 0).then_some(1);
+                    if self.mgmt_sel.is_none() && self.order.is_empty() {
+                        self.mgmt_sel = Some(0);
+                    }
+                    self.selected = 0;
+                }
+                KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') => {
+                    self.mgmt_sel = (m == 1).then_some(0);
+                    if self.mgmt_sel.is_none() && self.order.is_empty() {
+                        self.mgmt_sel = Some(1);
+                    }
+                    self.selected = self.order.len().saturating_sub(1);
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.open_mgmt(m),
+                KeyCode::Esc => self.mgmt_sel = None,
+                // No project is highlighted, so project actions have no target.
+                KeyCode::Char('m' | 'u' | 'o' | 'b' | 'h' | 'e' | 'f' | 'r' | 's' | 'x' | 'd')
+                | KeyCode::Delete => {}
+                // Anything else (global keys, jumps) returns to the project list.
+                _ => {
+                    self.mgmt_sel = None;
+                    self.key_manager(k, rows, cols);
+                }
+            }
+            return;
+        }
         match k.code {
             KeyCode::Char('q') | KeyCode::Char('c')
                 if k.code == KeyCode::Char('q') || k.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -508,11 +539,20 @@ impl App {
                 }
             }
             // `n`/`p` stay bound for muscle memory; `j`/`k` and arrows are documented.
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') if !self.order.is_empty() => {
-                self.selected = (self.selected + 1) % self.order.len()
+            // Past either end of the list the arrows step onto Management.
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
+                if self.selected + 1 < self.order.len() {
+                    self.selected += 1;
+                } else {
+                    self.mgmt_sel = Some(0);
+                }
             }
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') if !self.order.is_empty() => {
-                self.selected = (self.selected + self.order.len() - 1) % self.order.len()
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') => {
+                if self.selected > 0 && !self.order.is_empty() {
+                    self.selected -= 1;
+                } else {
+                    self.mgmt_sel = Some(1);
+                }
             }
             KeyCode::Tab if !self.order.is_empty() => self.jump_attention(),
             KeyCode::Char('m') if !self.order.is_empty() => {

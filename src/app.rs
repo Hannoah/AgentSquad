@@ -180,7 +180,21 @@ pub(crate) struct EnvEditor {
     pub(crate) err: String,
 }
 
+impl EnvEditor {
+    /// An empty form for a new variable.
+    pub(crate) fn blank() -> Self {
+        EnvEditor {
+            key: LineInput::new(),
+            value: LineInput::new(),
+            field: 0,
+            editing_key: None,
+            err: String::new(),
+        }
+    }
+}
+
 /// Shared Environment Variable Vault & `.env` assignment popup.
+/// `sel` runs one past the last variable: that row is "+ New variable".
 pub(crate) struct EnvModal {
     pub(crate) target: EnvTarget,
     pub(crate) sel: usize,
@@ -191,6 +205,14 @@ pub(crate) struct EnvModal {
     pub(crate) reveal: bool,
     pub(crate) confirm_delete: Option<String>,
     pub(crate) editor: Option<EnvEditor>,
+}
+
+/// What the read-only environment popup shows: project `pi`'s `.env`, read
+/// once when it opens.
+pub(crate) struct EnvInfo {
+    pub(crate) pi: usize,
+    pub(crate) reveal: bool,
+    pub(crate) dotenv: BTreeMap<String, String>,
 }
 
 pub(crate) struct App {
@@ -297,6 +319,11 @@ pub(crate) struct App {
     /// `z`: a focused terminal takes the sidebar's columns too.
     pub(crate) zoom: bool,
     pub(crate) hangul_hotkey_seen: bool,
+    /// Arrow keys past the last project land on the Management rows:
+    /// `0` = Memory monitor, `1` = Env vault. None while a project is picked.
+    pub(crate) mgmt_sel: Option<usize>,
+    /// Read-only environment popup opened from the right-click menu.
+    pub(crate) env_info: Option<EnvInfo>,
     pub(crate) quit: bool,
 }
 
@@ -402,6 +429,8 @@ impl App {
             pane: (0, 0),
             zoom: false,
             hangul_hotkey_seen: false,
+            mgmt_sel: None,
+            env_info: None,
             quit: false,
         }
     }
@@ -417,6 +446,7 @@ impl App {
             || self.history.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
+            || self.env_info.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()
@@ -670,6 +700,17 @@ impl App {
         self.rank_prefixes = compute_rank_prefixes(&self.cfg.projects);
     }
 
+    pub(crate) fn open_env_info(&mut self, pi: usize) {
+        if let Some(p) = self.cfg.projects.get(pi) {
+            let dotenv = envvault::read_dotenv(&p.path);
+            self.env_info = Some(EnvInfo {
+                pi,
+                reveal: false,
+                dotenv,
+            });
+        }
+    }
+
     pub(crate) fn open_env_modal(&mut self, target: EnvTarget) {
         if let Ok(fresh) = envvault::load_env() {
             self.env_vault = fresh;
@@ -687,17 +728,7 @@ impl App {
             }
             EnvTarget::VaultOnly => (BTreeSet::new(), BTreeMap::new()),
         };
-        let editor = if self.env_vault.vars.is_empty() {
-            Some(EnvEditor {
-                key: LineInput::new(),
-                value: LineInput::new(),
-                field: 0,
-                editing_key: None,
-                err: String::new(),
-            })
-        } else {
-            None
-        };
+        let editor = self.env_vault.vars.is_empty().then(EnvEditor::blank);
         self.env_modal = Some(EnvModal {
             target,
             sel: 0,
@@ -868,6 +899,7 @@ impl App {
             || self.history.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
+            || self.env_info.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()

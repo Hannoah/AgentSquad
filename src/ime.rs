@@ -52,11 +52,65 @@ impl ImeGuard {
         if want_ascii == self.ascii_active && !force {
             return;
         }
-        self.ascii_active = want_ascii;
+        // Only a switch that reached the IME counts as done: while another
+        // window has the foreground nothing is touched, and the next pass
+        // retries until our terminal is focused again.
         #[cfg(windows)]
-        windows_impl::sync(self, want_ascii);
+        let applied = windows_impl::sync(self, want_ascii);
         #[cfg(unix)]
-        unix_impl::sync(self, want_ascii);
+        let applied = {
+            unix_impl::sync(self, want_ascii);
+            true
+        };
+        #[cfg(not(any(windows, unix)))]
+        let applied = true;
+        if applied {
+            self.ascii_active = want_ascii;
+        }
+    }
+}
+
+/// IMM conversion-mode bits `plan` works with.
+pub const IME_CMODE_NATIVE: usize = 0x0001;
+pub const IME_CMODE_FULLSHAPE: usize = 0x0008;
+
+/// An IME state: `(conversion mode, open status)`.
+pub type ImeState = (usize, usize);
+
+/// What to do with an IME currently at `(conv, open)`: the state to save for
+/// later and the `(conv, open)` to set, if it must change.
+///
+/// Full-width shape (`Ｔｏｋｅｎ`, `U+3000` spaces) is never kept or restored:
+/// a Hangul state can carry the bit, and only clearing NATIVE once left the
+/// terminal typing full-width English and then full-width Hangul spacing.
+pub fn plan(
+    want_ascii: bool,
+    conv: usize,
+    open: usize,
+    saved: Option<ImeState>,
+) -> (Option<ImeState>, Option<ImeState>) {
+    let half = |c: usize| c & !IME_CMODE_FULLSHAPE;
+    if want_ascii {
+        // Korean IMEs report "open" in English mode too; only the native
+        // (Hangul) bit means keys would compose, so only that is saved.
+        let saved = if conv & IME_CMODE_NATIVE != 0 {
+            saved.or(Some((conv, open)))
+        } else {
+            saved
+        };
+        let set = if conv & IME_CMODE_NATIVE != 0 {
+            Some((half(conv) & !IME_CMODE_NATIVE, 0))
+        } else if conv & IME_CMODE_FULLSHAPE != 0 {
+            Some((half(conv), open))
+        } else {
+            None
+        };
+        (saved, set)
+    } else {
+        // Put back what the user had (or keep what is there), half-width.
+        let (c, o) = saved.unwrap_or((conv, open));
+        let target = (half(c), o);
+        (None, (target != (conv, open)).then_some(target))
     }
 }
 
@@ -70,7 +124,6 @@ impl Drop for ImeGuard {
 mod windows_impl {
     use super::ImeGuard;
     use std::collections::HashMap;
-    use std::ffi::c_void;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE, HWND, INVALID_HANDLE_VALUE},
         System::{
@@ -94,17 +147,29 @@ mod windows_impl {
     const IMC_SETCONVERSIONMODE: usize = 0x0002;
     const IMC_GETOPENSTATUS: usize = 0x0005;
     const IMC_SETOPENSTATUS: usize = 0x0006;
-    const IME_CMODE_NATIVE: usize = 0x0001;
 
     pub(super) fn console_hwnd() -> isize {
         // SAFETY: Win32 query returning an HWND (or null).
         unsafe { GetConsoleWindow() as isize }
     }
 
+    /// Desktop-shell and system processes that may sit above the terminal in
+    /// the parent chain; their windows (Explorer, the taskbar) are not ours.
+    const NOT_A_HOST: [&str; 6] = [
+        "explorer.exe",
+        "svchost.exe",
+        "sihost.exe",
+        "services.exe",
+        "winlogon.exe",
+        "userinit.exe",
+    ];
+
     /// Collect our own PID and up to 16 ancestor PIDs (e.g. powershell -> WindowsTerminal)
     /// so we only touch the IME when our own host terminal window is focused.
+    /// The walk stops at the desktop shell, or focusing File Explorer would
+    /// count as focusing squad.
     pub(super) fn ancestor_pids() -> Vec<u32> {
-        let mut parents = HashMap::new();
+        let mut parents: HashMap<u32, (u32, String)> = HashMap::new();
         // SAFETY: read-only process snapshot closed before return.
         let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snap != INVALID_HANDLE_VALUE {
@@ -112,7 +177,9 @@ mod windows_impl {
             entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
             let mut more = unsafe { Process32FirstW(snap, &mut entry) };
             while more != FALSE {
-                parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(0);
+                let exe = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                parents.insert(entry.th32ProcessID, (entry.th32ParentProcessID, exe));
                 more = unsafe { Process32NextW(snap, &mut entry) };
             }
             unsafe { CloseHandle(snap) };
@@ -123,8 +190,14 @@ mod windows_impl {
             if cur == 0 || out.contains(&cur) {
                 break;
             }
+            let (parent, exe) = parents
+                .get(&cur)
+                .map_or((0, ""), |(pp, e)| (*pp, e.as_str()));
+            if NOT_A_HOST.iter().any(|n| exe.eq_ignore_ascii_case(n)) {
+                break;
+            }
             out.push(cur);
-            cur = parents.get(&cur).copied().unwrap_or(0);
+            cur = parent;
         }
         out
     }
@@ -178,31 +251,25 @@ mod windows_impl {
         (ok != 0).then_some(res)
     }
 
-    pub(super) fn sync(guard: &mut ImeGuard, want_ascii: bool) {
+    /// Returns false when our terminal is not in the foreground (nothing done).
+    pub(super) fn sync(guard: &mut ImeGuard, want_ascii: bool) -> bool {
         let Some(ime) = active_ime_wnd(guard) else {
-            return;
+            return false;
         };
-        let _ = std::ptr::null::<c_void>();
-        if want_ascii {
-            let open = ime_ctrl(ime, IMC_GETOPENSTATUS, 0).unwrap_or(0);
-            let conv = ime_ctrl(ime, IMC_GETCONVERSIONMODE, 0).unwrap_or(0);
-            if open != 0 || (conv & IME_CMODE_NATIVE) != 0 {
-                if guard.saved.is_none() {
-                    guard.saved = Some((conv, open));
-                }
-                let ascii_conv = (conv & !IME_CMODE_NATIVE) as isize;
-                let _ = ime_ctrl(ime, IMC_SETCONVERSIONMODE, ascii_conv);
-                let _ = ime_ctrl(ime, IMC_SETOPENSTATUS, 0);
-            }
-        } else if let Some((conv, open)) = guard.saved.take() {
-            let restore_open = if open != 0 { open as isize } else { 1 };
-            let _ = ime_ctrl(ime, IMC_SETOPENSTATUS, restore_open);
-            let _ = ime_ctrl(
-                ime,
-                IMC_SETCONVERSIONMODE,
-                (conv | IME_CMODE_NATIVE) as isize,
-            );
+        let (Some(conv), Some(open)) = (
+            ime_ctrl(ime, IMC_GETCONVERSIONMODE, 0),
+            ime_ctrl(ime, IMC_GETOPENSTATUS, 0),
+        ) else {
+            return false; // the IME did not answer; try again next pass
+        };
+        let (saved, set) = super::plan(want_ascii, conv, open, guard.saved);
+        guard.saved = saved;
+        if let Some((conv, open)) = set {
+            // Open first: reopening a Korean IME resets its conversion mode.
+            let _ = ime_ctrl(ime, IMC_SETOPENSTATUS, open as isize);
+            let _ = ime_ctrl(ime, IMC_SETCONVERSIONMODE, conv as isize);
         }
+        true
     }
 }
 

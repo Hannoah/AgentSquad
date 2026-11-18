@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.19
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.22
 ```
 
 To install elsewhere:
@@ -153,7 +153,7 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it; right-click a row to open its quick actions (including **Set superior??*) |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row (even while typing in a terminal) to open its quick actions, including **Environment variables** (the agent's `.env`, masked; `v` reveals) and **Set superior??*) |
 | `j` / `k`, `?? / `?? | Move selection (`n` / `p` still work) |
 | `1`??9` | Jump to a visible row |
 | `Home` / `End` | First / last project |

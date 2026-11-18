@@ -373,3 +373,29 @@ fn edit_key_reports_text_changes() {
     assert_eq!(i.edit_key(key(KeyCode::Tab, KeyModifiers::NONE)), None);
     assert_eq!(i.edit_key(key(KeyCode::Char('x'), KeyModifiers::ALT)), None);
 }
+
+#[test]
+fn ime_plan_switches_hangul_and_never_keeps_full_width() {
+    use crate::ime::{plan, IME_CMODE_FULLSHAPE as FULL, IME_CMODE_NATIVE as HAN};
+    // Hangul in a shortcut mode: saved, then English half-width and closed.
+    assert_eq!(plan(true, HAN, 1, None), (Some((HAN, 1)), Some((0, 0))));
+    // Hangul carrying the full-width bit: English must not come out as `Ｔｏｋｅｎ`.
+    assert_eq!(
+        plan(true, HAN | FULL, 1, None),
+        (Some((HAN | FULL, 1)), Some((0, 0)))
+    );
+    // Back in a text mode: Hangul again, half-width (no U+3000 spaces).
+    assert_eq!(
+        plan(false, 0, 0, Some((HAN | FULL, 1))),
+        (None, Some((HAN, 1)))
+    );
+    // English (open or not) is left alone and nothing is saved, so leaving
+    // a shortcut mode never forces Hangul on.
+    assert_eq!(plan(true, 0, 1, None), (None, None));
+    assert_eq!(plan(false, 0, 1, None), (None, None));
+    // A stuck full-width state is cleared on either side.
+    assert_eq!(plan(true, FULL, 1, None), (None, Some((0, 1))));
+    assert_eq!(plan(false, HAN | FULL, 1, None), (None, Some((HAN, 1))));
+    // A re-sync after a manual 한/영 toggle keeps the first saved state.
+    assert_eq!(plan(true, HAN, 1, Some((HAN, 1))).0, Some((HAN, 1)));
+}

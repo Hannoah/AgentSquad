@@ -407,7 +407,7 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     app.context_menu = Some(0);
     app.context_sel = 0;
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.context_sel, 6, "Up wraps to last stopped menu item");
+    assert_eq!(app.context_sel, 7, "Up wraps to last stopped menu item");
     app.on_key(key(KeyCode::Char('j')), 24, 54);
     assert_eq!(app.context_sel, 0, "j wraps back to first item");
     // Item index 3 on stopped menu is View history.
@@ -596,7 +596,111 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Char('ㅁ')), 27, 70); // Hangul 'ㅁ' -> 'a' (Add)
     assert_eq!(app.mode, Mode::Add);
 
+    // Once the vault has entries, adding more is a visible row below the list.
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    app.on_key(key(KeyCode::Char('E')), 27, 70);
+    let before = app.env_vault.vars.len();
+    assert!(before > 0 && app.env_modal.as_ref().unwrap().editor.is_none());
+    term.draw(|f| app.draw(f)).unwrap();
+    let screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("+ New variable"), "add row is shown");
+    app.on_key(key(KeyCode::Up), 27, 70); // wraps from the top onto the row
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(
+        app.env_modal.as_ref().unwrap().editor.is_some(),
+        "Enter on the row opens a blank form instead of writing .env"
+    );
+    for c in "EXTRA_KEY".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    app.on_key(key(KeyCode::Char('1')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.env_vault.vars.len(), before + 1);
+
     drop(app);
     env::remove_var("AGENTSQUAD_ENV");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
+    let dir = scratch_dir("mgmt-nav");
+    fs::write(dir.join(".env"), "API_KEY=supersecret\nPORT=8080\n").unwrap();
+    let path = dir.to_str().unwrap();
+    let cfg = Config {
+        projects: vec![
+            proj("alpha", path, &["claude"]),
+            proj("beta", path, &["claude"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    // Down past the last project steps onto Management, then wraps to the top.
+    app.on_key(key(KeyCode::Down), 24, 54);
+    assert_eq!((app.selected, app.mgmt_sel), (1, None));
+    app.on_key(key(KeyCode::Down), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(0));
+    app.on_key(key(KeyCode::Char('ㅓ')), 24, 54); // Hangul j
+    assert_eq!(app.mgmt_sel, Some(1));
+    app.on_key(key(KeyCode::Down), 24, 54);
+    assert_eq!((app.selected, app.mgmt_sel), (0, None));
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(1), "Up from the top reaches Env vault");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(0));
+    // Project actions have no target on a Management row.
+    app.on_key(key(KeyCode::Char('d')), 24, 54);
+    assert!(app.confirm_remove.is_none());
+    app.on_key(key(KeyCode::Enter), 24, 54);
+    assert!(app.procs.is_some(), "Enter opens the Memory monitor");
+    app.procs = None;
+    app.on_key(key(KeyCode::Esc), 24, 54);
+    assert_eq!(app.mgmt_sel, None);
+
+    // Right-click on a sidebar row while a terminal has focus: the manager
+    // takes the keyboard and the row's menu opens.
+    let area = Size::new(80, 24);
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    app.mode = Mode::Focus;
+    term.draw(|f| app.draw(f)).unwrap();
+    app.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Right), 4, 3),
+        area,
+        24,
+        54,
+    );
+    assert_eq!(app.mode, Mode::Manager);
+    assert_eq!(app.context_menu, Some(1));
+    assert_eq!(app.selected, 1);
+
+    // Last stopped-menu row shows the agent's environment, masked.
+    app.on_key(key(KeyCode::Char('8')), 24, 54);
+    assert!(app.context_menu.is_none());
+    let text = |app: &App| {
+        let info = app.env_info.as_ref().unwrap();
+        env_info_lines(&app.cfg.projects[info.pi], &info.dotenv, info.reveal)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let shown = text(&app);
+    assert!(
+        shown.contains("API_KEY") && shown.contains("PORT"),
+        "{shown}"
+    );
+    assert!(!shown.contains("supersecret"), "values masked by default");
+    term.draw(|f| app.draw(f)).unwrap();
+    app.on_key(key(KeyCode::Char('v')), 24, 54);
+    assert!(text(&app).contains("supersecret"), "v reveals");
+    app.on_key(key(KeyCode::Esc), 24, 54);
+    assert!(app.env_info.is_none());
     let _ = fs::remove_dir_all(&dir);
 }

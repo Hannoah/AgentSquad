@@ -270,6 +270,27 @@ fn persist_helpers_keep_other_writers_projects() {
         "pin and edit saved"
     );
     assert!(persist_pin("nobody", true).is_err());
+    // Saving the edit form renames an agent whose name drifted from its
+    // folder, even when the path is unchanged.
+    let dir = scratch_dir("edit-rename");
+    fs::create_dir_all(dir.join("realname")).unwrap();
+    let (folder, _) = resolve_dir(dir.join("realname").to_str().unwrap()).unwrap();
+    let mut drifted = mk("oldname");
+    drifted.path = folder;
+    save_to(
+        &Config {
+            projects: vec![drifted],
+            ..Default::default()
+        },
+        &file,
+    )
+    .unwrap();
+    let mut app = crate::app::App::new(load_from(&file).unwrap(), None);
+    app.open_edit();
+    app.save_edit();
+    assert_eq!(app.cfg.projects[0].name, "realname", "{}", app.add_err);
+    assert_eq!(load_from(&file).unwrap().projects[0].name, "realname");
+    let _ = fs::remove_dir_all(&dir);
     env::remove_var("AGENTSQUAD_CONFIG");
     std::fs::remove_file(&file).ok();
     assert_eq!(names, ["b", "c", "d"]);
