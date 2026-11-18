@@ -113,11 +113,11 @@ pub fn help_lines() -> Vec<&'static str> {
         "Right-click  quick actions & env vars (from a terminal too)",
         "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump to a project / the first / the last",
-        "/          filter projects (Esc clears)",
+        "/, F       filter projects / search output (Esc clears)",
         "a, E       add project / shared env vars (.env)",
-        "m          message: send a line to session",
+        "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
-        "h          history: read the project's SITREPs",
+        "h, g       history (SITREPs) / git status & diff",
         "M          memory: biggest processes, kill one (x)",
         "o          order: message every agent under a commander",
         "u          set whom the selected agent reports to",
@@ -150,6 +150,7 @@ pub enum Mode {
     Focus,
     Send,
     Filter,
+    Search,
     Add,
     Help,
 }
@@ -185,6 +186,7 @@ pub fn mode_chip(m: Mode) -> (&'static str, Style) {
         Mode::Focus => (" FOCUS ", Color::Black, Color::Green),
         Mode::Send => (" SEND ", Color::Black, Color::Yellow),
         Mode::Filter => (" FILTER ", Color::Black, Color::Magenta),
+        Mode::Search => (" SEARCH ", Color::Black, Color::Yellow),
         Mode::Add => (" ADD ", Color::White, Color::Blue),
         Mode::Help => (" HELP ", Color::Black, Color::Gray),
     };
@@ -218,6 +220,7 @@ pub fn mode_hint_parts(m: Mode) -> &'static [(&'static str, &'static str)] {
             ("Enter", "keeps"),
             ("Esc", "clears"),
         ],
+        Mode::Search => &[("↑↓", "step"), ("Enter", "keeps"), ("Esc", "clears")],
         Mode::Add => &[
             ("Tab", "complete path"),
             ("↑↓", "pick folder"),
@@ -702,6 +705,85 @@ pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layou
 pub fn help_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     fixed_rect(66, help_lines().len() as u16 + 2, area)
 }
+
+pub const QUICK_REPLY_BUTTONS: [(&str, char); 7] = [
+    ("[Enter] Confirm", '\r'),
+    ("[y] Yes", 'y'),
+    ("[n] No", 'n'),
+    ("[1]", '1'),
+    ("[2]", '2'),
+    ("[3]", '3'),
+    ("[t] Type…", 't'),
+];
+
+pub fn quick_reply_popup(area: ratatui::layout::Rect, tail_len: usize) -> ratatui::layout::Rect {
+    let w = area.width.saturating_sub(6).clamp(48, 78);
+    let h = tail_len.clamp(1, 10) as u16 + 5;
+    fixed_rect(w, h, area)
+}
+
+pub fn quick_reply_button_line() -> Line<'static> {
+    use ratatui::style::Modifier;
+    let mut spans = Vec::new();
+    for (i, &(label, key)) in QUICK_REPLY_BUTTONS.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let color = match key {
+            '\r' | 'y' => Color::Green,
+            'n' => Color::Red,
+            't' => Color::Yellow,
+            _ => Color::Cyan,
+        };
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    Line::from(spans)
+}
+
+pub fn quick_reply_button_hit(popup: ratatui::layout::Rect, col: u16, row: u16) -> Option<char> {
+    let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    if inner.height < 3 || row != inner.bottom().saturating_sub(2) {
+        return None;
+    }
+    let mut x = inner.x;
+    for &(label, key) in &QUICK_REPLY_BUTTONS {
+        let w = label.chars().count() as u16;
+        if col >= x && col < x + w {
+            return Some(key);
+        }
+        x = x.saturating_add(w + 2);
+    }
+    None
+}
+
+pub fn git_diff_lines(text: &str) -> Vec<Line<'static>> {
+    use ratatui::style::Modifier;
+    text.lines()
+        .map(|l| {
+            let style = if l.starts_with("diff ")
+                || l.starts_with("index ")
+                || l.starts_with("--- ")
+                || l.starts_with("+++ ")
+            {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else if l.starts_with("@@") {
+                Style::default().fg(Color::Cyan)
+            } else if l.starts_with('+') {
+                Style::default().fg(Color::Green)
+            } else if l.starts_with('-') {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(l.to_string(), style))
+        })
+        .collect()
+}
 pub fn cli_help() -> String {
     format!(
         "AgentSquad v{} — manage Agent and Service terminal sessions in one TUI.
@@ -721,9 +803,9 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · a  add · E  shared env (.env) · e  edit · f  pin · [/]  collapse · z  zoom · m  message · u  commander
-  b  brief (ledger) · o  order (all under a commander) · h  history · M  memory monitor
-  s  stop · r  restart · d/Del  remove · S  start all · U  install update
+  /  filter · F/Ctrl+F  search output · a  add · E  shared env (.env) · e  edit · f  pin · [/]  collapse · z  zoom
+  m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
+  h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help
 
 Terminal keys:

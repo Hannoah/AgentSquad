@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.25
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.26
 ```
 
 To install elsewhere:
@@ -158,13 +158,16 @@ case-insensitively by `remove` and `start`.
 | `1`??9` | Jump to a visible row |
 | `Home` / `End` | First / last project |
 | `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
+| `F`, `Ctrl+F` | Search the selected session's scrollback and live screen (`↑`/`↓` or `F3`/`Shift+F3` steps matches, `Enter` keeps highlights, `Esc` clears) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `??/`?? + `Enter`, `Tab` completes) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
+| `w`, click `? N` | Quick Reply: answer an agent waiting for input (`?`) without leaving your current view (`Enter`/`y`/`n`/`1`-`9` or `t` to type a custom reply, `Tab` cycles waiting agents) |
+| `g` | Git status & diff: inspect the selected project's branch, modified/untracked files, and colorized diffs (`Tab` switches git projects, `r` refreshes) |
 | `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`??/`?? pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`??/`?? pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
 | `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
-| `[` / `]`, `<` / `>`, click `[<]` / `[>]` | Collapse / expand the manager sidebar into a compact status rail (number + live status icon; clicking rows still switches or opens quick actions) |
+| `[` / `]`, `<` / `>`, click `[<]` / `[>]` | Collapse / expand the manager sidebar into a compact status rail (number + live status icon; hover or selection shows full name & prompt detail; clicking rows still switches or opens quick actions) |
 | `z` | Zoom: a focused terminal takes the full width (the project list comes back in the manager; `z` again turns it off) |
 | `o` | Order: type a line into every agent under the selected commander |
 | `u` | Set whom the selected agent reports to (empty clears it) |

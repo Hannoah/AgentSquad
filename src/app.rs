@@ -215,6 +215,86 @@ pub(crate) struct EnvInfo {
     pub(crate) dotenv: BTreeMap<String, String>,
 }
 
+/// Remote quick-reply popup for an agent waiting on user input (`?`).
+pub(crate) struct QuickReply {
+    pub(crate) pi: usize,
+    pub(crate) tail: Vec<String>,
+    pub(crate) typing: bool,
+    pub(crate) input: LineInput,
+}
+
+/// Live Git status & diff viewer (`g`) for one project.
+pub(crate) struct GitView {
+    pub(crate) pi: usize,
+    pub(crate) project: String,
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) branch: String,
+    pub(crate) files: Vec<(String, std::path::PathBuf)>,
+    pub(crate) sel: usize,
+    pub(crate) top: std::cell::Cell<usize>,
+    pub(crate) scroll: u16,
+    pub(crate) diff: String,
+    pub(crate) wrap_w: std::cell::Cell<u16>,
+}
+
+impl GitView {
+    pub(crate) fn open(pi: usize, project: &str, path: &std::path::Path, branch: String) -> Self {
+        let mut g = Self {
+            pi,
+            project: project.to_string(),
+            path: path.to_path_buf(),
+            branch,
+            files: Vec::new(),
+            sel: 0,
+            top: Default::default(),
+            scroll: 0,
+            diff: String::new(),
+            wrap_w: std::cell::Cell::new(u16::MAX),
+        };
+        g.refresh();
+        g
+    }
+
+    pub(crate) fn refresh(&mut self) {
+        let prev = self.files.get(self.sel).map(|(_, p)| p.clone());
+        self.branch = ledger::repo_branch(&self.path).unwrap_or_else(|| "HEAD".to_string());
+        self.files = ledger::status_entries(&self.path).unwrap_or_default();
+        self.sel = prev
+            .and_then(|p| self.files.iter().position(|(_, f)| *f == p))
+            .unwrap_or_else(|| self.sel.min(self.files.len().saturating_sub(1)));
+        self.load();
+    }
+
+    pub(crate) fn load(&mut self) {
+        self.scroll = 0;
+        self.diff = self.files.get(self.sel).map_or_else(
+            || "Working tree clean.".to_string(),
+            |(status, rel)| ledger::file_diff(&self.path, status, rel),
+        );
+    }
+
+    pub(crate) fn select(&mut self, i: usize) {
+        let i = i.min(self.files.len().saturating_sub(1));
+        if i != self.sel {
+            self.sel = i;
+            self.load();
+        }
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        wrapped_rows(&self.diff, self.wrap_w.get())
+    }
+
+    pub(crate) fn max_scroll(&self) -> u16 {
+        self.rows().saturating_sub(1).min(u16::MAX as usize) as u16
+    }
+
+    pub(crate) fn scroll_by(&mut self, delta: isize) {
+        let next = (self.scroll as isize + delta).clamp(0, self.max_scroll() as isize);
+        self.scroll = next as u16;
+    }
+}
+
 pub(crate) struct App {
     pub(crate) cfg: Config,
     pub(crate) sessions: Vec<Option<Session>>,
@@ -320,6 +400,20 @@ pub(crate) struct App {
     pub(crate) zoom: bool,
     /// `[` / `]` or `[<]` / `[>]`: collapse the sidebar into a compact mini-rail.
     pub(crate) sidebar_collapsed: bool,
+    /// Row target hovered in the collapsed mini-sidebar (`order` index or `MEMORY_ROW`/`ENV_ROW`).
+    pub(crate) hover_row: Option<usize>,
+    /// Status-bar rect of the yellow `? N` waiting indicator, for click-to-reply.
+    pub(crate) wait_badge_rect: Rect,
+    /// Remote quick-reply popup for a waiting (`?`) agent.
+    pub(crate) quick_reply: Option<QuickReply>,
+    /// Live Git status & diff popup (`g`).
+    pub(crate) git_view: Option<GitView>,
+    /// Terminal scrollback search state (`F` / `Ctrl+F`).
+    pub(crate) search_buf: LineInput,
+    pub(crate) search_pi: Option<usize>,
+    pub(crate) search_matches: Vec<SearchMatch>,
+    pub(crate) search_idx: usize,
+    pub(crate) search_active: bool,
     pub(crate) hangul_hotkey_seen: bool,
     /// Arrow keys past the last project land on the Management rows:
     /// `0` = Memory monitor, `1` = Env vault. None while a project is picked.
@@ -431,6 +525,15 @@ impl App {
             pane: (0, 0),
             zoom: false,
             sidebar_collapsed: false,
+            hover_row: None,
+            wait_badge_rect: Rect::default(),
+            quick_reply: None,
+            git_view: None,
+            search_buf: LineInput::new(),
+            search_pi: None,
+            search_matches: Vec::new(),
+            search_idx: 0,
+            search_active: false,
             hangul_hotkey_seen: false,
             mgmt_sel: None,
             env_info: None,
@@ -438,15 +541,12 @@ impl App {
         }
     }
 
-    /// True when the active UI state only accepts ASCII/navigation shortcuts
-    /// (no Korean prose composition needed), so the OS IME can temporarily
-    /// switch to English to avoid holding consonants in a preedit box.
-    pub(crate) fn wants_ascii_ime(&self) -> bool {
-        if self.env_modal.as_ref().is_some_and(|m| m.editor.is_some()) {
-            return false;
-        }
-        if self.env_modal.is_some()
+    /// True when any overlay popup (other than `Mode::Help` / `Mode::Add`) is open.
+    pub(crate) fn has_overlay(&self) -> bool {
+        self.env_modal.is_some()
             || self.history.is_some()
+            || self.git_view.is_some()
+            || self.quick_reply.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
             || self.env_info.is_some()
@@ -457,13 +557,28 @@ impl App {
             || self.confirm_restart.is_some()
             || self.confirm_update
             || self.confirm_apply
+    }
+
+    pub(crate) fn has_modal(&self) -> bool {
+        matches!(self.mode, Mode::Help | Mode::Add) || self.has_overlay()
+    }
+
+    /// True when the active UI state only accepts ASCII/navigation shortcuts
+    /// (no Korean prose composition needed), so the OS IME can temporarily
+    /// switch to English to avoid holding consonants in a preedit box.
+    pub(crate) fn wants_ascii_ime(&self) -> bool {
+        if self.env_modal.as_ref().is_some_and(|m| m.editor.is_some())
+            || self.quick_reply.as_ref().is_some_and(|q| q.typing)
         {
+            return false;
+        }
+        if self.has_overlay() {
             return true;
         }
         match self.mode {
             Mode::Manager | Mode::Help => true,
             Mode::Add => matches!(self.add_field, 1 | 3 | 5),
-            Mode::Focus | Mode::Send | Mode::Filter => false,
+            Mode::Focus | Mode::Send | Mode::Filter | Mode::Search => false,
         }
     }
 
@@ -484,6 +599,9 @@ impl App {
 
     pub(crate) fn toggle_sidebar(&mut self) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        if !self.sidebar_collapsed {
+            self.hover_row = None;
+        }
         let note = if self.sidebar_collapsed {
             "Sidebar collapsed (] or > expands)"
         } else {
@@ -923,17 +1041,7 @@ impl App {
         }
         // Ask only when nothing else owns the keyboard, so a prompt never
         // swallows keystrokes meant for a session or another input.
-        let keyboard_free = !(self.mode != Mode::Manager
-            || self.env_modal.is_some()
-            || self.history.is_some()
-            || self.procs.is_some()
-            || self.context_menu.is_some()
-            || self.env_info.is_some()
-            || self.confirm_quit
-            || self.confirm_start_all
-            || self.confirm_stop.is_some()
-            || self.confirm_remove.is_some()
-            || self.confirm_restart.is_some());
+        let keyboard_free = self.mode == Mode::Manager && !self.has_modal();
         if keyboard_free && !self.updating && !self.confirm_update && self.update_offer.is_some() {
             self.confirm_update = true;
             self.dirty = true;
@@ -963,6 +1071,12 @@ impl App {
                 self.dirty |= phase_now != phase_before
                     || s.status.is_running() != was_running
                     || (changed && selected);
+                if changed {
+                    if let Some(qr) = self.quick_reply.as_mut().filter(|q| q.pi == pi) {
+                        qr.tail = s.tail_lines_snapshot(10);
+                        self.dirty = true;
+                    }
+                }
                 if self.cfg.projects[pi].kind == Kind::Agent && phase_now != s.last_phase {
                     // No bell for the session you are typing into.
                     let watching = selected && self.mode == Mode::Focus;
@@ -1283,8 +1397,7 @@ impl History {
     // ponytail: counts column wrapping; word wrap can add a row or two, well
     // inside the page that is still on screen at the last scroll position.
     fn rows(&self) -> usize {
-        let w = usize::from(self.wrap_w.get()).max(1);
-        self.text.lines().map(|l| width(l).div_ceil(w).max(1)).sum()
+        wrapped_rows(&self.text, self.wrap_w.get())
     }
     fn max_scroll(&self) -> u16 {
         self.rows().saturating_sub(1).min(u16::MAX as usize) as u16
@@ -1293,6 +1406,11 @@ impl History {
         let next = (self.scroll as isize + delta).clamp(0, self.max_scroll() as isize);
         self.scroll = next as u16;
     }
+}
+
+pub(crate) fn wrapped_rows(text: &str, wrap_w: u16) -> usize {
+    let w = usize::from(wrap_w).max(1);
+    text.lines().map(|l| width(l).div_ceil(w).max(1)).sum()
 }
 
 pub fn run(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<()> {

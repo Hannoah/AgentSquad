@@ -228,9 +228,9 @@ pub fn git(project: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Files git reports as changed in `project`, relative to it. None when git is
-/// missing or `project` is not a repository.
-pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
+/// `(status_code, relative_path)` entries git reports as changed in `project`.
+/// None when git is missing or `project` is not a repository.
+pub fn status_entries(project: &Path) -> Option<Vec<(String, PathBuf)>> {
     let text = git(project, &["status", "--porcelain", "-z", "-uall"])?;
     let mut files = Vec::new();
     // No filter on the iterator: a renamed file's old path may be shorter than
@@ -240,13 +240,64 @@ pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
         let Some(path) = e.get(3..).filter(|p| !p.is_empty()) else {
             continue;
         };
-        files.push(PathBuf::from(path));
+        let code = e.get(..2).unwrap_or("  ").to_string();
+        files.push((code, PathBuf::from(path)));
         // A rename or copy is followed by its old path, with no status prefix.
         if matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C') {
             entries.next();
         }
     }
     Some(files)
+}
+
+/// Files git reports as changed in `project`, relative to it. None when git is
+/// missing or `project` is not a repository.
+pub fn changed_files(project: &Path) -> Option<Vec<PathBuf>> {
+    status_entries(project).map(|entries| entries.into_iter().map(|(_, p)| p).collect())
+}
+
+/// Current branch name in `project` (or short commit hash when detached).
+/// None when `project` is not inside a git repository.
+pub fn repo_branch(project: &Path) -> Option<String> {
+    let branch = git(project, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let trimmed = branch.trim();
+    if trimmed == "HEAD" {
+        return git(project, &["rev-parse", "--short", "HEAD"]).map(|s| s.trim().to_string());
+    }
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Diff text for a changed entry `rel` in `project` (or file preview when untracked).
+pub fn file_diff(project: &Path, status: &str, rel: &Path) -> String {
+    const MAX_CHARS: usize = 24_000;
+    let raw = if status == "??" {
+        match fs::read_to_string(project.join(rel)) {
+            Ok(text) => {
+                let mut out = format!("+++ {} (untracked)\n", rel.display());
+                for line in text.lines().take(400) {
+                    out.push('+');
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out
+            }
+            Err(_) => format!("(untracked file {} — binary or unreadable)", rel.display()),
+        }
+    } else {
+        let arg = rel.to_string_lossy();
+        let diff = git(project, &["diff", "HEAD", "--", arg.as_ref()])
+            .filter(|s| !s.is_empty())
+            .or_else(|| git(project, &["diff", "--cached", "--", arg.as_ref()]))
+            .filter(|s| !s.is_empty())
+            .or_else(|| git(project, &["diff", "--", arg.as_ref()]))
+            .unwrap_or_default();
+        if diff.is_empty() {
+            format!("(no textual diff for {} [{status}])", rel.display())
+        } else {
+            diff
+        }
+    };
+    raw.chars().take(MAX_CHARS).collect()
 }
 
 /// When the agent last filed: the newest agent-written SITREP (ignoring

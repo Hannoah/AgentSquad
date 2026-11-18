@@ -559,3 +559,37 @@ fn resize_repaint_is_not_agent_output() {
     assert!(repainted, "no repaint arrived");
     let _ = repainted;
 }
+
+#[test]
+fn scrollback_search_finds_ascii_and_hangul_matches_and_jumps() {
+    let p = Project {
+        name: "search".into(),
+        path: std::env::temp_dir(),
+        command: crate::config::shell(),
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+    };
+    let mut s = Session::spawn(&p, 5, 40).unwrap();
+    s.parser.process(
+        "first 오류 line\r\nsecond\r\nthird\r\nfourth\r\nfifth\r\nsixth\r\nseventh ERROR\r\n"
+            .as_bytes(),
+    );
+    let hits = s.search_scrollback("error");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].col_start, 8);
+    assert_eq!(hits[0].col_end, 13);
+
+    let kr_hits = s.search_scrollback("오류");
+    assert_eq!(kr_hits.len(), 1);
+    assert_eq!(kr_hits[0].col_start, 6);
+    assert_eq!(kr_hits[0].col_end, 10);
+
+    s.scroll_to_logical_line(kr_hits[0].line);
+    assert!(s.scroll > 0);
+    let vis = s.visible_search_hits("오류");
+    assert_eq!(vis.len(), 1);
+    assert_eq!((vis[0].2, vis[0].3), (6, 10));
+}

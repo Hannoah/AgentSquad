@@ -888,4 +888,321 @@ impl App {
         };
         self.dirty = true;
     }
+
+    pub(crate) fn waiting_projects(&self) -> Vec<usize> {
+        self.order
+            .iter()
+            .copied()
+            .filter(|&pi| {
+                self.cfg
+                    .projects
+                    .get(pi)
+                    .is_some_and(|p| p.kind == Kind::Agent)
+                    && self
+                        .sessions
+                        .get(pi)
+                        .and_then(|o| o.as_ref())
+                        .is_some_and(|s| {
+                            s.status.is_running() && s.phase() == AgentPhase::NeedsInput
+                        })
+            })
+            .collect()
+    }
+
+    pub(crate) fn open_quick_reply(&mut self) {
+        let waiting = self.waiting_projects();
+        if waiting.is_empty() {
+            self.message = ("No agent is waiting for input.".to_string(), Notice::Info);
+            return;
+        }
+        let sel_pi = self.order.get(self.selected).copied();
+        let pi = sel_pi.filter(|p| waiting.contains(p)).unwrap_or(waiting[0]);
+        if let Some(pos) = self.order.iter().position(|&x| x == pi) {
+            self.selected = pos;
+        }
+        let tail = self
+            .sessions
+            .get_mut(pi)
+            .and_then(|o| o.as_mut())
+            .map_or_else(Vec::new, |s| s.tail_lines_snapshot(10));
+        self.quick_reply = Some(QuickReply {
+            pi,
+            tail,
+            typing: false,
+            input: LineInput::new(),
+        });
+        self.dirty = true;
+    }
+
+    pub(crate) fn send_quick_reply(&mut self, pi: usize, bytes: &[u8]) {
+        let name = self
+            .cfg
+            .projects
+            .get(pi)
+            .map_or("?", |p| p.name.as_str())
+            .to_string();
+        let sent = if let Some(Some(s)) = self.sessions.get_mut(pi) {
+            s.scroll_live();
+            match s.input(bytes) {
+                Ok(()) => {
+                    s.refresh_screen_flags();
+                    self.message = (format!("Replied to {name}"), Notice::Info);
+                    true
+                }
+                Err(e) => {
+                    self.message = (e.to_string(), Notice::Error);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if sent {
+            if let Some(next_pi) = self.waiting_projects().into_iter().find(|&w| w != pi) {
+                if let Some(pos) = self.order.iter().position(|&x| x == next_pi) {
+                    self.selected = pos;
+                }
+                let tail = self.sessions[next_pi]
+                    .as_mut()
+                    .map_or_else(Vec::new, |s| s.tail_lines_snapshot(10));
+                self.quick_reply = Some(QuickReply {
+                    pi: next_pi,
+                    tail,
+                    typing: false,
+                    input: LineInput::new(),
+                });
+            } else {
+                self.quick_reply = None;
+            }
+        } else {
+            self.quick_reply = None;
+        }
+        self.dirty = true;
+    }
+
+    pub(super) fn key_quick_reply(&mut self, k: KeyEvent) {
+        let Some(qr) = self.quick_reply.as_mut() else {
+            return;
+        };
+        self.dirty = true;
+        if qr.typing {
+            match k.code {
+                KeyCode::Esc => {
+                    qr.typing = false;
+                }
+                KeyCode::Enter => {
+                    let pi = qr.pi;
+                    let text = qr.input.take();
+                    let mut bytes = text.into_bytes();
+                    bytes.push(b'\r');
+                    self.send_quick_reply(pi, &bytes);
+                }
+                _ => {
+                    qr.input.edit_key(k);
+                }
+            }
+            return;
+        }
+        let pi = qr.pi;
+        let kh = hotkey_event(k);
+        match kh.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('w') => {
+                self.quick_reply = None;
+            }
+            KeyCode::Tab => {
+                let waiting = self.waiting_projects();
+                if let Some(cur) = waiting.iter().position(|&w| w == pi) {
+                    let next_pi = waiting[(cur + 1) % waiting.len()];
+                    if let Some(pos) = self.order.iter().position(|&x| x == next_pi) {
+                        self.selected = pos;
+                    }
+                    let tail = self.sessions[next_pi]
+                        .as_mut()
+                        .map_or_else(Vec::new, |s| s.tail_lines_snapshot(10));
+                    if let Some(q) = self.quick_reply.as_mut() {
+                        q.pi = next_pi;
+                        q.tail = tail;
+                        q.input.clear();
+                    }
+                }
+            }
+            KeyCode::Char('t' | 'i' | '/') => {
+                qr.typing = true;
+            }
+            KeyCode::Char('o' | 'f') => {
+                self.quick_reply = None;
+                if let Some(pos) = self.order.iter().position(|&x| x == pi) {
+                    self.selected = pos;
+                }
+                self.mode = Mode::Focus;
+            }
+            KeyCode::Enter => {
+                self.send_quick_reply(pi, b"\r");
+            }
+            KeyCode::Char('c') => {
+                self.send_quick_reply(pi, b"\x1b");
+            }
+            KeyCode::Char(c @ ('y' | 'Y' | 'n' | 'N' | '1'..='9')) => {
+                let b = [c.to_ascii_lowercase() as u8, b'\r'];
+                self.send_quick_reply(pi, &b);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn open_git_view(&mut self) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        let Some(p) = self.cfg.projects.get(pi) else {
+            return;
+        };
+        if !p.path.is_dir() {
+            self.message = (format!("Folder of {} is missing", p.name), Notice::Warn);
+            return;
+        }
+        let Some(branch) = ledger::repo_branch(&p.path) else {
+            self.message = (format!("{} is not a git repository", p.name), Notice::Info);
+            return;
+        };
+        self.git_view = Some(GitView::open(pi, &p.name, &p.path, branch));
+        self.dirty = true;
+    }
+
+    pub(super) fn key_git_view(&mut self, k: KeyEvent) {
+        let Some(cur_pi) = self.git_view.as_ref().map(|g| g.pi) else {
+            return;
+        };
+        if k.code == KeyCode::Tab && !self.order.is_empty() {
+            let n = self.order.len();
+            let start = self
+                .order
+                .iter()
+                .position(|&x| x == cur_pi)
+                .unwrap_or(self.selected);
+            for off in 1..=n {
+                let pos = (start + off) % n;
+                let pi = self.order[pos];
+                if let Some(p) = self.cfg.projects.get(pi) {
+                    if p.path.is_dir() {
+                        if let Some(branch) = ledger::repo_branch(&p.path) {
+                            self.selected = pos;
+                            self.git_view = Some(GitView::open(pi, &p.name, &p.path, branch));
+                            self.dirty = true;
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        let Some(g) = self.git_view.as_mut() else {
+            return;
+        };
+        match hotkey_event(k).code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('g') => self.git_view = None,
+            KeyCode::Down | KeyCode::Char('j') => g.select(g.sel + 1),
+            KeyCode::Up | KeyCode::Char('k') => g.select(g.sel.saturating_sub(1)),
+            KeyCode::Char('J') | KeyCode::Char(']') => g.scroll_by(1),
+            KeyCode::Char('K') | KeyCode::Char('[') => g.scroll_by(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => g.scroll_by(10),
+            KeyCode::PageUp => g.scroll_by(-10),
+            KeyCode::Home => g.select(0),
+            KeyCode::End => g.select(usize::MAX),
+            KeyCode::Char('r') => {
+                g.refresh();
+                self.message = ("Git status refreshed.".to_string(), Notice::Info);
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
+    pub(super) fn open_search(&mut self) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        if !self.sessions.get(pi).is_some_and(|o| o.is_some()) {
+            self.message = ("No session output to search yet.".to_string(), Notice::Info);
+            return;
+        }
+        if self.search_pi != Some(pi) {
+            self.search_buf.clear();
+            self.search_pi = Some(pi);
+        }
+        self.mode = Mode::Search;
+        self.sync_search(true);
+    }
+
+    pub(super) fn sync_search(&mut self, jump_newest: bool) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            self.clear_search();
+            return;
+        };
+        let query = self.search_buf.as_str();
+        if query.is_empty() {
+            self.search_matches.clear();
+            self.search_idx = 0;
+            self.search_active = false;
+            return;
+        }
+        let Some(Some(s)) = self.sessions.get_mut(pi) else {
+            self.clear_search();
+            return;
+        };
+        self.search_pi = Some(pi);
+        self.search_matches = s.search_scrollback(&query);
+        self.search_active = true;
+        if self.search_matches.is_empty() {
+            self.search_idx = 0;
+        } else {
+            self.search_idx = if jump_newest {
+                self.search_matches.len() - 1
+            } else {
+                self.search_idx.min(self.search_matches.len() - 1)
+            };
+            let line = self.search_matches[self.search_idx].line;
+            s.scroll_to_logical_line(line);
+        }
+    }
+
+    pub(super) fn step_search(&mut self, older: bool) {
+        let Some(&pi) = self.order.get(self.selected) else {
+            return;
+        };
+        let query = self.search_buf.as_str();
+        if query.is_empty() {
+            return;
+        }
+        let Some(Some(s)) = self.sessions.get_mut(pi) else {
+            return;
+        };
+        self.search_pi = Some(pi);
+        self.search_matches = s.search_scrollback(&query);
+        self.search_active = true;
+        let len = self.search_matches.len();
+        if len == 0 {
+            self.search_idx = 0;
+            return;
+        }
+        self.search_idx = if older {
+            if self.search_idx == 0 || self.search_idx >= len {
+                len - 1
+            } else {
+                self.search_idx - 1
+            }
+        } else {
+            (self.search_idx + 1) % len
+        };
+        let line = self.search_matches[self.search_idx].line;
+        s.scroll_to_logical_line(line);
+    }
+
+    pub(super) fn clear_search(&mut self) {
+        self.search_buf.clear();
+        self.search_matches.clear();
+        self.search_idx = 0;
+        self.search_active = false;
+        self.search_pi = None;
+    }
 }

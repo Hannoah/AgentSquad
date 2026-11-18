@@ -415,6 +415,61 @@ pub fn remove_project<T>(
     Some(projects.remove(pi))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SearchMatch {
+    pub line: usize,
+    pub col_start: u16,
+    pub col_end: u16,
+}
+
+fn find_row_matches(screen: &vt100::Screen, row: u16, cols: u16, q_lower: &str) -> Vec<(u16, u16)> {
+    if q_lower.is_empty() {
+        return Vec::new();
+    }
+    let mut text = String::new();
+    let mut start_cols = Vec::new();
+    let mut end_cols = Vec::new();
+    for col in 0..cols {
+        let Some(cell) = screen.cell(row, col) else {
+            continue;
+        };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let s = if cell.has_contents() {
+            cell.contents()
+        } else {
+            " "
+        };
+        let cell_w = if col + 1 < cols
+            && screen
+                .cell(row, col + 1)
+                .is_some_and(|c| c.is_wide_continuation())
+        {
+            2
+        } else {
+            1
+        };
+        for _ in 0..s.len() {
+            start_cols.push(col);
+            end_cols.push(col + cell_w);
+        }
+        text.push_str(s);
+    }
+    let lower = text.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(q_lower) {
+        let at = from + rel;
+        let end = at + q_lower.len();
+        if let (Some(&cs), Some(&ce)) = (start_cols.get(at), end_cols.get(end - 1)) {
+            out.push((cs, ce));
+        }
+        from = end;
+    }
+    out
+}
+
 /// The pane as last painted, reused until the screen changes.
 struct RenderCache {
     gen: u64,
@@ -606,6 +661,88 @@ impl Session {
             self.parser.screen_mut().set_scrollback(scrolled);
         }
         text
+    }
+    /// Non-empty trailing lines of the live screen for Quick Reply display.
+    pub fn tail_lines_snapshot(&mut self, max_lines: u16) -> Vec<String> {
+        let raw = self.tail_text(max_lines.saturating_add(6));
+        let mut lines: Vec<String> = raw
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        let keep = usize::from(max_lines);
+        if lines.len() > keep {
+            lines.drain(..lines.len() - keep);
+        }
+        lines
+    }
+    /// Search scrollback and live screen case-insensitively (ASCII) and return
+    /// all matching column spans in logical line order (oldest first).
+    pub fn search_scrollback(&mut self, query: &str) -> Vec<SearchMatch> {
+        let q_lower = query.to_ascii_lowercase();
+        if q_lower.is_empty() {
+            return Vec::new();
+        }
+        let saved = self.scroll;
+        let total_sb = self.parser.screen().scrollback_len();
+        let (rows_nz, cols_nz) = self.parser.screen().size();
+        let (rows, cols) = (usize::from(rows_nz.get()), cols_nz.get());
+        let total_lines = total_sb + rows;
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        while start < total_lines {
+            let sb = total_sb.saturating_sub(start);
+            self.parser.screen_mut().set_scrollback(sb);
+            let base = total_sb - self.parser.screen().scrollback();
+            for r in 0..rows {
+                let line = base + r;
+                if line < start {
+                    continue;
+                }
+                for (col_start, col_end) in
+                    find_row_matches(self.parser.screen(), r as u16, cols, &q_lower)
+                {
+                    out.push(SearchMatch {
+                        line,
+                        col_start,
+                        col_end,
+                    });
+                }
+            }
+            start = base + rows;
+        }
+        self.parser.screen_mut().set_scrollback(saved);
+        out
+    }
+    /// Matches currently visible on screen: `(vis_row, logical_line, col_start, col_end)`.
+    pub fn visible_search_hits(&self, query: &str) -> Vec<(u16, usize, u16, u16)> {
+        let q_lower = query.to_ascii_lowercase();
+        if q_lower.is_empty() {
+            return Vec::new();
+        }
+        let screen = self.parser.screen();
+        let total_sb = screen.scrollback_len();
+        let base = total_sb.saturating_sub(screen.scrollback());
+        let (rows_nz, cols_nz) = screen.size();
+        let (rows, cols) = (rows_nz.get(), cols_nz.get());
+        let mut out = Vec::new();
+        for r in 0..rows {
+            let line = base + usize::from(r);
+            for (cs, ce) in find_row_matches(screen, r, cols, &q_lower) {
+                out.push((r, line, cs, ce));
+            }
+        }
+        out
+    }
+    /// Scroll the viewport so logical `line` sits near the middle of the pane.
+    pub fn scroll_to_logical_line(&mut self, line: usize) {
+        let total_sb = self.parser.screen().scrollback_len();
+        let rows = usize::from(self.parser.screen().size().0.get());
+        let target = (total_sb + rows / 2).saturating_sub(line).min(total_sb);
+        self.scroll = target;
+        self.parser.screen_mut().set_scrollback(target);
+        self.gen += 1;
     }
     /// Rescan the bottom of the live screen for prompt/working text. Only
     /// the last rows are read: that is all the detectors look at, and a

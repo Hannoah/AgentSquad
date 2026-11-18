@@ -837,3 +837,195 @@ fn collapsible_mini_sidebar_keyboard_and_mouse_interactions() {
     term.draw(|f| app.draw(f)).unwrap();
     assert_eq!(app.side_rect.width, sidebar_width(area.width));
 }
+
+#[test]
+fn quick_reply_opens_via_badge_and_cycles_waiting_agents() {
+    let dir = scratch_dir("quick-reply");
+    let mut p1 = proj("agent-a", dir.to_str().unwrap(), &[]);
+    p1.command = shell();
+    let mut p2 = proj("agent-b", dir.to_str().unwrap(), &[]);
+    p2.command = shell();
+    let cfg = Config {
+        projects: vec![p1, p2],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut s1 = Session::spawn(&app.cfg.projects[0], 24, 70).unwrap();
+    let mut s2 = Session::spawn(&app.cfg.projects[1], 24, 70).unwrap();
+    s1.parser.process(b"Allow edit? [y/n]\r\n");
+    s2.parser.process(b"Do you want to proceed?\r\n1. Yes\r\n");
+    s1.cached_needs_input = true;
+    s2.cached_needs_input = true;
+    s1.prompt_hint = Some("Allow edit? [y/n]".into());
+    s2.prompt_hint = Some("Do you want to proceed?".into());
+    s1.last_output = Some(Instant::now() - Duration::from_secs(2));
+    s2.last_output = Some(Instant::now() - Duration::from_secs(2));
+    app.sessions[0] = Some(s1);
+    app.sessions[1] = Some(s2);
+
+    let area = Size::new(100, 30);
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    app.mode = Mode::Focus;
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(app.wait_badge_rect.width > 0);
+
+    // Clicking `? 2` in the status bar opens Quick Reply even from Focus mode.
+    app.on_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            app.wait_badge_rect.x + 1,
+            app.wait_badge_rect.y,
+        ),
+        area,
+        27,
+        75,
+    );
+    assert!(app.quick_reply.is_some());
+    assert_eq!(app.quick_reply.as_ref().unwrap().pi, 0);
+    assert!(app.wants_ascii_ime());
+    term.draw(|f| app.draw(f)).unwrap();
+
+    // Tab cycles to the second waiting agent.
+    app.on_key(key(KeyCode::Tab), 27, 75);
+    assert_eq!(app.quick_reply.as_ref().unwrap().pi, 1);
+
+    // Pressing `y` replies and auto-advances to the remaining waiting agent (0).
+    app.on_key(key(KeyCode::Char('y')), 27, 75);
+    assert_eq!(app.quick_reply.as_ref().map(|q| q.pi), Some(0));
+
+    // Pressing `t` switches to custom reply input (allowing Hangul IME), Enter sends & closes.
+    app.on_key(key(KeyCode::Char('t')), 27, 75);
+    assert!(!app.wants_ascii_ime());
+    for c in "yes".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 75);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 75);
+    assert!(app.quick_reply.is_none());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn git_view_lists_changes_and_renders_diff() {
+    let dir = scratch_dir("git-modal");
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    fs::write(dir.join("tracked.txt"), "one\n").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-q", "-m", "init"]);
+    fs::write(dir.join("tracked.txt"), "one\ntwo\n").unwrap();
+    fs::write(dir.join("untracked.txt"), "hello\n").unwrap();
+
+    let cfg = Config {
+        projects: vec![proj("repo", dir.to_str().unwrap(), &["claude"])],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    app.on_key(key(KeyCode::Char('g')), 27, 75);
+    let gv = app.git_view.as_ref().expect("git view opens");
+    assert_eq!(gv.files.len(), 2);
+    term.draw(|f| app.draw(f)).unwrap();
+    let screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("Git: repo"));
+    assert!(screen.contains("tracked.txt"));
+    assert!(screen.contains("untracked.txt"));
+
+    app.on_key(key(KeyCode::Down), 27, 75);
+    assert_eq!(app.git_view.as_ref().unwrap().sel, 1);
+    app.on_key(key(KeyCode::Esc), 27, 75);
+    assert!(app.git_view.is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn collapsed_hover_tooltip_and_terminal_scrollback_search() {
+    let dir = scratch_dir("hover-search");
+    let mut p1 = proj("alpha", dir.to_str().unwrap(), &[]);
+    p1.command = shell();
+    let mut p2 = proj("beta", dir.to_str().unwrap(), &[]);
+    p2.command = shell();
+    let cfg = Config {
+        projects: vec![p1, p2],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut s = Session::spawn(&app.cfg.projects[0], 5, 60).unwrap();
+    for i in 0..10 {
+        let line = if i == 1 || i == 8 {
+            format!("row {i} needle-here\r\n")
+        } else {
+            format!("row {i}\r\n")
+        };
+        s.parser.process(line.as_bytes());
+    }
+    app.sessions[0] = Some(s);
+
+    let area = Size::new(100, 30);
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    // Collapse sidebar and hover row 2 (`beta` at row 3).
+    app.on_key(key(KeyCode::Char('[')), 27, 92);
+    app.message.0 = app.hints.clone();
+    term.draw(|f| app.draw(f)).unwrap();
+    app.on_mouse(mouse(MouseEventKind::Moved, 2, 3), area, 27, 92);
+    assert_eq!(app.hover_row, Some(1));
+    term.draw(|f| app.draw(f)).unwrap();
+    let buf_text = |t: &Terminal<TestBackend>| -> String {
+        t.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    };
+    let rendered = buf_text(&term);
+    assert!(
+        rendered.contains("beta"),
+        "hover tooltip shows project name"
+    );
+    assert!(
+        rendered.contains("[1] alpha"),
+        "collapsed status bar shows selected project name"
+    );
+
+    // Search terminal scrollback with `F`, step matches, keep with Enter, clear with Esc.
+    app.on_key(key(KeyCode::Char('F')), 27, 92);
+    assert_eq!(app.mode, Mode::Search);
+    assert!(!app.wants_ascii_ime());
+    for c in "needle".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 92);
+    }
+    assert_eq!(app.search_matches.len(), 2);
+    assert_eq!(app.search_idx, 1);
+    app.on_key(key(KeyCode::Up), 27, 92);
+    assert_eq!(app.search_idx, 0);
+    assert!(app.sessions[0].as_ref().unwrap().scroll > 0);
+    app.on_key(key(KeyCode::Enter), 27, 92);
+    assert_eq!(app.mode, Mode::Manager);
+    assert!(app.search_active);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(buf_text(&term).contains("Find \"needle\": 1/2"));
+    app.on_key(key(KeyCode::Esc), 27, 92);
+    assert!(!app.search_active);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&dir);
+}

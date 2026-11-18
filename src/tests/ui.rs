@@ -881,3 +881,28 @@ fn compact_group_header_and_toggle_hit_testing() {
     assert!(!sidebar_toggle_click(collapsed, true, 1, 1));
     assert!(!sidebar_toggle_click(Rect::ZERO, true, 0, 0));
 }
+
+#[test]
+fn git_diff_lines_and_quick_reply_buttons_work() {
+    use ratatui::layout::Rect;
+    let lines = git_diff_lines("diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n ctx");
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::DarkGray));
+    assert_eq!(lines[1].spans[0].style.fg, Some(Color::Cyan));
+    assert_eq!(lines[2].spans[0].style.fg, Some(Color::Red));
+    assert_eq!(lines[3].spans[0].style.fg, Some(Color::Green));
+    assert_eq!(lines[4].spans[0].style.fg, None);
+
+    assert_eq!(mode_chip(Mode::Search).0.trim(), "SEARCH");
+    assert!(mode_chip(Mode::Search).1.bg.is_some());
+
+    let area = Rect::new(0, 0, 100, 30);
+    let popup = quick_reply_popup(area, 4);
+    let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
+    let btn_y = inner.bottom().saturating_sub(2);
+    assert_eq!(quick_reply_button_hit(popup, inner.x, btn_y), Some('\r'));
+    assert_eq!(
+        quick_reply_button_hit(popup, inner.x + 17, btn_y),
+        Some('y')
+    );
+    assert_eq!(quick_reply_button_hit(popup, inner.x, btn_y + 1), None);
+}

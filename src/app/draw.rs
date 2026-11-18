@@ -56,20 +56,10 @@ impl App {
         }
         self.draw_pane(f, panels[1]);
         self.draw_status(f, vertical[1]);
-        let has_modal = matches!(self.mode, Mode::Help | Mode::Add)
-            || self.env_modal.is_some()
-            || self.history.is_some()
-            || self.procs.is_some()
-            || self.confirm_stop.is_some()
-            || self.confirm_remove.is_some()
-            || self.confirm_restart.is_some()
-            || self.confirm_update
-            || self.confirm_apply
-            || self.confirm_quit
-            || self.confirm_start_all
-            || self.context_menu.is_some()
-            || self.env_info.is_some();
-        if has_modal {
+        if self.sidebar_collapsed && !self.has_modal() && sidebar > 0 {
+            self.draw_collapsed_tooltip(f);
+        }
+        if self.has_modal() {
             let full_area = f.area();
             dim_area(f.buffer_mut(), full_area);
         }
@@ -77,7 +67,9 @@ impl App {
             self.draw_help(f);
         }
         self.draw_history(f);
+        self.draw_git_view(f);
         self.draw_procs(f);
+        self.draw_quick_reply(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
         if let Some(lines) = self.env_info_lines() {
@@ -87,6 +79,317 @@ impl App {
             self.draw_add(f);
         }
         self.draw_env_modal(f);
+    }
+
+    fn draw_collapsed_tooltip(&self, f: &mut Frame) {
+        let Some(target) = self.hover_row else {
+            return;
+        };
+        let Some(off) = self
+            .row_targets
+            .iter()
+            .skip(self.list_offset)
+            .position(|&t| t == Some(target))
+        else {
+            return;
+        };
+        let y = self.side_rect.y + 1 + off as u16;
+        if y >= self.side_rect.bottom().saturating_sub(1) {
+            return;
+        }
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if target == MEMORY_ROW {
+            spans.push(Span::styled(
+                " Memory monitor (M) ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+        } else if target == ENV_ROW {
+            spans.push(Span::styled(
+                " Env vault (E) ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+        } else if let Some(&pi) = self.order.get(target) {
+            let Some(p) = self.cfg.projects.get(pi) else {
+                return;
+            };
+            let sess = self.sessions.get(pi).and_then(|o| o.as_ref());
+            let fg = sess.and_then(|s| s.fg_name.as_deref());
+            let name = live_name(p, fg);
+            spans.push(Span::styled(
+                format!(" {} · {name} ", target + 1),
+                Style::default()
+                    .fg(kind_color(p.kind))
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+            if let Some(s) = sess {
+                if s.status.is_running() {
+                    if p.kind == Kind::Agent && s.phase() == AgentPhase::NeedsInput {
+                        let ask = s.prompt_hint.as_deref().unwrap_or("Awaiting orders");
+                        spans.push(Span::styled(
+                            format!("? {} ", fit(ask, 42)),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(ratatui::style::Modifier::BOLD),
+                        ));
+                    } else if p.kind == Kind::Agent {
+                        spans.push(Span::styled(
+                            format!("{} ", s.phase().word()),
+                            Style::default().fg(Color::Green),
+                        ));
+                    } else if let Some(u) = s.usage {
+                        spans.push(Span::styled(
+                            format!("{} ", usage_label(u)),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                } else {
+                    spans.push(Span::styled(
+                        format!("{} ", s.status),
+                        status_style(&s.status.label()),
+                    ));
+                }
+            } else {
+                spans.push(Span::styled(
+                    format!("{} ", self.idle_word(pi)),
+                    Style::default().fg(Color::Gray),
+                ));
+            }
+        } else {
+            return;
+        }
+        let max_w = f.area().width.saturating_sub(self.side_rect.right());
+        let tip_w = spans
+            .iter()
+            .map(|s| width(s.content.as_ref()))
+            .sum::<usize>()
+            .min(usize::from(max_w)) as u16;
+        if tip_w < 3 {
+            return;
+        }
+        let rect = Rect::new(self.side_rect.right(), y, tip_w, 1);
+        f.render_widget(ratatui::widgets::Clear, rect);
+        f.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray)),
+            rect,
+        );
+    }
+
+    fn draw_git_view(&self, f: &mut Frame) {
+        let Some(g) = &self.git_view else {
+            return;
+        };
+        let popup = history_popup(f.area());
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let status_note = if g.files.is_empty() {
+            "clean".to_string()
+        } else {
+            format!("{} changed", g.files.len())
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(vec![
+                Span::styled(
+                    format!(" Git: {} [{}] ", g.project, g.branch),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("({status_note}) "),
+                    Style::default().fg(if g.files.is_empty() {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    }),
+                ),
+            ]))
+            .title_bottom(
+                Line::from(Span::styled(
+                    " ↑↓/j/k pick · PgUp/PgDn/J/K/wheel scroll · r refresh · Tab project · Esc closes ",
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
+        f.render_widget(block, popup);
+        let (left_col, right_col) = history_cols(popup);
+        let rows = usize::from(left_col.height).max(1);
+        let start = keep_visible(g.top.get(), g.sel, rows);
+        g.top.set(start);
+        let list: Vec<Line> = if g.files.is_empty() {
+            vec![Line::from(Span::styled(
+                "  (clean)",
+                Style::default().fg(Color::Green),
+            ))]
+        } else {
+            g.files
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(rows)
+                .map(|(i, (code, rel))| {
+                    let active = i == g.sel;
+                    let code_color = if code.contains('D') {
+                        Color::Red
+                    } else if code.contains('A') || code == "??" {
+                        Color::Green
+                    } else if code.contains('R') {
+                        Color::Cyan
+                    } else {
+                        Color::Yellow
+                    };
+                    let row_style = if active {
+                        Style::default()
+                            .bg(Color::Cyan)
+                            .fg(Color::Black)
+                            .add_modifier(ratatui::style::Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    let tag_style = if active {
+                        row_style
+                    } else {
+                        Style::default()
+                            .fg(code_color)
+                            .add_modifier(ratatui::style::Modifier::BOLD)
+                    };
+                    let mark = if active { "▸" } else { " " };
+                    let avail = usize::from(left_col.width).saturating_sub(5);
+                    let path_s = shorten_middle(&rel.display().to_string(), avail);
+                    Line::from(vec![
+                        Span::styled(format!("{mark}{code} "), tag_style),
+                        Span::styled(path_s, row_style),
+                    ])
+                })
+                .collect()
+        };
+        f.render_widget(Paragraph::new(list), left_col);
+        g.wrap_w.set(right_col.width.saturating_sub(1));
+        let scroll = g.scroll.min(g.max_scroll());
+        let line_count = g.rows();
+        let mut right_block = Block::default().borders(Borders::LEFT);
+        if line_count > usize::from(right_col.height) {
+            let max_s = g.max_scroll().max(1);
+            let pct = (u32::from(scroll) * 100 / u32::from(max_s)).min(100);
+            right_block = right_block.title_bottom(
+                Line::from(Span::styled(
+                    format!(" {pct}% "),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
+        }
+        f.render_widget(
+            Paragraph::new(git_diff_lines(&g.diff))
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .scroll((scroll, 0))
+                .block(right_block),
+            right_col,
+        );
+        if line_count > usize::from(right_col.height) {
+            scrollbar(f, popup, line_count, usize::from(scroll));
+        }
+    }
+
+    fn draw_quick_reply(&self, f: &mut Frame) {
+        let Some(qr) = &self.quick_reply else {
+            return;
+        };
+        let popup = quick_reply_popup(f.area(), qr.tail.len());
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let name = self
+            .cfg
+            .projects
+            .get(qr.pi)
+            .map_or("?", |p| p.name.as_str());
+        let waiting = self.waiting_projects();
+        let queue_note = if waiting.len() > 1 {
+            let pos = waiting
+                .iter()
+                .position(|&w| w == qr.pi)
+                .map_or(1, |i| i + 1);
+            format!(" ({pos}/{} waiting)", waiting.len())
+        } else {
+            String::new()
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(Line::from(Span::styled(
+                format!(" Quick Reply: {name}{queue_note} "),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        if inner.height < 4 {
+            return;
+        }
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let max_tail = usize::from(parts[0].height);
+        let skip = qr.tail.len().saturating_sub(max_tail);
+        let max_w = usize::from(parts[0].width);
+        let tail_lines: Vec<Line> = qr
+            .tail
+            .iter()
+            .skip(skip)
+            .map(|l| {
+                let fitted = fit(l, max_w);
+                let style = if l.contains('?') || l.trim_start().starts_with('❯') {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(fitted, style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(tail_lines), parts[0]);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "─".repeat(usize::from(parts[1].width)),
+                Style::default().fg(Color::DarkGray),
+            ))),
+            parts[1],
+        );
+        if qr.typing {
+            let spans = input_line(
+                "Reply: ".to_string(),
+                &qr.input,
+                String::new(),
+                usize::from(parts[2].width),
+            );
+            f.render_widget(Paragraph::new(Line::from(spans)), parts[2]);
+            f.render_widget(
+                Paragraph::new(Line::from(hint_spans(&[
+                    ("Enter", "sends"),
+                    ("Esc", "back"),
+                ]))),
+                parts[3],
+            );
+        } else {
+            f.render_widget(Paragraph::new(quick_reply_button_line()), parts[2]);
+            let mut hints = vec![("o", "focus"), ("c", "cancel"), ("Esc", "closes")];
+            if waiting.len() > 1 {
+                hints.insert(0, ("Tab", "next"));
+            }
+            f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), parts[3]);
+        }
     }
 
     /// The SITREP reader: filed entries on the left, the picked one's text on
@@ -848,11 +1151,63 @@ impl App {
                 .right_aligned(),
             );
         }
+        if self.search_active && self.search_pi == sel_pi && !self.search_buf.is_empty() {
+            let label = if self.search_matches.is_empty() {
+                format!(" Find \"{}\": 0 ", fit(&self.search_buf.as_str(), 12))
+            } else {
+                format!(
+                    " Find \"{}\": {}/{} ",
+                    fit(&self.search_buf.as_str(), 12),
+                    self.search_idx + 1,
+                    self.search_matches.len()
+                )
+            };
+            block = block.title_bottom(Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(if self.search_matches.is_empty() {
+                        Color::Red
+                    } else {
+                        Color::Black
+                    })
+                    .bg(if self.search_matches.is_empty() {
+                        Color::Reset
+                    } else {
+                        Color::Yellow
+                    })
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+        }
         let inner = block.inner(panel);
         f.render_widget(block, panel);
         if let Some(s) = sel_session {
             let screen = s.parser.screen();
             s.paint(f.buffer_mut(), inner);
+            if self.search_active && self.search_pi == sel_pi && !self.search_buf.is_empty() {
+                let active_match = self.search_matches.get(self.search_idx).copied();
+                let other_hit = Style::default().bg(Color::Yellow).fg(Color::Black);
+                let cur_hit = Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(ratatui::style::Modifier::BOLD);
+                for (vis_row, logical_line, cs, ce) in
+                    s.visible_search_hits(&self.search_buf.as_str())
+                {
+                    if vis_row >= inner.height {
+                        continue;
+                    }
+                    let is_cur =
+                        active_match.is_some_and(|m| m.line == logical_line && m.col_start == cs);
+                    let style = if is_cur { cur_hit } else { other_hit };
+                    for col in cs..ce.min(inner.width) {
+                        if let Some(cell) =
+                            f.buffer_mut().cell_mut((inner.x + col, inner.y + vis_row))
+                        {
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
             if let Some(sel) = self.sel.filter(|x| x.moved && Some(x.pi) == sel_pi) {
                 // Drawn over the cached paint, so selecting never rebuilds it.
                 let hit = Style::default().bg(Color::Blue).fg(Color::White);
@@ -998,7 +1353,7 @@ impl App {
         }
     }
 
-    pub(super) fn draw_status(&self, f: &mut Frame, bar_area: Rect) {
+    pub(super) fn draw_status(&mut self, f: &mut Frame, bar_area: Rect) {
         let sel_pi = self.order.get(self.selected).copied();
         let (chip_text, chip_style) = mode_chip(self.mode);
         let mut bar = vec![
@@ -1036,6 +1391,11 @@ impl App {
             .count();
         let wait_w = if waiting_n > 0 {
             format!(" ? {waiting_n}").chars().count() as u16
+        } else {
+            0
+        };
+        let fail_w = if failed_n > 0 {
+            format!(" ✖ {failed_n}").chars().count() as u16
         } else {
             0
         };
@@ -1083,6 +1443,24 @@ impl App {
                 format!(" ({} matches, Enter keeps, Esc clears)", self.order.len()),
                 input_w,
             ));
+        } else if self.mode == Mode::Search {
+            let status = if self.search_buf.is_empty() {
+                " (type to search, Esc clears)".to_string()
+            } else if self.search_matches.is_empty() {
+                " (0 matches · Esc clears)".to_string()
+            } else {
+                format!(
+                    " ({}/{} · ↑↓ step · Enter keeps · Esc clears)",
+                    self.search_idx + 1,
+                    self.search_matches.len()
+                )
+            };
+            bar.extend(input_line(
+                "Find: ".to_string(),
+                &self.search_buf,
+                status,
+                input_w,
+            ));
         } else if self.mode == Mode::Send {
             let name = sel_pi
                 .and_then(|pi| self.cfg.projects.get(pi))
@@ -1105,8 +1483,66 @@ impl App {
         } else if self.mode == Mode::Help && self.message.0 == self.hints {
             bar.extend(fitted_hints(Mode::Help, input_w));
         } else if self.message.0 == self.hints {
-            // Idle hints recede so action feedback stands out.
-            bar.extend(fitted_hints(Mode::Manager, input_w));
+            if self.sidebar_collapsed && self.mode == Mode::Manager {
+                let prefix = if self.mgmt_sel == Some(0) {
+                    Some(("Memory monitor (M)".to_string(), Color::Cyan))
+                } else if self.mgmt_sel == Some(1) {
+                    Some(("Env vault (E)".to_string(), Color::Cyan))
+                } else if let Some(pi) = sel_pi {
+                    let p = &self.cfg.projects[pi];
+                    let sess = self.sessions.get(pi).and_then(|o| o.as_ref());
+                    let fg = sess.and_then(|s| s.fg_name.as_deref());
+                    let name = live_name(p, fg);
+                    let detail = match sess {
+                        Some(s)
+                            if s.status.is_running()
+                                && p.kind == Kind::Agent
+                                && s.phase() == AgentPhase::NeedsInput =>
+                        {
+                            format!(
+                                "? {}",
+                                s.prompt_hint.as_deref().unwrap_or("Awaiting orders")
+                            )
+                        }
+                        Some(s) if s.status.is_running() && p.kind == Kind::Agent => {
+                            s.phase().word().to_string()
+                        }
+                        Some(s) => s.status.label().into_owned(),
+                        None => self.idle_word(pi).to_string(),
+                    };
+                    let c = if sess.is_some_and(|s| s.phase() == AgentPhase::NeedsInput) {
+                        Color::Yellow
+                    } else {
+                        kind_color(p.kind)
+                    };
+                    Some((format!("[{}] {name} · {detail}", self.selected + 1), c))
+                } else {
+                    None
+                };
+                if let Some((text, color)) = prefix {
+                    let max_p = input_w.min(44);
+                    let shown = fit(&text, max_p);
+                    let used = width(&shown) + 3;
+                    bar.push(Span::styled(
+                        shown,
+                        Style::default()
+                            .fg(color)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                    if input_w > used + 8 {
+                        bar.push(Span::styled(
+                            " | ".to_string(),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                        bar.extend(fitted_hints(Mode::Manager, input_w - used));
+                    }
+                } else {
+                    bar.extend(fitted_hints(Mode::Manager, input_w));
+                }
+            } else {
+                // Idle hints recede so action feedback stands out.
+                bar.extend(fitted_hints(Mode::Manager, input_w));
+            }
         } else {
             bar.push(Span::styled(
                 fit(&self.message.0, input_w),
@@ -1114,6 +1550,14 @@ impl App {
             ));
         }
         f.render_widget(Paragraph::new(Line::from(bar)), status_row[0]);
+        self.wait_badge_rect = if wait_w > 0 {
+            let right_x = status_row[1]
+                .right()
+                .saturating_sub(fail_w + upd_w + wait_w);
+            Rect::new(right_x, status_row[1].y, wait_w, 1)
+        } else {
+            Rect::default()
+        };
         let mut right = Vec::new();
         if !sys_text.is_empty() {
             right.push(Span::styled(sys_text, self.sys.style()));

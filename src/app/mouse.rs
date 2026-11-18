@@ -18,6 +18,10 @@ impl App {
                     typed.extend(paste_bytes(&data, false));
                 }
             }
+        } else if let Some(qr) = self.quick_reply.as_mut().filter(|q| q.typing) {
+            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                qr.input.insert(ch);
+            }
         } else if self.mode == Mode::Send {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 self.send_buf.insert(ch);
@@ -28,6 +32,11 @@ impl App {
             }
             self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
             self.selected = 0;
+        } else if self.mode == Mode::Search {
+            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                self.search_buf.insert(ch);
+            }
+            self.sync_search(true);
         } else if let Some(ed) = self.env_modal.as_mut().and_then(|m| m.editor.as_mut()) {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 if ed.field == 0 {
@@ -94,6 +103,20 @@ impl App {
                 h.scroll_by(-lines);
             }
             self.dirty = true;
+        } else if let (Some(lines), Some(g)) = (wheel_lines(m.kind), self.git_view.as_mut()) {
+            let popup = history_popup(area.into());
+            let (left_col, _) = history_cols(popup);
+            let at = ratatui::layout::Position::new(m.column, m.row);
+            if left_col.contains(at) {
+                if lines > 0 {
+                    g.select(g.sel.saturating_sub(1));
+                } else {
+                    g.select(g.sel + 1);
+                }
+            } else {
+                g.scroll_by(-lines);
+            }
+            self.dirty = true;
         } else if wheel_lines(m.kind).is_some() && self.mode == Mode::Add {
             if let Some(lines) = wheel_lines(m.kind) {
                 if self.add_field == 0 && !self.add_picks.is_empty() {
@@ -103,6 +126,7 @@ impl App {
             }
         } else if wheel_lines(m.kind).is_some()
             && (self.mode == Mode::Help
+                || self.quick_reply.is_some()
                 || self.context_menu.is_some()
                 || self.env_info.is_some()
                 || !self.confirm_modals().is_empty())
@@ -196,6 +220,40 @@ impl App {
                                 m_env.picked.insert(key.clone());
                             }
                         }
+                    }
+                }
+                self.dirty = true;
+            } else if let Some(qr) = self.quick_reply.as_mut() {
+                let popup = quick_reply_popup(area.into(), qr.tail.len());
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                if !popup.contains(at) {
+                    self.quick_reply = None;
+                } else if !qr.typing {
+                    if let Some(ch) = quick_reply_button_hit(popup, m.column, m.row) {
+                        if ch == 't' {
+                            qr.typing = true;
+                        } else {
+                            let pi = qr.pi;
+                            let bytes: &[u8] = if ch == '\r' {
+                                b"\r"
+                            } else {
+                                &[ch as u8, b'\r']
+                            };
+                            self.send_quick_reply(pi, bytes);
+                        }
+                    }
+                }
+                self.dirty = true;
+            } else if let Some(g) = self.git_view.as_mut() {
+                let popup = history_popup(area.into());
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                let (left_col, _) = history_cols(popup);
+                if !popup.contains(at) {
+                    self.git_view = None;
+                } else if left_col.contains(at) {
+                    let i = g.top.get() + usize::from(m.row - left_col.y);
+                    if i < g.files.len() {
+                        g.select(i);
                     }
                 }
                 self.dirty = true;
@@ -395,7 +453,7 @@ impl App {
                 m.column,
                 m.row,
             ) {
-                if self.mode == Mode::Filter {
+                if matches!(self.mode, Mode::Filter | Mode::Search) {
                     self.mode = Mode::Manager;
                 }
                 // Coming from a Management row, the project row was not
@@ -464,6 +522,11 @@ impl App {
                     }
                 }
                 self.dirty = true;
+            } else if self
+                .wait_badge_rect
+                .contains(ratatui::layout::Position::new(m.column, m.row))
+            {
+                self.open_quick_reply();
             } else if m.row >= area.height.saturating_sub(1) && m.column < 12 {
                 // Clicking the status-bar mode chip toggles help
                 self.mode = if self.mode == Mode::Help {
@@ -471,6 +534,22 @@ impl App {
                 } else {
                     Mode::Help
                 };
+                self.dirty = true;
+            }
+        } else if m.kind == MouseEventKind::Moved {
+            let next = if self.sidebar_collapsed && !self.has_modal() {
+                sidebar_click(
+                    self.side_rect,
+                    self.list_offset,
+                    &self.row_targets,
+                    m.column,
+                    m.row,
+                )
+            } else {
+                None
+            };
+            if next != self.hover_row {
+                self.hover_row = next;
                 self.dirty = true;
             }
         } else if m.kind == MouseEventKind::Drag(MouseButton::Left) {
@@ -506,19 +585,9 @@ impl App {
             // their typed text, so they are left alone.
             && matches!(
                 self.mode,
-                Mode::Manager | Mode::Focus | Mode::Filter | Mode::Help
+                Mode::Manager | Mode::Focus | Mode::Filter | Mode::Search | Mode::Help
             )
-            && self.env_info.is_none()
-            && !self.confirm_quit
-            && !self.confirm_start_all
-            && self.confirm_stop.is_none()
-            && self.confirm_remove.is_none()
-            && self.confirm_restart.is_none()
-            && !self.confirm_update
-            && !self.confirm_apply
-            && self.history.is_none()
-            && self.procs.is_none()
-            && self.env_modal.is_none()
+            && !self.has_overlay()
         {
             // Right-click on a sidebar row opens its quick-action menu, a
             // Management row opens that tool. Only sidebar rows react, so a

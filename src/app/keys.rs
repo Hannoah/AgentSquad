@@ -26,10 +26,15 @@ impl App {
             self.key_env_modal(k);
             return;
         }
+        if self.quick_reply.is_some() {
+            self.key_quick_reply(k);
+            return;
+        }
         match self.mode {
             Mode::Focus => self.key_focus(k, rows),
             Mode::Send => self.key_send(k, rows, cols),
             Mode::Filter => self.key_filter(k),
+            Mode::Search => self.key_search(k),
             Mode::Add => self.key_add(k),
             Mode::Help => self.key_help(k),
             Mode::Manager => self.key_manager_or_confirm(k, rows, cols),
@@ -45,6 +50,8 @@ impl App {
             self.key_env_info(k);
         } else if self.history.is_some() {
             self.key_history(k);
+        } else if self.git_view.is_some() {
+            self.key_git_view(k);
         } else if self.procs.is_some() {
             self.key_procs(k);
         } else if self.confirm_update {
@@ -200,6 +207,33 @@ impl App {
                 if self.filter_buf.edit_key(k) == Some(true) {
                     self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
                     self.selected = 0;
+                }
+            }
+        }
+    }
+
+    pub(super) fn key_search(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+        match k.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Manager;
+                self.clear_search();
+            }
+            KeyCode::Enter => {
+                self.mode = Mode::Manager;
+                if self.search_buf.is_empty() {
+                    self.clear_search();
+                }
+            }
+            KeyCode::Up => self.step_search(true),
+            KeyCode::Down => self.step_search(false),
+            KeyCode::F(3) => self.step_search(shift),
+            KeyCode::Char('p') if ctrl => self.step_search(true),
+            KeyCode::Char('n') if ctrl => self.step_search(false),
+            _ => {
+                if self.search_buf.edit_key(k) == Some(true) {
+                    self.sync_search(true);
                 }
             }
         }
@@ -512,7 +546,9 @@ impl App {
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.open_mgmt(m),
                 KeyCode::Esc => self.mgmt_sel = None,
                 // No project is highlighted, so project actions have no target.
-                KeyCode::Char('m' | 'u' | 'o' | 'b' | 'h' | 'e' | 'f' | 'r' | 's' | 'x' | 'd')
+                KeyCode::Char(
+                    'm' | 'u' | 'o' | 'b' | 'h' | 'g' | 'e' | 'f' | 'r' | 's' | 'x' | 'd',
+                )
                 | KeyCode::Delete => {}
                 // Anything else (global keys, jumps) returns to the project list.
                 _ => {
@@ -580,6 +616,8 @@ impl App {
             }
             KeyCode::Char('b') if !self.order.is_empty() => self.brief_selected(),
             KeyCode::Char('h') if !self.order.is_empty() => self.open_history(),
+            KeyCode::Char('g') if !self.order.is_empty() => self.open_git_view(),
+            KeyCode::Char('w') => self.open_quick_reply(),
             KeyCode::Char('M') => self.open_procs(),
             KeyCode::Char('E') => {
                 let target = self
@@ -590,6 +628,13 @@ impl App {
                 self.open_env_modal(target);
             }
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
+            KeyCode::Char('f' | 'F') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_search();
+            }
+            KeyCode::Char('F') => self.open_search(),
+            KeyCode::F(3) if self.search_active => {
+                self.step_search(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
             KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
             KeyCode::Char('z') => {
                 self.zoom = !self.zoom;
@@ -618,7 +663,13 @@ impl App {
             KeyCode::Char('/') if !self.cfg.projects.is_empty() => {
                 self.mode = Mode::Filter;
             }
-            // Esc in the manager drops a kept filter, or dismisses exit banner.
+            // Esc in the manager drops kept search, kept filter, or exit banner.
+            KeyCode::Esc
+                if self.search_active
+                    && self.search_pi == self.order.get(self.selected).copied() =>
+            {
+                self.clear_search();
+            }
             KeyCode::Esc if !self.filter_buf.is_empty() => {
                 self.clear_filter();
             }
