@@ -52,12 +52,25 @@ pub fn update_check_enabled() -> bool {
 }
 /// Windows' own copy of a tool. A bare `tar` can resolve to Git's GNU tar,
 /// which cannot read zip files, so go through System32 explicitly.
+/// Resolved with `GetSystemDirectoryW`, not the `SystemRoot` variable, so
+/// a hostile parent environment cannot redirect tool lookups at squad.
 pub fn system_tool(name: &str) -> PathBuf {
     if !cfg!(windows) {
         return PathBuf::from(name);
     }
-    let root = env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    PathBuf::from(root).join("System32").join(name)
+    let dir: PathBuf = {
+        use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+        let mut buf = [0u16; 261];
+        // SAFETY: the buffer holds `buf.len()` wide chars; the API writes
+        // at most that many including the NUL terminator.
+        let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) };
+        if len == 0 || (len as usize) >= buf.len() {
+            PathBuf::from(r"C:\Windows\System32")
+        } else {
+            String::from_utf16_lossy(&buf[..len as usize]).into()
+        }
+    };
+    dir.join(name)
 }
 /// A child process with no console window and no stdin.
 pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
@@ -307,7 +320,13 @@ pub fn fetch_release(tag: &str, work: &Path) -> Result<PathBuf> {
 /// Slow: call from a worker thread.
 pub fn install_update(tag: &str) -> Result<()> {
     let exe = install_path().with_context(|| format!("Cannot find {BIN}"))?;
-    let work = env::temp_dir().join(format!("squad-update-{}", std::process::id()));
+    // PID plus a timestamp: a fixed per-PID name would let another local
+    // user pre-create the directory and break (or race) the update.
+    let uniq = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let work = env::temp_dir().join(format!("squad-update-{}-{uniq}", std::process::id()));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;
     let result = fetch_release(tag, &work).and_then(|new_exe| swap_binary(&new_exe, &exe));

@@ -33,15 +33,27 @@ $LibDir   = Join-Path $TcDir "x86_64-w64-mingw32\lib"
 $TcZip    = Join-Path $ToolRoot "llvm-mingw.zip"
 $ZipUrl   = "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-x86_64.zip"
 $ZipSize  = 191037046
+# SHA256 of the upstream asset (GitHub API `digest` field). Verified on every
+# run, including cached copies: a toolchain that builds every binary must not
+# come from an unverified 191MB download.
+$ZipSha256 = "552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f"
+
+function Test-ToolchainZip {
+  if (-not (Test-Path $TcZip)) { return $false }
+  if ((Get-Item $TcZip).Length -ne $ZipSize) { return $false }
+  return ((Get-FileHash -Path $TcZip -Algorithm SHA256).Hash.ToLowerInvariant() -eq $ZipSha256)
+}
 
 $Linker = Join-Path $TcBin "x86_64-w64-mingw32-gcc.exe"
 if (-not (Test-Path $Linker)) {
-  $needDownload = $true
-  if ((Test-Path $TcZip) -and ((Get-Item $TcZip).Length -eq $ZipSize)) { $needDownload = $false }
-  if ($needDownload) {
+  if (-not (Test-ToolchainZip)) {
     New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
     Write-Host "Downloading LLVM-MinGW (~191MB, one time only)..."
     Invoke-WebRequest -Uri $ZipUrl -OutFile $TcZip -UseBasicParsing
+    if (-not (Test-ToolchainZip)) {
+      Remove-Item -Path $TcZip -Force -ErrorAction SilentlyContinue
+      throw "Toolchain checksum mismatch; refusing to build with an unverified compiler. Delete $ToolRoot and retry."
+    }
   }
   Write-Host "Extracting MinGW toolchain..."
   Expand-Archive -Path $TcZip -DestinationPath $ToolDir -Force

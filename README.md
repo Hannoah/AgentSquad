@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.31
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.32
 ```
 
 To install elsewhere:
@@ -153,12 +153,13 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it; right-click a row (even while typing in a terminal) to open its quick actions, including **Environment variables** (the agent's `.env`, masked; `v` reveals) and **Set superior…**) |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row (even while typing in a terminal) to open its quick actions, including **Environment variables** (the agent's `.env`, masked; `v` reveals), **Set superior…**, and **Enable auto-restart** (services only). The sidebar's bottom line summarizes waiting agents (`? name: question`) when their rows scroll away |
 | `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
-| `1`–`9` | Jump to a visible row |
+| `1`–`9` | Jump to a visible row (type two digits in a row past 9) |
 | `Home` / `End` | First / last project |
-| `/` | Filter the project list by name, path, or command (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
+| `/` | Filter by name, path, or command, plus status tokens like `is:waiting`, `is:error`, `is:running`, `is:service` (`Enter` keeps, `Esc` clears; `Esc` in the manager drops a kept filter) |
 | `F`, `Ctrl+F` | Search the selected session's scrollback and live screen (`↑`/`↓` or `F3`/`Shift+F3` steps matches, `Enter` keeps highlights, `Esc` clears) |
+| `G` | Search every session's scrollback at once (`↑`/`↓` picks a session, `Enter` jumps to it with the same query loaded, `Esc` closes) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `E` | Shared Env Vault: register reusable environment variables (`env.toml`) and toggle-apply/remove them on the selected project's `.env` (`Space` toggles, `a` adds, `e` edits, `d` deletes, `v` reveals, `Enter` syncs) |
 | `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex` |
@@ -167,13 +168,13 @@ case-insensitively by `remove` and `start`.
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `w`, click `? N` | Quick Reply: answer an agent waiting for input (`?`) without leaving your current view (`Enter`/`y`/`n`/`1`-`9` or `t` to type a custom reply, `Tab` cycles waiting agents) |
 | `g` | Git status & diff: inspect the selected project's branch, modified/untracked files, and colorized diffs (`Tab` switches git projects, `r` refreshes) |
-| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`↑`/`↓` pick, `PgUp`/`PgDn` scroll, `Esc` closes) |
+| `h` | History: read the selected project's work history, squad's own task entries and any SITREPs, listed in local time (`↑`/`↓` pick, `/` filters the entry list, `PgUp`/`PgDn` scroll, `Esc` closes) |
 | `M` | Memory monitor: the 50 processes holding the most RAM on the machine, with the picked one's PID, parent, CPU time, full command line and the squad session it runs in (`↑`/`↓` pick, `r` refresh, `x` kill after a `y` confirm, `Esc` closes). Killing takes the process's children too; squad refuses system processes and the shell or terminal it runs in |
 | `e` | Edit the selected project's path, command and autostart (kind stays; a new path renames an agent after its folder; `u` sets whom it reports to). A running session keeps the old folder and command until you restart it |
 | `f` | Pin / unpin the selected project: pinned ones list first in their group (Agents or Services) and show a `*` after the name |
 | `[` / `]`, `<` / `>`, click `[<]` / `[>]` | Collapse / expand the manager sidebar into a compact status rail (number + live status icon; hover or selection shows full name & prompt detail; clicking rows still switches or opens quick actions) |
 | `z` | Zoom: a focused terminal takes the full width (the project list comes back in the manager; `z` again turns it off) |
-| `o` | Order: type a line into every agent under the selected commander |
+| `o` | Order: type a line into every agent under the selected commander (the input shows how many running agents will get it; waiting ones are skipped) |
 | `u` | Set whom the selected agent reports to (empty clears it) |
 | `s` | Stop the selected session (asks to confirm with `y`; process is killed, files untouched; `x` also works) |
 | `r` | Restart the selected session (asks to confirm with `y` when running) |
@@ -234,7 +235,7 @@ other keyboard layouts, use that setting or `Ctrl+Q` then the digit.
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- command args...]
+squad add [<path>] [--kind agent|service] [--autostart] [--restart-on-crash] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- command args...]
                                                                    Register a project (path optional for services)
 squad env <list|set KEY VAL|remove KEY|apply <proj>|unapply <proj> KEY...>
                                                                    Manage shared env vars and project .env
@@ -244,11 +245,12 @@ squad tools <list|add NAME [--kind mcp|cli] [--desc D] [--env K=V] -- CMD|remove
                                                                    Manage shared MCP & CLI tools across agents
 squad refs <list|add [NAME] --url URL [--desc D]|remove NAME|apply <proj>|unapply <proj> NAME...>
                                                                    Manage shared GitHub/doc reference links across CLAUDE.md/AGENTS.md
-squad list                                                         List projects (name, kind, path, command)
+squad list [--names]                                               List projects (name, kind, path, command; --names prints one name per line)
 squad remove <name>                                                Unregister (files are untouched)
 squad under <name> [<commander>]                                   Set whom an agent reports to (none clears it)
 squad start <name>                                                 Open the manager on a project and start it
 squad update [--check]                                             Install the newest release (--check only looks)
+squad completion <powershell|bash>                                 Print shell completion script
 squad --version
 squad --help
 ```
@@ -291,6 +293,10 @@ Optional settings:
 
 - `autostart = true` on a project starts its session when the manager opens
   (`squad add --autostart` sets it too).
+- `restart_on_crash = true` on a service restarts its session a few seconds
+  after a crash (nonzero exit or spawn error), up to 5 times, then gives up
+  with a warning (`squad add --restart-on-crash` sets it; services only).
+  Clean exits and user stops never restart.
 - `bell = false` at the top level silences the terminal bell. By default squad
   rings it (at most once every 10 seconds) only when an agent you are not
   typing into starts waiting for input (`?`). A finished task never rings; it

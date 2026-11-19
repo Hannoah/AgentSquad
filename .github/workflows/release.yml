@@ -12,8 +12,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       # No rust-cache here: SignPath origin verification wants a clean build.
       - name: Tag matches Cargo.toml version
         # squad update refuses a build whose --version differs from the tag.
@@ -30,13 +30,13 @@ jobs:
       - name: Upload unsigned exe for signing
         if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
         id: unsigned
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: squad-unsigned
           path: target/release/squad.exe
       - name: Sign with SignPath
         if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@4a84eb4ad763290f059275786f2deed97c2c672b # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -59,7 +59,7 @@ jobs:
           $hash = (Get-FileHash -Path squad-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  squad-windows-x86_64.zip" | Out-File -FilePath squad-windows-x86_64.zip.sha256 -Encoding ascii
       - name: Keep the release files for the publish job
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-windows
           path: |
@@ -77,8 +77,8 @@ jobs:
             asset: squad-macos-x86_64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
       - name: Tag matches Cargo.toml version
@@ -96,7 +96,7 @@ jobs:
           tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release squad
           shasum -a 256 ${{ matrix.asset }}.tar.gz | sed 's/ \*/  /' > ${{ matrix.asset }}.tar.gz.sha256
       - name: Keep the release files for the publish job
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-macos-${{ matrix.target }}
           path: |
@@ -108,8 +108,12 @@ jobs:
   publish:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
           merge-multiple: true
@@ -123,3 +127,9 @@ jobs:
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 \
             || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
           gh release upload "${{ github.ref_name }}" dist/* --clobber
+      # Signed build provenance for every release asset, so anyone can check
+      # what CI built it: `gh attestation verify dist/<asset> --repo $GH_REPO`.
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*

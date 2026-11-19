@@ -20,6 +20,7 @@ use crate::ui::*;
 use crate::updater::*;
 
 mod app;
+mod completion;
 mod config;
 mod envvault;
 mod history;

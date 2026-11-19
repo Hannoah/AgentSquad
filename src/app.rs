@@ -105,6 +105,13 @@ impl Drop for ScreenGuard {
     }
 }
 
+/// Crash-log size cap: a crash loop must not fill the disk.
+pub(crate) const CRASH_LOG_MAX_BYTES: u64 = 1_000_000;
+/// True when the crash log at `len` bytes should start over.
+pub(crate) fn crash_log_needs_rotation(len: u64) -> bool {
+    len > CRASH_LOG_MAX_BYTES
+}
+
 /// Without this a panic prints into the alternate screen and vanishes with it.
 /// Appends every panic to `crash.log` next to the config; a panic on the main
 /// thread also leaves the alternate screen first so the message stays visible.
@@ -118,10 +125,15 @@ fn install_panic_hook() {
             let secs = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
+            let log = dir.join("crash.log");
+            // A crash loop must not fill the disk: start over past the cap.
+            if crash_log_needs_rotation(std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0)) {
+                let _ = std::fs::remove_file(&log);
+            }
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(dir.join("crash.log"))
+                .open(log)
             {
                 let _ = writeln!(
                     f,
@@ -510,6 +522,8 @@ pub(crate) struct App {
     pub(crate) resume: Vec<usize>,
     /// The SITREP reader (`h`), open over the manager.
     pub(crate) history: Option<History>,
+    /// Global search over all sessions (`G`), open over the manager.
+    pub(crate) gsearch: Option<GSearch>,
     /// The memory monitor (`M`), open over the manager.
     pub(crate) procs: Option<ProcList>,
     /// Shared environment variable vault & `.env` assignment modal (`E` or Add form).
@@ -527,6 +541,10 @@ pub(crate) struct App {
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
     pub(crate) starting: HashMap<String, Vec<u8>>,
+    /// Crash-loop tracking for service auto-restart: project index to
+    /// (consecutive auto-restarts, last schedule). Entries vanish once a
+    /// session runs healthy long enough, stops cleanly, or is stopped.
+    pub(crate) auto_restarts: HashMap<usize, (u8, Instant)>,
     pub(crate) start_tx: mpsc::Sender<Started>,
     pub(crate) start_rx: mpsc::Receiver<Started>,
     /// Rows and columns the sessions were last sized to.
@@ -553,9 +571,26 @@ pub(crate) struct App {
     /// Arrow keys past the last project land on the Management rows:
     /// `0` = Memory monitor, `1` = Env vault, `2` = Skills, `3` = Tools, `4` = References.
     pub(crate) mgmt_sel: Option<usize>,
+    /// Multi-digit row jump: digits typed within ~1.5s accumulate here.
+    pub(crate) jump_buf: String,
+    pub(crate) jump_at: Instant,
     /// Read-only environment popup opened from the right-click menu.
     pub(crate) env_info: Option<EnvInfo>,
     pub(crate) quit: bool,
+}
+
+/// Crash-loop cap for service auto-restart: give up after this many tries.
+pub(crate) const AUTO_RESTART_MAX_TRIES: u8 = 5;
+/// Delay between a crash and its auto-restart, so a flapping service
+/// does not spin the PTY worker several times a second.
+pub(crate) const AUTO_RESTART_COOLDOWN: Duration = Duration::from_secs(5);
+/// A session running this long breaks the crash streak and resets the tries.
+pub(crate) const AUTO_RESTART_RESET_AFTER: Duration = Duration::from_secs(60);
+
+/// Whether a crashed service with `tries` prior auto-restarts and
+/// `since_change` elapsed since the last schedule may be restarted now.
+pub(crate) fn auto_restart_due(tries: u8, since_change: Duration) -> bool {
+    tries < AUTO_RESTART_MAX_TRIES && since_change >= AUTO_RESTART_COOLDOWN
 }
 
 impl App {
@@ -657,6 +692,7 @@ impl App {
             autostart_pending: true,
             resume: Vec::new(),
             history: None,
+            gsearch: None,
             procs: None,
             env_vault,
             env_modal: None,
@@ -667,6 +703,7 @@ impl App {
             refs_vault,
             ref_modal: None,
             starting: HashMap::new(),
+            auto_restarts: HashMap::new(),
             start_tx,
             start_rx,
             pane: (0, 0),
@@ -683,6 +720,8 @@ impl App {
             search_active: false,
             hangul_hotkey_seen: false,
             mgmt_sel: None,
+            jump_buf: String::new(),
+            jump_at: Instant::now() - Duration::from_secs(10),
             env_info: None,
             quit: false,
         }
@@ -696,6 +735,7 @@ impl App {
             || self.ref_modal.is_some()
             || self.history.is_some()
             || self.git_view.is_some()
+            || self.gsearch.is_some()
             || self.quick_reply.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
@@ -980,6 +1020,37 @@ impl App {
             self.message = (format!("Restarting {}", p.name), Notice::Info);
         }
         self.begin_start(pi, rows, cols, Vec::new());
+    }
+
+    /// Live session facts for project `pi`, for status filter tokens.
+    pub(crate) fn live_facts(&self, pi: usize) -> FilterLive {
+        let slot = self.sessions.get(pi).and_then(|o| o.as_ref());
+        let running = slot.is_some_and(|s| s.status.is_running());
+        FilterLive {
+            running,
+            waiting: slot
+                .is_some_and(|s| s.status.is_running() && s.phase() == AgentPhase::NeedsInput),
+            done_unseen: slot.is_some_and(|s| {
+                s.status.is_running() && s.phase() == AgentPhase::Done && !s.acked
+            }),
+            failed: slot.is_some_and(|s| s.status.needs_attention()),
+            exited: slot.is_some_and(|s| matches!(s.status, SessionStatus::Exited(_))),
+        }
+    }
+
+    /// Recompute the filtered sidebar order from the filter text and live
+    /// session state, keeping the selection when it still matches.
+    pub(crate) fn refresh_filter(&mut self) {
+        let live: Vec<FilterLive> = (0..self.cfg.projects.len())
+            .map(|pi| self.live_facts(pi))
+            .collect();
+        let query = self.filter_buf.as_str().to_string();
+        let sel_pi = self.order.get(self.selected).copied();
+        self.order = apply_filter_live(&self.cfg.projects, &live, &query);
+        self.selected = sel_pi
+            .and_then(|pi| self.order.iter().position(|&x| x == pi))
+            .unwrap_or(0);
+        self.jump_buf.clear();
     }
 
     /// Drop any active filter while keeping the currently selected project selected.
@@ -1377,6 +1448,83 @@ impl App {
                 }
             }
         }
+        self.auto_restart_crashed();
+    }
+
+    /// Restart crashed services that opted in (`restart_on_crash`), a few
+    /// seconds after the crash and at most a few times in a row. Clean
+    /// exits, user stops (`s`), and agents never restart: only a failed
+    /// session slot still sitting in the manager qualifies, and a session
+    /// that stays up breaks the streak.
+    fn auto_restart_crashed(&mut self) {
+        let mut start: Vec<(usize, u8)> = Vec::new();
+        let mut give_up: Vec<usize> = Vec::new();
+        for (pi, p) in self.cfg.projects.iter().enumerate() {
+            let crashed = self
+                .sessions
+                .get(pi)
+                .and_then(|o| o.as_ref())
+                .is_some_and(|s| !s.status.is_running() && s.status.needs_attention());
+            let wanted =
+                p.kind == Kind::Service && p.restart_on_crash && crashed && !self.is_starting(pi);
+            if wanted {
+                match self.auto_restarts.get(&pi).copied() {
+                    Some((tries, _)) if tries >= AUTO_RESTART_MAX_TRIES => {
+                        if tries == AUTO_RESTART_MAX_TRIES {
+                            // Complain once, then leave the dead session alone.
+                            give_up.push(pi);
+                            self.auto_restarts.insert(pi, (tries + 1, Instant::now()));
+                        }
+                    }
+                    Some((tries, last)) if auto_restart_due(tries, last.elapsed()) => {
+                        start.push((pi, tries + 1));
+                    }
+                    None => {
+                        // Arm the cooldown; the restart fires on a later pass.
+                        self.auto_restarts.insert(pi, (0, Instant::now()));
+                    }
+                    _ => {}
+                }
+            } else {
+                // Forget crash streaks for gone or clean sessions, and for
+                // sessions healthy long enough to break the streak.
+                let settled = match self.sessions.get(pi).and_then(|o| o.as_ref()) {
+                    None => true,
+                    Some(s) if s.status.is_running() => s
+                        .started
+                        .is_some_and(|t| t.elapsed() >= AUTO_RESTART_RESET_AFTER),
+                    Some(_) => true,
+                };
+                if settled {
+                    self.auto_restarts.remove(&pi);
+                }
+            }
+        }
+        let (rows, cols) = self.pane;
+        let changed = !start.is_empty() || !give_up.is_empty();
+        for (pi, tries) in start {
+            self.auto_restarts.insert(pi, (tries, Instant::now()));
+            self.begin_start(pi, rows, cols, Vec::new());
+            self.message = (
+                format!(
+                    "Restarting {} (auto-restart #{tries})",
+                    self.cfg.projects[pi].name
+                ),
+                Notice::Info,
+            );
+        }
+        for pi in give_up {
+            self.message = (
+                format!(
+                    "Gave up auto-restarting {}; it keeps crashing",
+                    self.cfg.projects[pi].name
+                ),
+                Notice::Warn,
+            );
+        }
+        if changed {
+            self.dirty = true;
+        }
     }
 
     /// Agents waiting for you (`?`) plus finished tasks you have not opened:
@@ -1628,9 +1776,30 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
 
 /// A project's SITREPs open for reading: the list, the picked one's text and
 /// how far it is scrolled.
+/// One row of the global search (`G`): project `pi` with `count` matches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct GHit {
+    pub(crate) pi: usize,
+    pub(crate) count: usize,
+}
+
+/// Global search over every session's scrollback (`G` in the manager).
+/// Typing narrows the hit list live; `Enter` jumps to the picked session
+/// with the same query loaded into its own find (`F`).
+pub(crate) struct GSearch {
+    pub(crate) query: String,
+    pub(crate) hits: Vec<GHit>,
+    pub(crate) sel: usize,
+}
+
 pub(crate) struct History {
     project: String,
     items: Vec<(String, std::path::PathBuf)>,
+    /// Visible rows into `items` when `query` filters the list.
+    view: Vec<usize>,
+    /// List filter text (`/` focuses it, `Enter` keeps, `Esc` clears).
+    query: String,
+    typing: bool,
     sel: usize,
     top: std::cell::Cell<usize>,
     scroll: u16,
@@ -1642,9 +1811,13 @@ pub(crate) struct History {
 }
 impl History {
     fn open(project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
+        let view: Vec<usize> = (0..items.len()).collect();
         let mut h = Self {
             project: project.to_string(),
             items,
+            view,
+            query: String::new(),
+            typing: false,
             sel: 0,
             top: Default::default(),
             scroll: 0,
@@ -1655,19 +1828,30 @@ impl History {
         h.load();
         h
     }
+    fn current(&self) -> Option<&(String, std::path::PathBuf)> {
+        self.view.get(self.sel).and_then(|&i| self.items.get(i))
+    }
     fn load(&mut self) {
         self.scroll = 0;
-        self.text = self.items.get(self.sel).map_or_else(String::new, |(_, p)| {
+        self.text = self.current().map_or_else(String::new, |(_, p)| {
             let t = std::fs::read_to_string(p).unwrap_or_else(|e| format!("Cannot read: {e}"));
-            t.chars().take(20_000).collect() // a runaway file must not stall drawing
+            // Agent-written files are untrusted terminal input: strip control
+            // characters so escape sequences cannot reach the outer terminal.
+            sanitize_chrome_text(&t).chars().take(20_000).collect()
         });
     }
     fn select(&mut self, i: usize) {
-        let i = i.min(self.items.len().saturating_sub(1));
+        let i = i.min(self.view.len().saturating_sub(1));
         if i != self.sel {
             self.sel = i;
             self.load();
         }
+    }
+    /// Recompute the visible rows after the filter text changed.
+    fn refilter(&mut self) {
+        self.view = crate::ledger::filter_sitrep_names(&self.items, &self.query);
+        self.sel = 0;
+        self.load();
     }
     /// Screen rows the text takes once wrapped. Long lines (an agent's last
     /// output) wrap, and counting them as one row left the end out of reach.

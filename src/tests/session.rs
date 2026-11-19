@@ -70,6 +70,7 @@ fn stop_kills_process_tree_unix() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -115,6 +116,7 @@ fn stop_kills_orphaned_grandchildren_unix() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..50 {
@@ -179,6 +181,7 @@ fn stop_kills_process_tree() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -234,6 +237,7 @@ fn stop_kills_orphaned_grandchildren() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
@@ -285,6 +289,7 @@ fn session_sampling_tracks_a_live_tree() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pid");
@@ -334,6 +339,7 @@ fn pty_smoke() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     for _ in 0..100 {
@@ -360,6 +366,7 @@ fn tree_cpu_does_not_hide_a_waiting_prompt() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     s.usage = Some(Usage { cpu: 50.0, mem: 0 });
@@ -519,6 +526,7 @@ fn missing_folder_is_named_in_the_error() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -538,6 +546,7 @@ fn resize_repaint_is_not_agent_output() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 30, 100).unwrap();
     let settle = |s: &mut Session, ms: u64| {
@@ -571,6 +580,7 @@ fn scrollback_search_finds_ascii_and_hangul_matches_and_jumps() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 5, 40).unwrap();
     s.parser.process(

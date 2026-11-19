@@ -1,4 +1,4 @@
-use crate::config::{is_bare_shell, pty_env, size, Kind, Project};
+use crate::config::{is_bare_shell, pty_env, sanitize_chrome_line, size, Kind, Project};
 use crate::ledger;
 #[cfg(unix)]
 use crate::sys::kill_group;
@@ -289,7 +289,7 @@ pub fn prompt_summary(screen_text: &str) -> Option<String> {
         .copied()
         .find(|l| asks(l))
         .or_else(|| lines.first().copied())
-        .map(str::to_string)
+        .map(|l| sanitize_chrome_line(l.trim()))
 }
 
 /// A status line led by a spinner glyph and an ellipsis: "✻ Pondering…".
@@ -907,10 +907,14 @@ impl Session {
         self.usage = Some(Usage { cpu, mem });
     }
     /// Record the program running inside this shell session. Ignored for a
-    /// previous process, like `apply_usage`.
+    /// previous process, like `apply_usage`. Control characters are dropped:
+    /// the label is drawn into the pane title, and process names come from
+    /// programs the user runs.
     pub fn apply_label(&mut self, pid: u32, label: Option<String>) {
         if self.status.is_running() && self.child.process_id() == Some(pid) {
-            self.fg_name = label;
+            self.fg_name = label
+                .map(|l| sanitize_chrome_line(&l))
+                .filter(|l| !l.is_empty());
         }
     }
     /// Forget usage once the session stops running.

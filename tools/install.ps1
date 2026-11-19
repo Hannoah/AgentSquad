@@ -115,14 +115,23 @@ if (($userPath -split ";") -notcontains $InstallDir) {
 # finishes scanning it, so retry before giving up. Files are already in
 # place at this point, so a persistent failure warns instead of throwing.
 $verified = $false
+$said = ""
 for ($i = 0; $i -lt 3 -and -not $verified; $i++) {
   if ($i -gt 0) { Start-Sleep -Seconds 3 }
   try {
-    & (Join-Path $InstallDir "squad.exe") --version
+    $said = (& (Join-Path $InstallDir "squad.exe") --version | Out-String).Trim()
     $verified = $true
   } catch {
     if ($i -eq 2) {
       Write-Warning "Installed to $InstallDir, but the launch check failed: $($_.Exception.Message). Run 'squad --version' yourself."
     }
+  }
+}
+# The hash already proves what was installed, but a version mismatch still
+# warns (a stale .old binary or an AV quarantine swap would show up here).
+if ($verified -and $tagLabel -ne "latest") {
+  $want = "squad $($tag.TrimStart('v'))"
+  if ($said -ne $want) {
+    Write-Warning "Installed build says '$said', expected '$want'."
   }
 }

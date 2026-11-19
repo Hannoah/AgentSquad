@@ -44,7 +44,7 @@ impl App {
         // The new tree must be visible, so drop any filter and follow the agent.
         self.filter_buf.clear();
         self.refresh_prefixes();
-        self.order = display_order(&self.cfg.projects);
+        self.refresh_filter();
         self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         let msg = match stored {
             Some(c) => format!("{name} now reports to {c}"),
@@ -359,10 +359,125 @@ impl App {
         }
         self.cfg.projects[pi].pinned = pinned;
         self.refresh_prefixes();
-        self.order = display_order(&self.cfg.projects);
+        self.refresh_filter();
         self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         let what = if pinned { "Pinned" } else { "Unpinned" };
         self.message = (format!("{what} {name}"), Notice::Info);
+    }
+
+    /// `G`: search every session's scrollback without leaving the manager.
+    /// Typing narrows the hit list live; `Enter` jumps to the picked
+    /// session with the same query loaded into its own find (`F`).
+    pub(super) fn open_gsearch(&mut self) {
+        self.gsearch = Some(GSearch {
+            query: String::new(),
+            hits: Vec::new(),
+            sel: 0,
+        });
+        self.dirty = true;
+    }
+
+    /// Recompute the global hit list for the current query, in sidebar order.
+    /// Sessions keep their scroll position: `search_scrollback` restores it.
+    pub(super) fn refresh_gsearch(&mut self) {
+        let query = self
+            .gsearch
+            .as_ref()
+            .map(|g| g.query.clone())
+            .unwrap_or_default();
+        let order = self.order.clone();
+        let mut hits = Vec::new();
+        if !query.is_empty() {
+            for &pi in &order {
+                let n = self
+                    .sessions
+                    .get_mut(pi)
+                    .and_then(|o| o.as_mut())
+                    .map(|s| s.search_scrollback(&query).len())
+                    .unwrap_or(0);
+                if n > 0 {
+                    hits.push(GHit { pi, count: n });
+                }
+            }
+        }
+        if let Some(g) = self.gsearch.as_mut() {
+            g.hits = hits;
+            g.sel = g.sel.min(g.hits.len().saturating_sub(1));
+        }
+        self.dirty = true;
+    }
+
+    /// Jump to the picked global hit: select its project and load the same
+    /// query into that session's own find, scrolled to the newest match.
+    /// A project filtered out of the sidebar clears the filter first.
+    pub(super) fn jump_gsearch(&mut self) {
+        let (pi, query, total) = match self.gsearch.as_ref() {
+            Some(g) if !g.query.is_empty() => match g.hits.get(g.sel) {
+                Some(hit) => (
+                    hit.pi,
+                    g.query.clone(),
+                    g.hits.iter().map(|h| h.count).sum::<usize>(),
+                ),
+                None => return,
+            },
+            _ => return,
+        };
+        self.gsearch = None;
+        if !self.order.contains(&pi) {
+            self.filter_buf.clear();
+            self.refresh_filter();
+        }
+        if let Some(pos) = self.order.iter().position(|&x| x == pi) {
+            self.selected = pos;
+        }
+        self.search_buf.set(&query);
+        self.search_pi = Some(pi);
+        self.sync_search(true);
+        let name = self
+            .cfg
+            .projects
+            .get(pi)
+            .map(|p| p.name.as_str())
+            .unwrap_or("?");
+        self.message = (
+            format!("{total} matches for \"{query}\" ({name} selected)"),
+            Notice::Info,
+        );
+        self.dirty = true;
+    }
+
+    pub(super) fn key_gsearch(&mut self, k: KeyEvent) {
+        if self.gsearch.is_none() {
+            return;
+        }
+        match k.code {
+            KeyCode::Esc => self.gsearch = None,
+            KeyCode::Enter => self.jump_gsearch(),
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(g) = self.gsearch.as_mut() {
+                    g.sel = (g.sel + 1).min(g.hits.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(g) = self.gsearch.as_mut() {
+                    g.sel = g.sel.saturating_sub(1);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(g) = self.gsearch.as_mut() {
+                    g.query.pop();
+                }
+                self.refresh_gsearch();
+            }
+            KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(g) = self.gsearch.as_mut() {
+                    g.query.push(c);
+                }
+                self.refresh_gsearch();
+            }
+            _ => {}
+        }
+        self.dirty = true;
     }
 
     /// `h`: read the selected project's SITREPs without leaving squad.
@@ -387,8 +502,35 @@ impl App {
         let Some(h) = self.history.as_mut() else {
             return;
         };
+        // While filtering, printable keys narrow the entry list.
+        if h.typing {
+            match k.code {
+                KeyCode::Esc => {
+                    h.query.clear();
+                    h.typing = false;
+                    h.refilter();
+                }
+                KeyCode::Enter => h.typing = false,
+                KeyCode::Backspace => {
+                    h.query.pop();
+                    h.refilter();
+                }
+                KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    h.query.push(c);
+                    h.refilter();
+                }
+                _ => {}
+            }
+            self.dirty = true;
+            return;
+        }
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => self.history = None,
+            KeyCode::Char('/') => {
+                h.query.clear();
+                h.typing = true;
+                h.refilter();
+            }
             KeyCode::Down | KeyCode::Char('j') => h.select(h.sel + 1),
             KeyCode::Up | KeyCode::Char('k') => h.select(h.sel.saturating_sub(1)),
             KeyCode::Char('J') | KeyCode::Char(']') => h.scroll_by(1),
@@ -444,9 +586,23 @@ impl App {
         // A pending kill takes only the answer; anything but `y` cancels.
         if let Some(t) = p.confirm.take() {
             if matches!(k.code, KeyCode::Char('y') | KeyCode::Enter) {
-                kill_trees(&[t.pid]);
-                self.message = (format!("Killed {} ({})", t.name, t.pid), Notice::Info);
-                p.refresh();
+                // Re-resolve the PID now: the row may be stale and PIDs get
+                // recycled, so a stale row must not kill an unrelated tree.
+                let recorded = p
+                    .cmd
+                    .as_ref()
+                    .and_then(|(cpid, cmd)| (*cpid == t.pid).then_some(cmd.as_deref()).flatten());
+                match kill_recheck(t.pid, recorded) {
+                    Some(why) => {
+                        self.message = (format!("Not killing {}: {why}", t.name), Notice::Warn);
+                        p.refresh();
+                    }
+                    None => {
+                        kill_trees(&[t.pid]);
+                        self.message = (format!("Killed {} ({})", t.name, t.pid), Notice::Info);
+                        p.refresh();
+                    }
+                }
             }
             return;
         }
@@ -598,9 +754,7 @@ impl App {
                             remove_project(&mut self.cfg.projects, &mut self.sessions, pi);
                             self.refresh_prefixes();
                             // Keep an active filter across the removal.
-                            self.order =
-                                apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                            self.selected = self.selected.min(self.order.len().saturating_sub(1));
+                            self.refresh_filter();
                             // Whoever shared its folder or reported to it reads a current roster.
                             ledger::write_rosters(&self.cfg.projects);
                             self.message = (format!("Removed {name}."), Notice::Warn);
@@ -618,8 +772,36 @@ impl App {
         }
     }
 
+    /// Flip crash auto-restart for a service, effective on the next crash.
+    pub(super) fn toggle_restart_on_crash(&mut self, pi: usize) {
+        let Some(p) = self.cfg.projects.get(pi) else {
+            return;
+        };
+        if p.kind != Kind::Service {
+            return;
+        }
+        let name = p.name.clone();
+        let next = !p.restart_on_crash;
+        match persist_restart_on_crash(&name, next) {
+            Ok(()) => {
+                if let Some(q) = self.cfg.projects.iter_mut().find(|q| q.name == name) {
+                    q.restart_on_crash = next;
+                }
+                self.message = (
+                    format!("{name} auto-restart {}", if next { "on" } else { "off" }),
+                    Notice::Info,
+                );
+            }
+            Err(e) => {
+                self.message = (format!("Save failed: {e:#}"), Notice::Error);
+            }
+        }
+        self.dirty = true;
+    }
+
     /// Run one row of the right-click quick-action menu. `action` is the
-    /// row index into `context_menu_items(running)`.
+    /// row index into the kind-aware menu (services get a trailing
+    /// auto-restart row past the base rows).
     pub(super) fn run_context_action(&mut self, pi: usize, action: usize, rows: u16, cols: u16) {
         if self.cfg.projects.get(pi).is_none() {
             return;
@@ -629,8 +811,15 @@ impl App {
         if let Some(pos) = self.order.iter().position(|&x| x == pi) {
             self.selected = pos;
         }
+        // Services get one trailing row: the crash auto-restart toggle.
+        let service_extra = self
+            .cfg
+            .projects
+            .get(pi)
+            .is_some_and(|p| p.kind == Kind::Service);
         if slot_running(&self.sessions, pi) {
             match action {
+                13 if service_extra => self.toggle_restart_on_crash(pi),
                 0 => self.mode = Mode::Focus,
                 1 => {
                     self.mode = Mode::Send;
@@ -653,6 +842,7 @@ impl App {
             return;
         }
         match action {
+            11 if service_extra => self.toggle_restart_on_crash(pi),
             0 => self.open_session(pi, rows, cols),
             1 => {
                 self.mode = Mode::Send;
@@ -678,7 +868,14 @@ impl App {
         let Some(pi) = self.context_menu else {
             return;
         };
-        let items = context_menu_items(slot_running(&self.sessions, pi));
+        let (kind, restart_on_crash) = self
+            .cfg
+            .projects
+            .get(pi)
+            .map(|p| (p.kind, p.restart_on_crash))
+            .unwrap_or((Kind::Agent, false));
+        let items =
+            context_menu_items_for(slot_running(&self.sessions, pi), kind, restart_on_crash);
         let count = items.len();
         match k.code {
             KeyCode::Esc => self.context_menu = None,
@@ -1678,6 +1875,24 @@ impl App {
                         .is_some_and(|s| {
                             s.status.is_running() && s.phase() == AgentPhase::NeedsInput
                         })
+            })
+            .collect()
+    }
+
+    /// `(name, question)` for agents waiting on input, in sidebar order,
+    /// for the sidebar's bottom strip.
+    pub(crate) fn waiting_list(&self) -> Vec<(String, String)> {
+        self.waiting_projects()
+            .into_iter()
+            .filter_map(|pi| {
+                let p = self.cfg.projects.get(pi)?;
+                let q = self
+                    .sessions
+                    .get(pi)
+                    .and_then(|o| o.as_ref())
+                    .and_then(|s| s.prompt_hint.clone())
+                    .unwrap_or_else(|| "Awaiting orders".to_string());
+                Some((p.name.clone(), q))
             })
             .collect()
     }

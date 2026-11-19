@@ -14,8 +14,8 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-audit
       - run: cargo audit
@@ -24,7 +24,7 @@ jobs:
   readme-encoding:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: |
           if grep -nF -e '??' -e "$(printf '\xef\xbf\xbd')" README.md; then
             echo "::error file=README.md::Corrupted characters ('??' or U+FFFD); restore them and save as UTF-8"
@@ -37,11 +37,14 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Third-party actions are pinned to commit SHAs (comments name the
+      # tag), so a retagged upstream release cannot inject code into CI.
+      # Re-pin with the tag's current SHA to take an upstream update.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Format
         run: cargo fmt --check
       - name: Clippy

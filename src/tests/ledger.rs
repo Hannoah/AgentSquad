@@ -86,6 +86,7 @@ fn ledger_session_records_start_and_exit() {
         ledger: true,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
     let (msg, _) = s.ledger_note.take().expect("creation is announced once");
@@ -138,6 +139,7 @@ fn joining_a_commander_files_a_report_in_with_the_head_count() {
         ledger: true,
         reports_to: under.map(Into::into),
         pinned: false,
+        restart_on_crash: false,
     };
     let reports = || std::fs::read_to_string(dir.join(".squad/REPORTS.md")).unwrap_or_default();
     // Two agents join "lead": each report-in carries the new head count.
@@ -190,6 +192,7 @@ fn report_in_opens_the_ledger_when_there_is_none() {
         ledger: false,
         reports_to: under.map(Into::into),
         pinned: false,
+        restart_on_crash: false,
     };
     assert!(!dir.join(".squad").exists());
     crate::ledger::report_transfer(&[mk("lead", None), mk("a", Some("lead"))], "a", None);
@@ -266,6 +269,33 @@ fn stop_hook_ignores_folders_without_ledger_or_git() {
 }
 
 #[test]
+fn stop_hook_quoted_flag_does_not_disable_enforcement() {
+    use crate::ledger;
+    use std::{fs, thread::sleep, time::Duration};
+    let dir = scratch_dir("hook-quote");
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git init");
+    ledger::ensure(&dir).unwrap();
+    ledger::event(&dir, "start t");
+    sleep(Duration::from_millis(50));
+    fs::write(dir.join("a.txt"), "work").unwrap();
+    // A transcript merely quoting the flag must not disable enforcement.
+    let quoted = r#"{"transcript": "user wrote \"stop_hook_active\": true in chat"}"#;
+    assert!(
+        ledger::stop_hook(quoted, &dir).is_some(),
+        "quoted flag must not bypass the block"
+    );
+    // ...while a real top-level boolean still lets the agent stop.
+    assert!(ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir).is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn hook_settings_file_runs_squad_hook_stop() {
     use crate::ledger;
     let dir = scratch_dir("hook-file");
@@ -313,4 +343,21 @@ fn sitreps_list_newest_first_with_readable_labels() {
         ["20261109T010000Z-new.md", "20261108T061200Z-old.md"]
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn history_filter_matches_entry_names_case_insensitively() {
+    use crate::ledger::filter_sitrep_names;
+    use std::path::PathBuf;
+    let items = vec![
+        ("20261108T061200Z-auto.md".to_string(), PathBuf::from("a")),
+        (
+            "20261109T010000Z-Add-Auth.md".to_string(),
+            PathBuf::from("b"),
+        ),
+    ];
+    assert_eq!(filter_sitrep_names(&items, ""), vec![0, 1]);
+    assert_eq!(filter_sitrep_names(&items, "auto"), vec![0]);
+    assert_eq!(filter_sitrep_names(&items, "ADD-auth"), vec![1]);
+    assert!(filter_sitrep_names(&items, "zzz").is_empty());
 }

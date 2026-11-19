@@ -38,7 +38,14 @@ echo "SHA256 verified: $actual"
 mkdir -p "$dir"
 tar -xzf "$tmp/$asset" -C "$tmp" squad
 install -m 755 "$tmp/squad" "$dir/squad"
-echo "Installed $("$dir/squad" --version) to $dir/squad"
+said="$("$dir/squad" --version)"
+echo "Installed $said to $dir/squad"
+# The hash already proves what was installed, but a version mismatch still
+# warns (a stale cache or mixed-up asset would show up here).
+if [ "$version" != "latest" ]; then
+  want="squad ${version#v}"
+  [ "$said" = "$want" ] || echo "Warning: installed build says '$said', expected '$want'." >&2
+fi
 
 case ":$PATH:" in
   *":$dir:"*) ;;

@@ -22,10 +22,12 @@
 2. README의 `-Version vX.Y.Z` 예시를 새 버전으로 맞춘다.
 3. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `tools\cargo-windows.ps1 test --locked`.
 4. 커밋, `main`에 푸시, `git tag vX.Y.Z`, 태그 푸시.
-5. 워크플로 결과와 릴리스 에셋을 확인한다.
+5. 워크플로 결과와 릴리스 에셋을 확인한다. 에셋별 빌드 출처 증명(attestation)도 함께 올라가니 받자마자 검증한다: `gh attestation verify <asset> --repo Hannoah/AgentSquad` (실패하면 설치하지 말고 릴리스를 내린다).
 
 `gh`가 설치·로그인되어 있으면 `gh run view <id>`, `gh run rerun <id> --failed`, `gh release view vX.Y.Z`로 확인한다(2026-11-16부터 이 PC에 있음). 없으면 공개 API로 확인한다:
 `https://api.github.com/repos/Hannoah/AgentSquad/actions/runs` 와 `.../releases/tags/vX.Y.Z`.
+
+서드파티 액션은 커밋 SHA로 고정한다(주석에 태그 병기). `stable` 브랜치를 쓰는 dtolnay/rust-toolchain도 SHA로 고정했으므로 툴체인 갱신은 SHA를 새 값으로 바꾸는 것으로 한다.
 
 ## 코드 서명 (SignPath Foundation)
 

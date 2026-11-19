@@ -79,6 +79,7 @@ fn every_agent_project_gets_a_squad_folder_when_it_has_none() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let agent = scratch_dir("ensure-agent");
     ensure_agent(&mk(&agent, Kind::Agent));

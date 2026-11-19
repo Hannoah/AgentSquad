@@ -69,6 +69,7 @@ impl App {
         self.draw_history(f);
         self.draw_git_view(f);
         self.draw_procs(f);
+        self.draw_gsearch(f);
         self.draw_quick_reply(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
@@ -197,7 +198,11 @@ impl App {
             .border_type(BorderType::Rounded)
             .title(Line::from(vec![
                 Span::styled(
-                    format!(" Git: {} [{}] ", g.project, g.branch),
+                    format!(
+                        " Git: {} [{}] ",
+                        sanitize_chrome_line(&g.project),
+                        sanitize_chrome_line(&g.branch)
+                    ),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(ratatui::style::Modifier::BOLD),
@@ -262,7 +267,8 @@ impl App {
                     };
                     let mark = if active { "▸" } else { " " };
                     let avail = usize::from(left_col.width).saturating_sub(5);
-                    let path_s = shorten_middle(&rel.display().to_string(), avail);
+                    let path_s =
+                        shorten_middle(&sanitize_chrome_line(&rel.display().to_string()), avail);
                     Line::from(vec![
                         Span::styled(format!("{mark}{code} "), tag_style),
                         Span::styled(path_s, row_style),
@@ -298,6 +304,93 @@ impl App {
         }
     }
 
+    /// Global search results (`G`): per-session match counts, newest
+    /// sessions first in sidebar order; `Enter` jumps to the picked one.
+    fn draw_gsearch(&self, f: &mut Frame) {
+        let Some(g) = &self.gsearch else {
+            return;
+        };
+        let shown = g.hits.len().min(10);
+        let popup = gsearch_popup(f.area(), shown.max(1));
+        f.render_widget(ratatui::widgets::Clear, popup);
+        let total: usize = g.hits.iter().map(|h| h.count).sum();
+        let title = if g.query.is_empty() {
+            " Find in all sessions ".to_string()
+        } else {
+            format!(" Find: {} ({} hits) ", fit(&g.query, 24), total)
+        };
+        let footer = if g.query.is_empty() {
+            " type to search · Esc closes "
+        } else {
+            " ↑↓/j/k pick · Enter jump · Esc closes "
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )))
+            .title_bottom(
+                Line::from(Span::styled(
+                    footer,
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))
+                .right_aligned(),
+            );
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        let inner_w = usize::from(inner.width);
+        let mut lines: Vec<Line> = Vec::new();
+        if g.query.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Every session's scrollback is searched as you type.",
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            )));
+        } else if g.hits.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No matches anywhere.",
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        for (i, hit) in g.hits.iter().take(10).enumerate() {
+            let name = self
+                .cfg
+                .projects
+                .get(hit.pi)
+                .map(|p| sanitize_chrome_line(&p.name))
+                .unwrap_or_else(|| "?".to_string());
+            let row = format!(
+                "{} — {} {}",
+                fit(&name, inner_w.saturating_sub(14)),
+                hit.count,
+                if hit.count == 1 { "match" } else { "matches" }
+            );
+            let style = if i == g.sel {
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(ratatui::style::Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let mark = if i == g.sel { "▸ " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(mark, style),
+                Span::styled(row, style),
+            ]));
+        }
+        if g.hits.len() > 10 {
+            lines.push(Line::from(Span::styled(
+                format!("…and {} more sessions", g.hits.len() - 10),
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            )));
+        }
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+
     fn draw_quick_reply(&self, f: &mut Frame) {
         let Some(qr) = &self.quick_reply else {
             return;
@@ -308,7 +401,8 @@ impl App {
             .cfg
             .projects
             .get(qr.pi)
-            .map_or("?", |p| p.name.as_str());
+            .map(|p| sanitize_chrome_line(&p.name))
+            .unwrap_or_else(|| "?".to_string());
         let waiting = self.waiting_projects();
         let queue_note = if waiting.len() > 1 {
             let pos = waiting
@@ -403,18 +497,38 @@ impl App {
         };
         let popup = history_popup(f.area());
         f.render_widget(ratatui::widgets::Clear, popup);
+        let count_note = if h.query.is_empty() {
+            format!(
+                " History: {} ({}) ",
+                sanitize_chrome_line(&h.project),
+                h.items.len()
+            )
+        } else {
+            format!(
+                " History: {} ({}/{} · /{} ) ",
+                h.project,
+                h.view.len(),
+                h.items.len(),
+                h.query
+            )
+        };
+        let footer = if h.typing {
+            " type to filter · Enter keeps · Esc clears "
+        } else {
+            " ↑↓/j/k pick · / filter · PgUp/PgDn/J/K/wheel scroll · Esc closes "
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(Line::from(Span::styled(
-                format!(" History: {} ({}) ", h.project, h.items.len()),
+                count_note,
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(ratatui::style::Modifier::BOLD),
             )))
             .title_bottom(
                 Line::from(Span::styled(
-                    " ↑↓/j/k pick · PgUp/PgDn/J/K/wheel scroll · Esc closes ",
+                    footer,
                     Style::default().add_modifier(ratatui::style::Modifier::DIM),
                 ))
                 .right_aligned(),
@@ -425,12 +539,14 @@ impl App {
         let start = keep_visible(h.top.get(), h.sel, rows);
         h.top.set(start);
         let list: Vec<Line> = h
-            .items
+            .view
             .iter()
+            .copied()
             .enumerate()
             .skip(start)
             .take(rows)
-            .map(|(i, (name, _))| {
+            .map(|(i, pi)| {
+                let name = h.items.get(pi).map(|(n, _)| n.as_str()).unwrap_or("?");
                 let is_auto = crate::history::is_auto(name);
                 let style = if i == h.sel {
                     Style::default()
@@ -541,11 +657,14 @@ impl App {
             .skip(start)
             .take(rows)
             .map(|(i, it)| {
+                // Process names come from the OS: strip control characters
+                // so a hostile program name cannot inject escapes.
                 let owner_tag = self
                     .proc_owner(it)
-                    .map(|s| format!(" [{s}]"))
+                    .map(|s| format!(" [{}]", sanitize_chrome_line(s)))
                     .unwrap_or_default();
-                let name = take_cols(it.name.chars(), name_w.saturating_sub(width(&owner_tag)));
+                let clean_name = sanitize_chrome_line(&it.name);
+                let name = take_cols(clean_name.chars(), name_w.saturating_sub(width(&owner_tag)));
                 let style = if i == p.sel {
                     Style::default().bg(Color::Cyan).fg(Color::Black)
                 } else {
@@ -574,29 +693,30 @@ impl App {
         }
         if let (true, Some(it)) = (detail_h > 0, p.items.get(p.sel)) {
             let owner = match self.proc_owner(it) {
-                Some(name) => format!("squad session: {name}"),
+                Some(name) => format!("squad session: {}", sanitize_chrome_line(name)),
                 None => "not a squad session".to_string(),
             };
             let parent = if it.parent.is_empty() {
                 it.ppid.to_string()
             } else {
-                format!("{} ({})", it.ppid, it.parent)
+                format!("{} ({})", it.ppid, sanitize_chrome_line(&it.parent))
             };
             let cmd = match &p.cmd {
-                Some((pid, Some(c))) if *pid == it.pid => c.as_str(),
-                _ => "(command line unavailable)",
+                Some((pid, Some(c))) if *pid == it.pid => sanitize_chrome_line(c),
+                _ => "(command line unavailable)".to_string(),
             };
             let text = vec![
-                Line::from(format!("{} · PID {} · parent {parent}", it.name, it.pid)),
+                Line::from(format!(
+                    "{} · PID {} · parent {parent}",
+                    sanitize_chrome_line(&it.name),
+                    it.pid
+                )),
                 Line::from(format!(
                     "RAM {} · CPU time {} · {owner}",
                     mem_label(it.mem),
                     uptime_label(it.cpu_secs)
                 )),
-                Line::from(Span::styled(
-                    cmd.to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )),
+                Line::from(Span::styled(cmd, Style::default().fg(Color::DarkGray))),
             ];
             f.render_widget(
                 Paragraph::new(text)
@@ -609,7 +729,11 @@ impl App {
         let line = match &p.confirm {
             Some(t) => {
                 let mut spans = vec![Span::styled(
-                    format!("Kill {} ({}) and its children?  ", t.name, t.pid),
+                    format!(
+                        "Kill {} ({}) and its children?  ",
+                        sanitize_chrome_line(&t.name),
+                        t.pid
+                    ),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(ratatui::style::Modifier::BOLD),
@@ -631,9 +755,11 @@ impl App {
     pub(super) fn draw_context_menu(&self, f: &mut Frame) {
         if let Some(pi) = self.context_menu {
             if let Some(p) = self.cfg.projects.get(pi) {
-                let lines = context_menu_lines_at(
+                let lines = context_menu_lines_at_for(
                     &p.name,
                     slot_running(&self.sessions, pi),
+                    p.kind,
+                    p.restart_on_crash,
                     Some(self.context_sel),
                 );
                 modal(f, "Actions", Color::Cyan, lines);
@@ -706,7 +832,16 @@ impl App {
                 let fg = sess.and_then(|s| s.fg_name.as_deref());
                 let tree = self.rank_prefixes.get(pi).map(String::as_str).unwrap_or("");
                 let pin = if p.pinned { "*" } else { "" };
-                let shown = format!("{tree}{}{pin}", live_name(p, fg));
+                let retry = if p.kind == Kind::Service && p.restart_on_crash {
+                    "~"
+                } else {
+                    ""
+                };
+                // Project names and live program names come from folders and
+                // processes: strip control characters so a crafted name
+                // cannot inject escape sequences into the outer terminal.
+                let shown =
+                    sanitize_chrome_line(&format!("{tree}{}{pin}{retry}", live_name(p, fg)));
                 let shown_name: &str = &shown;
                 let mut detail = String::new();
                 if is_running {
@@ -740,6 +875,7 @@ impl App {
                     detail.push(' ');
                     detail.push_str(tag);
                 }
+                let detail = sanitize_chrome_line(&detail);
                 let mark = if Some(pi) == sel_pi { "▎" } else { " " };
                 let row_style = if Some(pi) == sel_pi {
                     selected_row_style()
@@ -1046,6 +1182,15 @@ impl App {
                 Style::default().add_modifier(ratatui::style::Modifier::DIM),
             ));
             block = block.title_top(Line::from(right_spans).right_aligned());
+            // Waiting questions stay readable when their rows scroll away.
+            if let Some(note) = waiting_summary(&self.waiting_list(), usize::from(panel.width)) {
+                block = block.title_bottom(Line::from(Span::styled(
+                    note,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                )));
+            }
         }
         f.render_widget(List::new(window).block(block), panel);
         if total_items > visible_rows {
@@ -1068,10 +1213,13 @@ impl App {
         let sel_status: &str = &sel_status_text;
         let sel_fg = sel_session.and_then(|s| s.fg_name.as_deref());
         let usage_note = sel_session.and_then(|s| s.usage).map(pane_usage_note);
-        let scroll_note = sel_session
-            .map(|s| s.parser.screen().scrollback())
-            .filter(|&n| n > 0)
-            .map(|n| format!("↑ history {n} · Shift+End live"));
+        let scroll_note = sel_session.and_then(|s| {
+            let n = s.parser.screen().scrollback();
+            let fresh = s
+                .last_output
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5));
+            scroll_note_text(n, fresh)
+        });
         let zoom_note = (self.zoom && self.mode == Mode::Focus).then(|| "ZOOM".to_string());
         // The mode shows in the border color and the status-bar chip, so the
         // title keeps only what the session is and how it is doing.
@@ -1083,7 +1231,7 @@ impl App {
                     pane_status_display(sel_status, sel_uptime, self.tick, p.kind, sel_phase);
                 Line::from(vec![
                     Span::styled(
-                        live_pane_title(p, sel_fg),
+                        sanitize_chrome_line(&live_pane_title(p, sel_fg)),
                         Style::default().add_modifier(ratatui::style::Modifier::BOLD),
                     ),
                     Span::raw(" ["),
@@ -1473,14 +1621,34 @@ impl App {
         } else if self.mode == Mode::Send {
             let name = sel_pi
                 .and_then(|pi| self.cfg.projects.get(pi))
-                .map(|p| p.name.as_str())
-                .unwrap_or("?");
+                .map(|p| sanitize_chrome_line(&p.name))
+                .unwrap_or_else(|| "?".to_string());
             let (label, hint) = match self.send_to {
                 SendTo::One => (format!("Send to {name}: "), " (Enter sends, Esc cancels)"),
-                SendTo::All => (
-                    format!("Order to all under {name}: "),
-                    " (Enter sends, Esc cancels)",
-                ),
+                SendTo::All => {
+                    // Preview who actually gets the order: running agents
+                    // that are not waiting on a question.
+                    let n = sel_pi
+                        .map(|ci| {
+                            all_subordinates(&self.cfg.projects, ci)
+                                .into_iter()
+                                .filter(|&j| {
+                                    self.sessions
+                                        .get(j)
+                                        .and_then(|o| o.as_ref())
+                                        .is_some_and(|s| {
+                                            s.status.is_running()
+                                                && s.phase() != AgentPhase::NeedsInput
+                                        })
+                                })
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    (
+                        format!("Order to {n} under {name}: "),
+                        " (Enter sends, Esc cancels)",
+                    )
+                }
                 SendTo::Under => (
                     format!("{name} reports to (empty clears): "),
                     " (Tab completes, Enter saves, Esc cancels)",
@@ -1558,8 +1726,11 @@ impl App {
                 bar.extend(fitted_hints(Mode::Manager, input_w));
             }
         } else {
+            // Status messages carry project names, paths and tool errors:
+            // strip control characters so none of them can inject escape
+            // sequences into the outer terminal.
             bar.push(Span::styled(
-                fit(&self.message.0, input_w),
+                fit(&sanitize_chrome_line(&self.message.0), input_w),
                 notice_style(self.message.1),
             ));
         }
@@ -1657,28 +1828,59 @@ impl App {
     /// The confirmation popups that are open, in the order a click outside
     /// them dismisses.
     pub(super) fn confirm_modals(&self) -> Vec<(&'static str, Color, Vec<Line<'static>>)> {
-        let name_of = |pi: usize| self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+        let name_of = |pi: usize| {
+            self.cfg
+                .projects
+                .get(pi)
+                .map(|p| sanitize_chrome_line(&p.name))
+                .unwrap_or_else(|| "?".to_string())
+        };
         let mut v = Vec::new();
         if let Some(pi) = self.confirm_stop {
-            v.push(("Stop session", Color::Red, confirm_stop_lines(name_of(pi))));
+            v.push(("Stop session", Color::Red, confirm_stop_lines(&name_of(pi))));
         }
         if let Some(pi) = self.confirm_remove {
             v.push((
                 "Remove project",
                 Color::Red,
-                confirm_remove_lines(name_of(pi)),
+                confirm_remove_lines(&name_of(pi)),
             ));
         }
         if let Some(pi) = self.confirm_restart {
             v.push((
                 "Restart session",
                 Color::Red,
-                confirm_restart_lines(name_of(pi)),
+                confirm_restart_lines(&name_of(pi)),
             ));
         }
         if self.confirm_quit {
             let n = live_session_count(&self.sessions);
-            v.push(("Quit", Color::Red, confirm_quit_lines(n)));
+            let mut lines = confirm_quit_lines(n);
+            // Name what quitting discards: running sessions are stopped.
+            let names: Vec<String> = self
+                .cfg
+                .projects
+                .iter()
+                .enumerate()
+                .filter(|(pi, _)| slot_running(&self.sessions, *pi))
+                .map(|(_, p)| sanitize_chrome_line(&p.name))
+                .collect();
+            if !names.is_empty() {
+                let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+                let tail = if names.len() > 5 {
+                    format!("{} …and {} more", shown, names.len() - 5)
+                } else {
+                    shown
+                };
+                lines.insert(
+                    1,
+                    Line::from(Span::styled(
+                        tail,
+                        Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                    )),
+                );
+            }
+            v.push(("Quit", Color::Red, lines));
         }
         if self.confirm_start_all {
             let lines = confirm_start_all_lines(self.stopped_count());
@@ -2063,7 +2265,12 @@ impl App {
         let title = match m.target {
             VaultTarget::AddForm => " Shared Env Vault -> new project .env ".to_string(),
             VaultTarget::Project(pi) => {
-                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                let name = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| sanitize_chrome_line(&p.name))
+                    .unwrap_or_else(|| "?".to_string());
                 format!(" Shared Env Vault -> {name}/.env ")
             }
             VaultTarget::VaultOnly => " Shared Env Vault ".to_string(),
@@ -2274,7 +2481,12 @@ impl App {
         let title = match m.target {
             VaultTarget::AddForm => " Shared Skills Vault -> new project ".to_string(),
             VaultTarget::Project(pi) => {
-                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                let name = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| sanitize_chrome_line(&p.name))
+                    .unwrap_or_else(|| "?".to_string());
                 format!(" Shared Skills -> {name} (.agents/skills + .claude/skills) ")
             }
             VaultTarget::VaultOnly => " Shared Skills Vault ".to_string(),
@@ -2486,7 +2698,12 @@ impl App {
         let title = match m.target {
             VaultTarget::AddForm => " Shared Tools Vault -> new project ".to_string(),
             VaultTarget::Project(pi) => {
-                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                let name = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| sanitize_chrome_line(&p.name))
+                    .unwrap_or_else(|| "?".to_string());
                 format!(" Shared Tools -> {name} (MCP + .squad/TOOLS.md) ")
             }
             VaultTarget::VaultOnly => " Shared Tools Vault ".to_string(),
@@ -2725,7 +2942,12 @@ impl App {
         let title = match m.target {
             VaultTarget::AddForm => " Shared References Vault -> new project ".to_string(),
             VaultTarget::Project(pi) => {
-                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                let name = self
+                    .cfg
+                    .projects
+                    .get(pi)
+                    .map(|p| sanitize_chrome_line(&p.name))
+                    .unwrap_or_else(|| "?".to_string());
                 format!(" Shared References -> {name} (CLAUDE.md + AGENTS.md) ")
             }
             VaultTarget::VaultOnly => " Shared References Vault ".to_string(),

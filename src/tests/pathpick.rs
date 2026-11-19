@@ -90,6 +90,7 @@ fn roots_rank_parent_folders_by_use_unix() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let projects = [mk("/one/a"), mk("/two/b"), mk("/two/c"), mk("/x")];
     let got: Vec<String> = roots(&projects).into_iter().map(|(_, t)| t).collect();
@@ -107,6 +108,7 @@ fn roots_rank_parent_folders_by_use() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let projects = [
         mk(r"C:\one\a"),

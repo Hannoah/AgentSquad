@@ -216,13 +216,22 @@ pub fn input_line(
     out
 }
 pub fn jump_to(order_len: usize, ch: char) -> Option<usize> {
-    if ch.is_ascii_digit() && ch != '0' {
-        let n = (ch as u8 - b'0') as usize;
-        if n <= order_len.min(9) {
-            return Some(n - 1);
-        }
+    jump_number(order_len, &ch.to_string())
+}
+
+/// Multi-digit row jump: `buf` holds digits typed in quick succession.
+/// Jumps to row `n` (1-based) when it exists; anything else is ignored so
+/// a fast `12` on a 5-row list does not fling the selection elsewhere.
+pub fn jump_number(order_len: usize, buf: &str) -> Option<usize> {
+    if buf.is_empty() || buf.len() > 3 || !buf.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-    None
+    let n: usize = buf.parse().ok()?;
+    if (1..=order_len).contains(&n) {
+        Some(n - 1)
+    } else {
+        None
+    }
 }
 /// Map a Korean 2-beolsik (두벌식) Jamo or composed Hangul syllable to the
 /// physical QWERTY key that produced its last keystroke. This lets single-key

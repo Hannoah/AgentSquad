@@ -8,7 +8,8 @@
 //! by squad only).
 
 use crate::config::{
-    all_subordinates, is_commander, same_dir, subordinates, superior, Kind, Project,
+    all_subordinates, is_commander, same_dir, sanitize_chrome_line, sanitize_chrome_text,
+    subordinates, superior, Kind, Project,
 };
 use anyhow::Result;
 use std::{
@@ -267,9 +268,10 @@ pub fn repo_branch(project: &Path) -> Option<String> {
     let branch = git(project, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let trimmed = branch.trim();
     if trimmed == "HEAD" {
-        return git(project, &["rev-parse", "--short", "HEAD"]).map(|s| s.trim().to_string());
+        return git(project, &["rev-parse", "--short", "HEAD"])
+            .map(|s| sanitize_chrome_line(s.trim()));
     }
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    (!trimmed.is_empty()).then(|| sanitize_chrome_line(trimmed))
 }
 
 /// Diff text for a changed entry `rel` in `project` (or file preview when untracked).
@@ -302,7 +304,7 @@ pub fn file_diff(project: &Path, status: &str, rel: &Path) -> String {
             diff
         }
     };
-    raw.chars().take(MAX_CHARS).collect()
+    sanitize_chrome_text(&raw).chars().take(MAX_CHARS).collect()
 }
 
 /// When the agent last filed: the newest agent-written SITREP (ignoring
@@ -345,12 +347,21 @@ pub fn unrecorded(project: &Path) -> bool {
 /// What the Claude Code Stop hook prints: a block that sends the agent back to
 /// file a SITREP, or None to let it stop. `input` is the hook's JSON from
 /// stdin; `stop_hook_active` means we already sent it back once, so never loop.
+/// The flag is read with a real JSON parse so that a transcript merely
+/// *quoting* `"stop_hook_active":true` cannot disable the enforcement; the
+/// old substring check survives only for input that is not JSON at all.
 pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
-    if input
-        .split_whitespace()
-        .collect::<String>()
-        .contains("\"stop_hook_active\":true")
-    {
+    let already_sent = match crate::json::parse(input) {
+        Ok(v) => matches!(
+            v.get("stop_hook_active"),
+            Some(crate::json::JsonValue::Bool(true))
+        ),
+        Err(_) => input
+            .split_whitespace()
+            .collect::<String>()
+            .contains("\"stop_hook_active\":true"),
+    };
+    if already_sent {
         return None;
     }
     // The agent may have changed into a subfolder of its project.
@@ -416,6 +427,19 @@ pub fn sitreps(project: &Path) -> Vec<(String, PathBuf)> {
     list_entries(&project.join(DIR).join("log"))
 }
 
+/// Visible rows of a `sitreps` list matching `query`: entry file names
+/// containing the text (case-insensitive). Empty query matches all, so a
+/// history popup with no filter still lists everything.
+pub fn filter_sitrep_names(items: &[(String, PathBuf)], query: &str) -> Vec<usize> {
+    let q = query.to_ascii_lowercase();
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _))| q.is_empty() || name.to_ascii_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// The files in `dir`, newest first, as (file name, path).
 pub fn list_entries(dir: &Path) -> Vec<(String, PathBuf)> {
     let mut v: Vec<(String, PathBuf)> = fs::read_dir(dir)
@@ -453,12 +477,12 @@ pub fn sitrep_label(name: &str, offset_secs: i64) -> String {
             let days = y.div_euclid(400) * 146_097 + doe - 719_468;
             let secs = days * 86_400 + n(&t[..2]) * 3600 + n(&t[2..4]) * 60 + offset_secs;
             let local = utc_stamp(secs.max(0) as u64);
-            return format!("{} {} {slug}", &local[5..10], &local[11..16])
-                .trim_end()
-                .to_string();
+            return sanitize_chrome_line(
+                format!("{} {} {slug}", &local[5..10], &local[11..16]).trim_end(),
+            );
         }
     }
-    stem.to_string()
+    sanitize_chrome_line(stem)
 }
 
 /// Record that `from` finished a task, in `REPORTS.md` of the commander's

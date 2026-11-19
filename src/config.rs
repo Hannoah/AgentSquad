@@ -52,6 +52,11 @@ pub struct Project {
     /// Start this project's session as soon as the manager opens.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub autostart: bool,
+    /// Services only: restart the session after a crash (nonzero exit or
+    /// spawn error), up to 5 times with a few seconds between tries.
+    /// Clean exits and user stops never restart. Agents never restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart_on_crash: bool,
     /// Keep a `.squad/` ledger in the project (created on first start).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ledger: bool,
@@ -279,6 +284,18 @@ pub fn persist_under(name: &str, under: Option<&str>) -> Result<()> {
         .with_context(|| format!("Unknown project: {name}"))?;
     disk.projects[i].reports_to = stored;
     enable_chain_ledger(&mut disk.projects, i);
+    save(&disk)
+}
+/// Flip crash auto-restart for `name` on disk, re-reading the file first
+/// (see `persist_add`). Only services act on it.
+pub fn persist_restart_on_crash(name: &str, restart_on_crash: bool) -> Result<()> {
+    let mut disk = load()?;
+    let p = disk
+        .projects
+        .iter_mut()
+        .find(|q| q.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))?;
+    p.restart_on_crash = restart_on_crash;
     save(&disk)
 }
 /// Pin or unpin `name` on disk, re-reading the file first (see `persist_add`).
@@ -731,6 +748,7 @@ pub fn build_project(
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     })
 }
 /// The name a new project would get, guessed from the typed text alone (no
@@ -806,28 +824,123 @@ pub fn program_name(parts: &[String]) -> Option<String> {
     }
     Some(program_stem(first))
 }
-/// Filtered view: narrowed to projects whose name, path, or command
-/// contains the query (case-insensitive). Empty query = all.
+/// A status token (`is:running`, `is:waiting`, …) the filter understands.
+/// Anything else stays free text.
+fn filter_token(word: &str) -> Option<&'static str> {
+    match word.to_ascii_lowercase().as_str() {
+        "is:running" => Some("running"),
+        "is:stopped" => Some("stopped"),
+        "is:waiting" => Some("waiting"),
+        "is:done" => Some("done"),
+        "is:error" | "is:failed" => Some("error"),
+        "is:exited" | "is:exit" => Some("exited"),
+        "is:agent" => Some("agent"),
+        "is:service" => Some("service"),
+        "is:pinned" => Some("pinned"),
+        _ => None,
+    }
+}
+
+/// Split a filter query into status tokens and the remaining free text.
+/// Unknown `is:` words stay text, so a typo never filters everything out.
+pub fn split_filter_query(query: &str) -> (Vec<&'static str>, String) {
+    let mut tokens = Vec::new();
+    let mut text = Vec::new();
+    for part in query.split_whitespace() {
+        match filter_token(part) {
+            Some(t) => tokens.push(t),
+            None => text.push(part),
+        }
+    }
+    (tokens, text.join(" "))
+}
+
+/// Free-text half of the filter: project name, path, or command contains
+/// the text (case-insensitive). Empty text matches everything.
+pub fn filter_text_match(p: &Project, text: &str) -> bool {
+    let q = text.to_ascii_lowercase();
+    q.is_empty()
+        || p.name.to_ascii_lowercase().contains(&q)
+        || p.path.to_string_lossy().to_ascii_lowercase().contains(&q)
+        || p.command.join(" ").to_ascii_lowercase().contains(&q)
+}
+
+/// Live session facts for one project, for the status half of the filter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FilterLive {
+    /// A session slot exists and is running.
+    pub running: bool,
+    /// Running and asking for input (`?`).
+    pub waiting: bool,
+    /// Running, task finished, not opened yet.
+    pub done_unseen: bool,
+    /// Crashed exit or spawn error.
+    pub failed: bool,
+    /// Exited with any code (clean or not).
+    pub exited: bool,
+}
+
+/// Status-token half of the filter. `live` is `None` when the caller has no
+/// session state: session tokens then pass, kind/pin tokens still apply.
+pub fn filter_live_match(
+    kind: Kind,
+    pinned: bool,
+    live: Option<FilterLive>,
+    tokens: &[&str],
+) -> bool {
+    tokens.iter().all(|t| match *t {
+        "agent" => kind == Kind::Agent,
+        "service" => kind == Kind::Service,
+        "pinned" => pinned,
+        "running" => live.is_none_or(|f| f.running),
+        "stopped" => live.is_none_or(|f| !f.running),
+        "waiting" => live.is_none_or(|f| f.waiting),
+        "done" => live.is_none_or(|f| f.done_unseen),
+        "error" => live.is_none_or(|f| f.failed),
+        "exited" => live.is_none_or(|f| f.exited),
+        _ => true,
+    })
+}
+
+/// Filtered view: free text narrows by name, path, or command
+/// (case-insensitive) and `is:` tokens narrow by status or kind, e.g.
+/// `/ is:waiting`, `/ is:error api`, `/ is:service is:running`.
+/// Empty query = all.
 pub fn apply_filter(projects: &[Project], query: &str) -> Vec<usize> {
-    let q = query.to_ascii_lowercase();
+    apply_filter_live(projects, &[], query)
+}
+
+/// [`apply_filter`] plus live session state: `live[i]` holds project `i`'s
+/// [`FilterLive`]. A short slice (or none) means "state unknown" for the
+/// missing projects, so their session tokens pass.
+pub fn apply_filter_live(projects: &[Project], live: &[FilterLive], query: &str) -> Vec<usize> {
+    let (tokens, text) = split_filter_query(query);
     display_order(projects)
         .into_iter()
         .filter(|&i| {
-            q.is_empty()
-                || projects[i].name.to_ascii_lowercase().contains(&q)
-                || projects[i]
-                    .path
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains(&q)
-                || projects[i]
-                    .command
-                    .join(" ")
-                    .to_ascii_lowercase()
-                    .contains(&q)
+            let p = &projects[i];
+            filter_text_match(p, &text)
+                && filter_live_match(p.kind, p.pinned, live.get(i).copied(), &tokens)
         })
         .collect()
 }
+/// Drop Unicode control characters (`ESC`, `BEL`, …) from text that is
+/// drawn into the TUI chrome or the window title. Session output, process
+/// names, file names and branch names are untrusted input: written raw,
+/// an escape sequence would be interpreted by the outer terminal instead
+/// of shown as text.
+pub fn sanitize_chrome_line(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Like [`sanitize_chrome_line`], but keeps line breaks for multi-line
+/// bodies (history entries, diffs) that are shown as wrapped paragraphs.
+pub fn sanitize_chrome_text(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .collect()
+}
+
 /// Terminal columns `s` takes: Hangul and other wide characters take two.
 pub fn width(s: &str) -> usize {
     s.width()

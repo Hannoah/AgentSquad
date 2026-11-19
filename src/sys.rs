@@ -714,6 +714,36 @@ pub fn top_processes(n: usize) -> Vec<ProcInfo> {
 pub fn top_processes(_n: usize) -> Vec<ProcInfo> {
     Vec::new()
 }
+/// Decide a memory-monitor kill from a fresh lookup: `refused` is the fresh
+/// [`kill_refusal`], `recorded` the command line the row showed, `fresh` the
+/// command line there now. Refuses when the PID changed owners (PID reuse)
+/// or vanished; `None` allows the kill.
+pub fn kill_recheck_decision(
+    refused: Option<&'static str>,
+    recorded: Option<&str>,
+    fresh: Option<&str>,
+) -> Option<&'static str> {
+    if let Some(why) = refused {
+        return Some(why);
+    }
+    match (recorded, fresh) {
+        (Some(old), Some(new)) if old != new => Some("process changed since the list was read"),
+        (Some(_), None) => Some("process is already gone"),
+        _ => None,
+    }
+}
+
+/// Re-check a memory-monitor kill target right before killing it: the row
+/// may be stale and PIDs get recycled, so a stale row must not take down an
+/// unrelated tree. `recorded_cmd` is the command line the row showed.
+pub fn kill_recheck(pid: u32, recorded_cmd: Option<&str>) -> Option<&'static str> {
+    kill_recheck_decision(
+        kill_refusal(pid),
+        recorded_cmd,
+        command_line(pid).as_deref(),
+    )
+}
+
 /// Why squad must not kill `pid`, or None when it may. Killing the shell or
 /// terminal squad runs in would take squad and every session down with it.
 #[cfg(any(windows, unix))]

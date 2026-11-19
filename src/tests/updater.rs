@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn system_tool_resolves_bundled_helpers() {
+    let curl = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let p = system_tool(curl);
+    assert_eq!(p.file_name().unwrap().to_string_lossy(), curl);
+    #[cfg(windows)]
+    assert!(
+        p.to_string_lossy()
+            .to_ascii_lowercase()
+            .contains("system32"),
+        "must come from System32, got {}",
+        p.display()
+    );
+}
+
+#[test]
 fn version_comparison() {
     assert_eq!(
         sha256_hex(b""),

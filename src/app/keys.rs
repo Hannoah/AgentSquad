@@ -1,6 +1,7 @@
 //! Keyboard input for the manager, terminal focus and the text modes.
 
 use super::*;
+use std::time::{Duration, Instant};
 
 impl App {
     pub(crate) fn on_key(&mut self, k: KeyEvent, rows: u16, cols: u16) {
@@ -62,6 +63,8 @@ impl App {
             self.key_env_info(k);
         } else if self.history.is_some() {
             self.key_history(k);
+        } else if self.gsearch.is_some() {
+            self.key_gsearch(k);
         } else if self.git_view.is_some() {
             self.key_git_view(k);
         } else if self.procs.is_some() {
@@ -217,7 +220,7 @@ impl App {
             }
             _ => {
                 if self.filter_buf.edit_key(k) == Some(true) {
-                    self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                    self.refresh_filter();
                     self.selected = 0;
                 }
             }
@@ -419,7 +422,7 @@ impl App {
                     Ok(disk) => {
                         merge_projects(&mut self.cfg, &mut self.sessions, disk);
                         self.refresh_prefixes();
-                        self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+                        self.refresh_filter();
                     }
                 }
                 // A missing folder is made on the spot (the field says so).
@@ -461,10 +464,7 @@ impl App {
                                     self.cfg.projects.pop();
                                     self.sessions.pop();
                                     self.refresh_prefixes();
-                                    self.order =
-                                        apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
-                                    self.selected =
-                                        self.selected.min(self.order.len().saturating_sub(1));
+                                    self.refresh_filter();
                                     self.add_err = format!("Save failed: {e:#}");
                                 }
                                 Ok(()) => {
@@ -575,6 +575,10 @@ impl App {
     }
 
     pub(super) fn key_manager(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+        // A pending multi-digit jump only survives more digits.
+        if !matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit()) {
+            self.jump_buf.clear();
+        }
         const MGMT_LAST: usize = 4;
         if let Some(m) = self.mgmt_sel {
             match k.code {
@@ -677,6 +681,7 @@ impl App {
                 self.open_search();
             }
             KeyCode::Char('F') => self.open_search(),
+            KeyCode::Char('G') => self.open_gsearch(),
             KeyCode::F(3) if self.search_active => {
                 self.step_search(k.modifiers.contains(KeyModifiers::SHIFT));
             }
@@ -699,8 +704,37 @@ impl App {
             }
             KeyCode::Char('a') => self.open_add(),
             KeyCode::Char(c) if c.is_ascii_digit() => {
-                if let Some(i) = jump_to(self.order.len(), c) {
-                    self.selected = i;
+                if self.jump_at.elapsed() > Duration::from_millis(1500) {
+                    self.jump_buf.clear();
+                }
+                self.jump_buf.push(c);
+                self.jump_at = Instant::now();
+                let buf = self.jump_buf.clone();
+                match jump_number(self.order.len(), &buf) {
+                    Some(i) => {
+                        self.selected = i;
+                        // A single digit that could start a longer row
+                        // number (`1` of `12`) stays pending briefly.
+                        let keep = buf.len() == 1
+                            && buf
+                                .parse::<usize>()
+                                .is_ok_and(|n| n.saturating_mul(10) <= self.order.len());
+                        if keep {
+                            self.message = (
+                                format!("Jump {buf}… (1–{})", self.order.len()),
+                                Notice::Info,
+                            );
+                        } else {
+                            self.jump_buf.clear();
+                        }
+                    }
+                    None => {
+                        self.message = (
+                            format!("No row {buf} (1–{})", self.order.len()),
+                            Notice::Warn,
+                        );
+                        self.jump_buf.clear();
+                    }
                 }
             }
             // Reopening keeps the current text so a filter can be refined,

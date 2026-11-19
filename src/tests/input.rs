@@ -11,6 +11,18 @@ fn jump_keys() {
     assert_eq!(jump_to(3, 'x'), None);
 }
 #[test]
+fn jump_numbers_cover_two_digits() {
+    assert_eq!(jump_number(12, "1"), Some(0));
+    assert_eq!(jump_number(12, "12"), Some(11));
+    assert_eq!(jump_number(5, "6"), None);
+    assert_eq!(jump_number(5, "0"), None);
+    assert_eq!(jump_number(5, ""), None);
+    assert_eq!(jump_number(5, "x"), None);
+    assert_eq!(jump_number(5, "007"), None, "row 7 of 5 does not exist");
+    assert_eq!(jump_number(99, "007"), Some(6));
+    assert_eq!(jump_number(5, "1234"), None, "overlong buffers never jump");
+}
+#[test]
 fn keyboard() {
     assert_eq!(
         key_bytes(

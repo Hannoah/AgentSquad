@@ -1,5 +1,8 @@
 use super::*;
-use crate::app::App;
+use crate::app::{
+    auto_restart_due, crash_log_needs_rotation, App, GHit, GSearch, AUTO_RESTART_MAX_TRIES,
+    CRASH_LOG_MAX_BYTES,
+};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, layout::Size};
 
@@ -13,6 +16,7 @@ fn proj(name: &str, path: &str, cmd: &[&str]) -> Project {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     }
 }
 
@@ -354,8 +358,240 @@ fn stopped_project_card_zoom_badge_and_tab_complete_work() {
     term.draw(|f| app.draw(f)).unwrap();
     let hist_screen = buf_str(&term);
     assert!(hist_screen.contains("History: lead (2)"));
+
+    // `/` filters the entry list: typing narrows, Enter keeps, Esc clears.
+    app.on_key(key(KeyCode::Char('/')), 27, 70);
+    for c in "auto".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 70);
+    }
+    term.draw(|f| app.draw(f)).unwrap();
+    let narrowed = buf_str(&term);
+    assert!(
+        narrowed.contains("(1/2"),
+        "filtered count shows: {narrowed:?}"
+    );
+    assert!(
+        !narrowed.contains("sitrep"),
+        "other entries hide: {narrowed:?}"
+    );
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.history.is_some(), "Enter keeps the kept filter");
+    // Reopening `/` and escaping restores the full list; Esc then closes.
+    app.on_key(key(KeyCode::Char('/')), 27, 70);
+    for c in "qqq".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 70);
+    }
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(buf_str(&term).contains("(0/2"), "no entry matches `qqq`");
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(buf_str(&term).contains("History: lead (2)"));
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    assert!(app.history.is_none(), "idle Esc closes the popup");
     drop(app);
     let _ = fs::remove_dir_all(&hist_dir);
+}
+
+#[test]
+fn crash_log_rotates_past_its_cap() {
+    assert!(!crash_log_needs_rotation(0));
+    assert!(!crash_log_needs_rotation(CRASH_LOG_MAX_BYTES));
+    assert!(crash_log_needs_rotation(CRASH_LOG_MAX_BYTES + 1));
+}
+
+#[test]
+fn global_search_lists_sessions_and_jumps() {
+    let cfg = Config {
+        projects: vec![
+            proj("alpha", "/tmp/a", &["claude"]),
+            proj("beta", "/tmp/b", &["claude"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let screen = |t: &Terminal<TestBackend>| -> String {
+        let b = t.backend().buffer();
+        (0..b.area.height)
+            .map(|y| {
+                (0..b.area.width)
+                    .map(|x| b[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // `G` opens an empty overlay explaining itself; Esc closes it.
+    app.on_key(key(KeyCode::Char('G')), 27, 70);
+    assert!(app.gsearch.is_some());
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(screen(&term).contains("Find in all sessions"));
+    // Typing with no sessions running stays empty without panicking.
+    for c in "x".chars() {
+        app.on_key(key(KeyCode::Char(c)), 27, 70);
+    }
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(screen(&term).contains("No matches anywhere"));
+    // Enter with no hits keeps the popup open; Esc closes it.
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.gsearch.is_some());
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    assert!(app.gsearch.is_none());
+
+    // Fabricated hits render with counts; clicking a new row picks it,
+    // clicking the picked row jumps with the query loaded.
+    app.on_key(key(KeyCode::Char('G')), 27, 70);
+    app.gsearch = Some(GSearch {
+        query: "boom".into(),
+        hits: vec![GHit { pi: 0, count: 1 }, GHit { pi: 1, count: 2 }],
+        sel: 0,
+    });
+    term.draw(|f| app.draw(f)).unwrap();
+    let rendered = screen(&term);
+    assert!(rendered.contains("boom"), "query shows: {rendered:?}");
+    assert!(rendered.contains("2 matches"), "counts show: {rendered:?}");
+    let area = Size::new(100, 30);
+    let pop = gsearch_popup(area.into(), 2);
+    // Second hit row is one row below the first.
+    app.on_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            pop.x + 2,
+            pop.y + 2,
+        ),
+        area,
+        27,
+        70,
+    );
+    assert!(app.gsearch.is_some(), "picking a new row keeps it open");
+    assert_eq!(app.gsearch.as_ref().unwrap().sel, 1);
+    app.on_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            pop.x + 2,
+            pop.y + 2,
+        ),
+        area,
+        27,
+        70,
+    );
+    assert!(app.gsearch.is_none(), "clicking the picked row jumps");
+    assert_eq!(app.selected, 1, "jump selects `beta`");
+}
+
+#[test]
+fn crashed_services_restart_up_to_five_times_then_stop() {
+    use std::time::Duration;
+    assert!(auto_restart_due(0, Duration::from_secs(6)));
+    assert!(!auto_restart_due(0, Duration::from_secs(4)));
+    assert!(!auto_restart_due(
+        AUTO_RESTART_MAX_TRIES,
+        Duration::from_secs(600)
+    ));
+
+    fn crashed(name: &str, kind: Kind, flag: bool, dir: &std::path::Path) -> (Config, Session) {
+        let command: Vec<String> = if cfg!(windows) {
+            vec!["cmd".into(), "/c".into(), "exit".into(), "3".into()]
+        } else {
+            vec!["sh".into(), "-c".into(), "exit 3".into()]
+        };
+        let p = Project {
+            name: name.into(),
+            path: dir.to_path_buf(),
+            command,
+            kind,
+            autostart: false,
+            ledger: false,
+            reports_to: None,
+            pinned: false,
+            restart_on_crash: flag,
+        };
+        let mut s = Session::spawn(&p, 24, 80).unwrap();
+        for _ in 0..100 {
+            s.update();
+            if !s.status.is_running() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            matches!(s.status, SessionStatus::Exited(_)) && s.status.needs_attention(),
+            "the fixture session must crash, got {}",
+            s.status
+        );
+        (
+            Config {
+                projects: vec![p],
+                ..Default::default()
+            },
+            s,
+        )
+    }
+    let dir = scratch_dir("autorestart");
+
+    // A cooled-down streak schedules a restart on the next pump.
+    let (cfg, s) = crashed("flaky", Kind::Service, true, &dir);
+    let mut app = App::new(cfg, None);
+    app.sessions[0] = Some(s);
+    app.auto_restarts
+        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.pane = (24, 80);
+    app.pump();
+    assert!(app.starting.contains_key("flaky"), "crash restarts");
+    assert_eq!(app.auto_restarts.get(&0).map(|(t, _)| *t), Some(1));
+    assert!(
+        app.message.0.contains("auto-restart #1"),
+        "{}",
+        app.message.0
+    );
+    drop(app);
+
+    // A capped streak stays dead and says so once.
+    let (cfg, s) = crashed("flaky", Kind::Service, true, &dir);
+    let mut app = App::new(cfg, None);
+    app.sessions[0] = Some(s);
+    app.auto_restarts.insert(
+        0,
+        (
+            AUTO_RESTART_MAX_TRIES,
+            Instant::now() - Duration::from_secs(30),
+        ),
+    );
+    app.pane = (24, 80);
+    app.pump();
+    assert!(
+        !app.starting.contains_key("flaky"),
+        "capped streak stays dead"
+    );
+    assert!(
+        app.message.0.contains("Gave up"),
+        "says why: {}",
+        app.message.0
+    );
+    drop(app);
+
+    // Opted-out services never restart.
+    let (cfg, s) = crashed("plain", Kind::Service, false, &dir);
+    let mut app = App::new(cfg, None);
+    app.sessions[0] = Some(s);
+    app.auto_restarts
+        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.pane = (24, 80);
+    app.pump();
+    assert!(!app.starting.contains_key("plain"));
+    drop(app);
+
+    // Agents never restart, even when flagged.
+    let (cfg, s) = crashed("helper", Kind::Agent, true, &dir);
+    let mut app = App::new(cfg, None);
+    app.sessions[0] = Some(s);
+    app.auto_restarts
+        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.pane = (24, 80);
+    app.pump();
+    assert!(!app.starting.contains_key("helper"));
+    drop(app);
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

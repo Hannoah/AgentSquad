@@ -30,7 +30,7 @@ impl App {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 self.filter_buf.insert(ch);
             }
-            self.order = apply_filter(&self.cfg.projects, &self.filter_buf.as_str());
+            self.refresh_filter();
             self.selected = 0;
         } else if self.mode == Mode::Search {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
@@ -167,6 +167,9 @@ impl App {
         } else if wheel_lines(m.kind).is_some()
             && (self.mode == Mode::Help
                 || self.quick_reply.is_some()
+                || self.gsearch.is_some()
+                || self.history.is_some()
+                || self.git_view.is_some()
                 || self.context_menu.is_some()
                 || self.env_info.is_some()
                 || !self.confirm_modals().is_empty())
@@ -357,11 +360,45 @@ impl App {
                     self.history = None;
                 } else if left_col.contains(at) {
                     let i = h.top.get() + usize::from(m.row - left_col.y);
-                    if i < h.items.len() {
+                    if i < h.view.len() {
                         h.select(i);
                     }
                 }
                 self.dirty = true;
+            } else if self.gsearch.is_some() {
+                let shown = self
+                    .gsearch
+                    .as_ref()
+                    .map(|g| g.hits.len().clamp(1, 10))
+                    .unwrap_or(1);
+                let popup = gsearch_popup(area.into(), shown);
+                let at = ratatui::layout::Position::new(m.column, m.row);
+                if !popup.contains(at) {
+                    self.gsearch = None;
+                    self.dirty = true;
+                } else {
+                    // With an empty query the first inner row is a hint,
+                    // so hit rows start one row lower.
+                    let hint_rows =
+                        usize::from(self.gsearch.as_ref().is_some_and(|g| g.query.is_empty()));
+                    let pick = (m.row >= popup.y + 1 + hint_rows as u16)
+                        .then(|| usize::from(m.row - popup.y - 1 - hint_rows as u16));
+                    let same = pick.is_some_and(|i| {
+                        self.gsearch
+                            .as_ref()
+                            .is_some_and(|g| i < g.hits.len().min(10) && g.sel == i)
+                    });
+                    if same {
+                        self.jump_gsearch();
+                    } else if let Some(i) = pick {
+                        if let Some(g) = self.gsearch.as_mut() {
+                            if i < g.hits.len().min(10) {
+                                g.sel = i;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                }
             } else if let Some(p) = self.procs.as_mut() {
                 let popup = procs_popup(area.into());
                 let at = ratatui::layout::Position::new(m.column, m.row);
@@ -439,15 +476,18 @@ impl App {
             } else if let Some(pi) = self.context_menu {
                 // Quick-action menu is open: a click outside closes it,
                 // a click on a numbered row runs that action.
-                let data = self
-                    .cfg
-                    .projects
-                    .get(pi)
-                    .map(|p| (p.name.clone(), slot_running(&self.sessions, pi)));
+                let data = self.cfg.projects.get(pi).map(|p| {
+                    (
+                        p.name.clone(),
+                        slot_running(&self.sessions, pi),
+                        p.kind,
+                        p.restart_on_crash,
+                    )
+                });
                 match data {
                     None => self.context_menu = None,
-                    Some((name, running)) => {
-                        let lines = context_menu_lines(&name, running);
+                    Some((name, running, kind, restart_on_crash)) => {
+                        let lines = context_menu_lines_for(&name, running, kind, restart_on_crash);
                         let popup = modal_rect(&lines, area.into());
                         let clicked = ratatui::layout::Position::new(m.column, m.row);
                         if !popup.contains(clicked) {
@@ -455,7 +495,10 @@ impl App {
                         } else {
                             // Row 0 names the project; rows 1.. are actions.
                             let rel = m.row.saturating_sub(popup.y + 1) as usize;
-                            if rel >= 1 && rel - 1 < context_menu_items(running).len() {
+                            if rel >= 1
+                                && rel - 1
+                                    < context_menu_items_for(running, kind, restart_on_crash).len()
+                            {
                                 let action = rel - 1;
                                 self.context_menu = None;
                                 self.run_context_action(pi, action, rows, cols);

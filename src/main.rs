@@ -1,4 +1,5 @@
 pub mod app;
+pub mod completion;
 pub mod config;
 pub mod envvault;
 pub mod history;
@@ -27,8 +28,8 @@ use std::{
 
 use app::run;
 use config::{
-    build_project, check_superior, clean_path, create_missing_dir, load, persist_add,
-    persist_remove, persist_under, shell, Kind,
+    build_project, check_superior, clean_path, create_missing_dir, display_order, load,
+    persist_add, persist_remove, persist_under, shell, Kind,
 };
 use ui::{cli_help, empty_list_hint, list_table};
 use updater::{install_update, is_newer, latest_tag_result};
@@ -88,6 +89,17 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    // Shell completion needs no config: `squad completion powershell|bash`.
+    if args.first().map(String::as_str) == Some("completion") {
+        let shell = args.get(1).map(String::as_str).unwrap_or("");
+        match completion::script_for(shell) {
+            Some(script) => {
+                print!("{script}");
+                return Ok(());
+            }
+            None => bail!("Usage: squad completion <powershell|bash>"),
+        }
+    }
     let c = load()?;
     match args.first().map(String::as_str) {
         None => run(c, None, Vec::new()),
@@ -106,7 +118,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [--skill NAME[,NAME...]] [--tool NAME[,NAME...]] [--ref NAME[,NAME...]] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--restart-on-crash] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [--skill NAME[,NAME...]] [--tool NAME[,NAME...]] [--ref NAME[,NAME...]] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -115,6 +127,7 @@ fn main() -> Result<()> {
             };
             let mut kind = Kind::default();
             let mut autostart = false;
+            let mut restart_on_crash = false;
             let mut ledger = false;
             let mut create = false;
             let mut under: Option<String> = None;
@@ -133,6 +146,10 @@ fn main() -> Result<()> {
                     }
                     "--autostart" => {
                         autostart = true;
+                        i += 1;
+                    }
+                    "--restart-on-crash" => {
+                        restart_on_crash = true;
                         i += 1;
                     }
                     "--ledger" => {
@@ -171,7 +188,7 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY, --skill NAME, --tool NAME, --ref NAME or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --restart-on-crash, --ledger, --create, --under <commander>, --env KEY, --skill NAME, --tool NAME, --ref NAME or -- command")
                     }
                 }
             }
@@ -237,7 +254,11 @@ fn main() -> Result<()> {
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
+            p.restart_on_crash = restart_on_crash;
             p.ledger = ledger;
+            if restart_on_crash && kind != Kind::Service {
+                eprintln!("Note: --restart-on-crash only acts on services; it is stored but ignored for agents.");
+            }
             if let Some(u) = under {
                 p.reports_to =
                     Some(check_superior(&c.projects, kind, &u).map_err(anyhow::Error::msg)?);
@@ -302,6 +323,13 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("list") => {
+            // Machine-readable names for completion scripts and shell loops.
+            if args.get(1).map(String::as_str) == Some("--names") {
+                for &i in &display_order(&c.projects) {
+                    println!("{}", c.projects[i].name);
+                }
+                return Ok(());
+            }
             if c.projects.is_empty() {
                 eprintln!("{}", empty_list_hint());
                 return Ok(());

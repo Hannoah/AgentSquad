@@ -103,6 +103,30 @@ fn top_processes_lists_biggest_first_and_includes_self() {
     assert_eq!(top_processes(3).len(), 3);
 }
 #[test]
+fn kill_recheck_decision_cases() {
+    // A fresh refusal always wins.
+    assert_eq!(
+        kill_recheck_decision(Some("system process"), Some("a"), Some("a")),
+        Some("system process")
+    );
+    // Same command line: stale row, same owner.
+    assert_eq!(kill_recheck_decision(None, Some("a"), Some("a")), None);
+    // Recycled PID with a different command line: refuse.
+    assert_eq!(
+        kill_recheck_decision(None, Some("old"), Some("new")),
+        Some("process changed since the list was read")
+    );
+    // Exited since: refuse instead of killing whatever reused the PID next.
+    assert_eq!(
+        kill_recheck_decision(None, Some("old"), None),
+        Some("process is already gone")
+    );
+    // No command line recorded: fall back to the refusal rules.
+    assert_eq!(kill_recheck_decision(None, None, Some("x")), None);
+    assert_eq!(kill_recheck_decision(None, None, None), None);
+}
+
+#[test]
 fn kill_refusal_protects_squad_and_system() {
     assert!(kill_refusal(std::process::id()).is_some(), "squad itself");
     assert!(kill_refusal(1).is_some(), "init/launchd");

@@ -12,6 +12,7 @@ fn config_roundtrip() {
             ledger: false,
             reports_to: None,
             pinned: false,
+            restart_on_crash: false,
         }],
         scrollback: None,
         ..Default::default()
@@ -47,6 +48,7 @@ fn order_groups_agents_first() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let ps = vec![mk(Kind::Service), mk(Kind::Agent), mk(Kind::Service)];
     assert_eq!(display_order(&ps), vec![1, 0, 2]);
@@ -129,6 +131,7 @@ fn filter_matches_name_and_command() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let ps = vec![
         mk("api", &["node", "server.js"], Kind::Service),
@@ -140,6 +143,55 @@ fn filter_matches_name_and_command() {
     assert_eq!(apply_filter(&ps, "node"), vec![0]);
     assert_eq!(apply_filter(&ps, "AGENT"), vec![2]);
     assert!(apply_filter(&ps, "zzz").is_empty());
+}
+#[test]
+fn filter_tokens_narrow_by_status_and_kind() {
+    let mk = |name: &str, kind| Project {
+        name: name.into(),
+        path: PathBuf::from("x"),
+        command: vec!["sh".into()],
+        kind,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+        restart_on_crash: false,
+    };
+    let ps = vec![
+        mk("api", Kind::Service),
+        mk("web", Kind::Agent),
+        mk("worker", Kind::Agent),
+    ];
+    let live = vec![
+        FilterLive {
+            running: true,
+            ..Default::default()
+        },
+        FilterLive {
+            running: true,
+            waiting: true,
+            ..Default::default()
+        },
+        FilterLive::default(),
+    ];
+    // Agents first, then services: order is [1, 2, 0].
+    assert_eq!(apply_filter_live(&ps, &live, "is:running"), vec![1, 0]);
+    assert_eq!(apply_filter_live(&ps, &live, "IS:STOPPED"), vec![2]);
+    assert_eq!(apply_filter_live(&ps, &live, "is:waiting"), vec![1]);
+    assert_eq!(
+        apply_filter_live(&ps, &live, "is:service is:running"),
+        vec![0]
+    );
+    assert_eq!(apply_filter_live(&ps, &live, "is:agent"), vec![1, 2]);
+    assert_eq!(apply_filter_live(&ps, &live, "web is:waiting"), vec![1]);
+    assert_eq!(apply_filter_live(&ps, &live, "web is:running"), vec![1]);
+    assert!(apply_filter_live(&ps, &live, "worker is:running").is_empty());
+    // Unknown is: words stay free text and match nothing here.
+    assert!(apply_filter_live(&ps, &live, "is:bogus").is_empty());
+    // Without live state, kind tokens still apply and session tokens pass.
+    assert_eq!(apply_filter(&ps, "is:service"), vec![0]);
+    assert!(apply_filter(&ps, "is:agent api").is_empty());
+    assert_eq!(apply_filter(&ps, "is:running"), vec![1, 2, 0]);
 }
 #[test]
 fn plain_path_strips_verbatim_prefix() {
@@ -201,6 +253,7 @@ fn relocate_renames_agent_and_followers() {
         ledger: false,
         reports_to: up.map(String::from),
         pinned: false,
+        restart_on_crash: false,
     };
     let mut p = vec![
         mk("old", "/w/old", Kind::Agent, None),
@@ -233,6 +286,7 @@ fn persist_helpers_keep_other_writers_projects() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     // Single-threaded section: AGENTSQUAD_CONFIG is process-global, and
     // no other test reads it.
@@ -262,6 +316,18 @@ fn persist_helpers_keep_other_writers_projects() {
     );
     persist_pin("C", true).unwrap();
     persist_edit("c", vec!["zsh".into(), "-l".into()], true).unwrap();
+    persist_restart_on_crash("C", true).unwrap();
+    assert!(
+        load_from(&file)
+            .unwrap()
+            .projects
+            .iter()
+            .find(|p| p.name == "c")
+            .unwrap()
+            .restart_on_crash,
+        "auto-restart flag saved"
+    );
+    assert!(persist_restart_on_crash("nobody", true).is_err());
     let after = load_from(&file).unwrap().projects;
     let names: Vec<String> = after.iter().map(|p| p.name.clone()).collect();
     let c = after.iter().find(|p| p.name == "c").unwrap();
@@ -296,6 +362,34 @@ fn persist_helpers_keep_other_writers_projects() {
     assert_eq!(names, ["b", "c", "d"]);
 }
 #[test]
+fn restart_on_crash_roundtrips_and_defaults_off() {
+    let on: Config = toml::from_str(
+        "[[projects]]\nname = \"api\"\npath = \"api\"\ncommand = [\"node\", \"server.js\"]\nkind = \"service\"\nrestart_on_crash = true\n",
+    )
+    .unwrap();
+    assert!(on.projects[0].restart_on_crash);
+    let plain: Config =
+        toml::from_str("[[projects]]\nname = \"a\"\npath = \"a\"\ncommand = [\"sh\"]").unwrap();
+    assert!(!plain.projects[0].restart_on_crash);
+    // `false` is skipped on serialize, like the other flags.
+    assert!(!toml::to_string(&plain)
+        .unwrap()
+        .contains("restart_on_crash"));
+}
+
+#[test]
+fn sanitize_chrome_drops_controls_but_keeps_text() {
+    assert_eq!(sanitize_chrome_line("a\u{1b}]0;pwned\u{7}b"), "a]0;pwnedb");
+    assert_eq!(sanitize_chrome_line("한글 OK-123_-. "), "한글 OK-123_-. ");
+    assert_eq!(sanitize_chrome_line("a\nb\tc"), "abc");
+    assert_eq!(
+        sanitize_chrome_text("line1\nline2\u{1b}[2K"),
+        "line1\nline2[2K"
+    );
+    assert_eq!(sanitize_chrome_text("a\r\nb"), "a\nb");
+}
+
+#[test]
 fn remove_unregisters_project() {
     // `Delete` removes the selected project with confirmation, whether
     // or not it holds a session.
@@ -308,6 +402,7 @@ fn remove_unregisters_project() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut projects = vec![mk("a"), mk("b")];
     let mut slots: Vec<Option<u8>> = vec![None, Some(1)];
@@ -346,6 +441,7 @@ fn remove_persists_to_config_file() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let config = Config {
         projects: vec![mk("a"), mk("b")],
@@ -375,6 +471,7 @@ fn merge_appends_missing_projects() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let mut c = Config {
         projects: vec![mk("a")],
@@ -453,6 +550,7 @@ fn service_naming_looks_through_shells_and_live_foreground() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     assert_eq!(live_name(&p, None), "my-dir");
     assert_eq!(live_name(&p, Some("jarvis")), "jarvis");
@@ -531,6 +629,7 @@ fn empty_command_errors_instead_of_panicking() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let err = Session::spawn(&p, 24, 80)
         .err()
@@ -597,6 +696,7 @@ fn add_preview_name_matches_what_gets_registered() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let existing = vec![mk("node")];
     let none: Vec<String> = Vec::new();
@@ -625,6 +725,7 @@ fn filter_matches_path_too() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let projects = vec![mk("web", "/work/my-api"), mk("other", "/work/site")];
     assert_eq!(apply_filter(&projects, "my-api"), vec![0]);
@@ -642,6 +743,7 @@ fn startup_selection_prefers_explicit_then_last_then_first() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     // Config order: svc, a1, a2. Sidebar order: agents first, so a1, a2, svc.
     let projects = vec![
@@ -677,6 +779,7 @@ fn chain_of_command_orders_ranks_and_briefs() {
         ledger: false,
         reports_to: under.map(Into::into),
         pinned: false,
+        restart_on_crash: false,
     };
     // Registered out of rank order: company, soldier, platoon.
     let p = vec![
@@ -713,6 +816,7 @@ fn orders_reach_every_depth_below_a_commander() {
         ledger: false,
         reports_to: under.map(Into::into),
         pinned: false,
+        restart_on_crash: false,
     };
     let p = vec![
         mk("company", None),
@@ -737,6 +841,7 @@ fn agent_in(name: &str, dir: &str, under: Option<&str>) -> Project {
         ledger: false,
         reports_to: under.map(Into::into),
         pinned: false,
+        restart_on_crash: false,
     }
 }
 
@@ -850,6 +955,7 @@ fn pinned_projects_list_first_within_their_group() {
         ledger: false,
         reports_to: None,
         pinned,
+        restart_on_crash: false,
     };
     let ps = vec![
         mk("a", Kind::Agent, false),

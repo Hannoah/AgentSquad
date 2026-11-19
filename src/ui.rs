@@ -1,4 +1,6 @@
-use crate::config::{display_order, is_bare_shell, rank_prefix, Kind, Project};
+use crate::config::{
+    display_order, fit, is_bare_shell, rank_prefix, sanitize_chrome_line, Kind, Project,
+};
 use crate::session::Session;
 use crate::sys::Usage;
 use ratatui::{
@@ -36,7 +38,10 @@ pub fn window_title(selected: Option<&str>, attention: usize) -> String {
         String::new()
     };
     match selected {
-        Some(name) => format!("{count}squad - {name}"),
+        // Project names come from folder names and user input: strip control
+        // characters so a crafted name cannot inject an OSC sequence into
+        // the outer terminal's title.
+        Some(name) => format!("{count}squad - {}", sanitize_chrome_line(name)),
         None => format!("{count}squad"),
     }
 }
@@ -112,12 +117,12 @@ pub fn help_lines() -> Vec<&'static str> {
         "Click, drag  focus a project or the pane; drag copies text",
         "Right-click  quick actions & env vars (from a terminal too)",
         "j/k, Tab   select (Management too) / next needing attention",
-        "1-9, Home/End  jump to a project / the first / the last",
-        "/, F       filter projects / search output (Esc clears)",
+        "1-9, Home/End  jump (type 2 digits past 9) / first / last",
+        "/, F, G     filter (text, is:waiting…) / find here / find all",
         "a, E,K,T,R  add / env / skills / tools / refs",
         "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
-        "h, g       history (SITREPs) / git status & diff",
+        "h, g       history (SITREPs, / filters) / git status & diff",
         "M          memory: biggest processes, kill one (x)",
         "o          order: message every agent under a commander",
         "u          set whom the selected agent reports to",
@@ -432,6 +437,31 @@ pub fn confirm_start_all_lines(n: usize) -> Vec<Line<'static>> {
 /// label) in display order. Stopped projects offer starting instead of
 /// focusing and stopping.
 pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
+    context_menu_items_for(running, Kind::Agent, false)
+}
+
+/// [`context_menu_items`] plus the service-only crash auto-restart toggle.
+/// Agents keep the base menu so their shortcut rows never shift.
+pub fn context_menu_items_for(
+    running: bool,
+    kind: Kind,
+    restart_on_crash: bool,
+) -> Vec<(char, &'static str)> {
+    let mut items = context_menu_items_base(running);
+    if kind == Kind::Service {
+        items.push((
+            'A',
+            if restart_on_crash {
+                "Disable auto-restart"
+            } else {
+                "Enable auto-restart"
+            },
+        ));
+    }
+    items
+}
+
+fn context_menu_items_base(running: bool) -> Vec<(char, &'static str)> {
     if running {
         vec![
             ('1', "Focus terminal"),
@@ -470,10 +500,29 @@ pub fn context_menu_lines(name: &str, running: bool) -> Vec<Line<'static>> {
     context_menu_lines_at(name, running, None)
 }
 pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> Vec<Line<'static>> {
-    let items = context_menu_items(running);
+    context_menu_lines_at_for(name, running, Kind::Agent, false, sel)
+}
+/// [`context_menu_lines`] for the service menu with its auto-restart row.
+pub fn context_menu_lines_for(
+    name: &str,
+    running: bool,
+    kind: Kind,
+    restart_on_crash: bool,
+) -> Vec<Line<'static>> {
+    context_menu_lines_at_for(name, running, kind, restart_on_crash, None)
+}
+/// [`context_menu_lines_at`] for the service menu with its auto-restart row.
+pub fn context_menu_lines_at_for(
+    name: &str,
+    running: bool,
+    kind: Kind,
+    restart_on_crash: bool,
+    sel: Option<usize>,
+) -> Vec<Line<'static>> {
+    let items = context_menu_items_for(running, kind, restart_on_crash);
     let mut lines = Vec::with_capacity(items.len() + 3);
     lines.push(Line::from(Span::styled(
-        name.to_string(),
+        sanitize_chrome_line(name),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(ratatui::style::Modifier::BOLD),
@@ -500,13 +549,17 @@ pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> V
     }
     lines.push(Line::from(""));
     // The tenth row is keyed `0`, followed by `K`/`T`/`R` for Skills/Tools/References.
-    let range = if items.iter().any(|(k, _)| *k == '0') {
+    let mut range = if items.iter().any(|(k, _)| *k == '0') {
         "0-9/K/T/R"
     } else {
         "1-8/K/T/R"
-    };
+    }
+    .to_string();
+    if items.iter().any(|(k, _)| *k == 'A') {
+        range.push_str("/A");
+    }
     lines.push(Line::from(hint_spans(&[
-        (range, "selects"),
+        (range.as_str(), "selects"),
         ("↑↓/Enter", "runs"),
         ("Esc", "cancels"),
     ])));
@@ -631,6 +684,12 @@ pub fn confirm_click(
     ) as u16;
     Some(col - left < yes_w)
 }
+/// Global search popup: room for the query title plus `rows` hit rows.
+pub fn gsearch_popup(area: ratatui::layout::Rect, hit_rows: usize) -> ratatui::layout::Rect {
+    let w = area.width.saturating_sub(16).clamp(40, 76);
+    fixed_rect(w, (hit_rows.min(10) + 4) as u16, area)
+}
+
 /// The SITREP reader: nearly the whole screen, shared by drawing and clicks.
 pub fn history_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     fixed_rect(
@@ -802,9 +861,10 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- cmd]
+  squad add [<path>] [--kind agent|service] [--autostart] [--restart-on-crash] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- cmd]
                                                      Register project (path optional for services;
-                                                     --create makes folder, --env/--skill/--tool/--ref attach items)
+                                                     --create makes folder, --env/--skill/--tool/--ref attach items,
+                                                     --restart-on-crash restarts a crashed service a few times)
   squad env <list|set KEY VAL|remove KEY|apply proj|unapply proj KEY...>
                                                      Manage shared env vars and apply to .env
   squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply proj|unapply proj NAME...>
@@ -818,11 +878,12 @@ Usage:
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
   squad start <name>                                 Open manager and start project
   squad update [--check]                             Install the newest release (--check only looks)
+  squad completion <powershell|bash>                 Print shell completion script
   squad --version, -V                                Print version
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · F/Ctrl+F  search output · a  add · E  env · K  skills · T  tools · R  refs · e  edit · f  pin · [/]  collapse · z  zoom
+  /  filter · F/Ctrl+F  search output · G  search all · a  add · E  env · K  skills · T  tools · R  refs · e  edit · f  pin · [/]  collapse · z  zoom
   m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
   h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help
@@ -903,7 +964,23 @@ pub fn paint_kind(cell: &str, kind: Kind, enabled: bool) -> String {
 /// and kind columns padded so they line up in a terminal.
 pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
     let order = display_order(projects);
-    let label = |i: usize| format!("{}{}", rank_prefix(projects, i), projects[i].name);
+    // Pinned projects keep the sidebar's `*` marker here too, and
+    // services with crash auto-restart show a `~` next to it.
+    // Names, paths and commands are sanitized: they render into terminals
+    // that would otherwise interpret embedded control characters.
+    let label = |i: usize| {
+        format!(
+            "{}{}{}{}",
+            rank_prefix(projects, i),
+            sanitize_chrome_line(&projects[i].name),
+            if projects[i].pinned { "*" } else { "" },
+            if projects[i].kind == Kind::Service && projects[i].restart_on_crash {
+                "~"
+            } else {
+                ""
+            }
+        )
+    };
     // Columns, not chars: `{:<w$}` would misalign rows with Hangul names.
     let cols = |i: usize| crate::config::width(&label(i));
     let name_w = order.iter().map(|&i| cols(i)).max().unwrap_or(0);
@@ -921,8 +998,8 @@ pub fn list_table(projects: &[Project], color: bool) -> Vec<String> {
                 "{}{}  {kind}  {}  {}",
                 label(i),
                 " ".repeat(name_w - cols(i)),
-                p.path.display(),
-                p.command.join(" ")
+                sanitize_chrome_line(&p.path.display().to_string()),
+                sanitize_chrome_line(&p.command.join(" "))
             )
         })
         .collect()
@@ -971,6 +1048,36 @@ pub fn pane_border_style(focus: bool) -> Style {
         Style::default().fg(Color::DarkGray)
     }
 }
+/// Bottom-right pane note while scrolled into history: how far up, and
+/// whether fresh output arrived meanwhile (it waits at the live tail).
+pub fn scroll_note_text(scrolled: usize, fresh_output: bool) -> Option<String> {
+    if scrolled == 0 {
+        return None;
+    }
+    if fresh_output {
+        Some(format!(
+            "↑ history {scrolled} · new output · Shift+End live"
+        ))
+    } else {
+        Some(format!("↑ history {scrolled} · Shift+End live"))
+    }
+}
+
+/// Sidebar bottom strip summarizing agents waiting on input, so their
+/// questions stay visible when their rows are scrolled away:
+/// `? deploy: approve release? +1 more`, truncated to `width`.
+pub fn waiting_summary(waiting: &[(String, String)], width: usize) -> Option<String> {
+    if waiting.is_empty() || width < 14 {
+        return None;
+    }
+    let text = sanitize_chrome_line(&format!("? {}: {}", waiting[0].0, waiting[0].1));
+    let mut out = text;
+    if waiting.len() > 1 {
+        out.push_str(&format!(" +{} more", waiting.len() - 1));
+    }
+    Some(format!(" {} ", fit(&out, width.saturating_sub(2))))
+}
+
 /// Sessions that need attention: crashed exits and errors.
 /// Clean exits and stopped slots stay quiet.
 pub fn needs_attention(status: &str) -> bool {
@@ -1189,12 +1296,15 @@ pub fn env_info_lines(
     let dim = Style::default().add_modifier(Modifier::DIM);
     let mut lines = vec![
         Line::from(Span::styled(
-            p.name.clone(),
+            sanitize_chrome_line(&p.name),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(fit(&p.path.display().to_string(), 58), dim)),
+        Line::from(Span::styled(
+            fit(&sanitize_chrome_line(&p.path.display().to_string()), 58),
+            dim,
+        )),
         Line::from(""),
         Line::from(Span::styled(
             match dotenv.len() {
@@ -1212,13 +1322,13 @@ pub fn env_info_lines(
         .min(22);
     for (k, v) in dotenv.iter().take(ENV_INFO_ROWS) {
         let shown = if reveal {
-            v.replace(['\r', '\n'], " ")
+            sanitize_chrome_line(v)
         } else {
             crate::envvault::mask_value(v)
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {:<key_w$}", fit(k, key_w)),
+                format!("  {:<key_w$}", fit(&sanitize_chrome_line(k), key_w)),
                 Style::default().fg(Color::Yellow),
             ),
             Span::raw("  "),

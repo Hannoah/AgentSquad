@@ -152,6 +152,7 @@ fn pane_title_name_prefers_service_command() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     assert_eq!(pane_title_name(&agent), "my-agent");
 
@@ -164,6 +165,7 @@ fn pane_title_name_prefers_service_command() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     assert_eq!(pane_title_name(&service), "npm run dev");
 }
@@ -253,6 +255,7 @@ fn list_table_aligns_columns() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     // Registration order is service-first; output is agents-first.
     let projects = vec![
@@ -267,6 +270,23 @@ fn list_table_aligns_columns() {
         ]
     );
     assert!(list_table(&[], false).is_empty());
+    let mut pinned = projects.clone();
+    pinned[1].pinned = true;
+    let rows = list_table(&pinned, false);
+    assert!(rows[0].starts_with("web*"), "pinned marker: {:?}", rows[0]);
+    assert!(rows[1].starts_with("api "), "unpinned rows stay plain");
+    let mut crashy = projects.clone();
+    crashy[0].restart_on_crash = true;
+    let rows = list_table(&crashy, false);
+    assert!(
+        rows[1].starts_with("api~"),
+        "auto-restart marker: {:?}",
+        rows[1]
+    );
+    let mut agent_flag = projects.clone();
+    agent_flag[1].restart_on_crash = true;
+    let rows = list_table(&agent_flag, false);
+    assert!(rows[0].starts_with("web "), "agents never show the marker");
     let colored = list_table(&projects, true).join("\n");
     assert!(colored.contains("agent"), "kind text stays readable");
     assert!(
@@ -553,6 +573,7 @@ fn agent_tag_shows_program() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     assert_eq!(
         agent_tag(&mk(vec!["claude".into(), "--dangerous".into()])),
@@ -610,6 +631,7 @@ fn group_counts_split_by_kind() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let projects = vec![
         mk("a1", Kind::Agent),
@@ -689,6 +711,17 @@ fn context_menu_offers_start_for_stopped() {
     assert!(running.iter().any(|(_, l)| l.contains("history")));
     let stopped = context_menu_items(false);
     assert_eq!(stopped.len(), 11);
+    // Services get one trailing auto-restart row; agents keep the base menu.
+    let svc_running = context_menu_items_for(true, Kind::Service, false);
+    assert_eq!(svc_running.len(), running.len() + 1);
+    assert_eq!(svc_running.last(), Some(&('A', "Enable auto-restart")));
+    let svc_on = context_menu_items_for(false, Kind::Service, true);
+    assert_eq!(svc_on.last(), Some(&('A', "Disable auto-restart")));
+    assert_eq!(
+        context_menu_items_for(true, Kind::Agent, true),
+        running,
+        "agents never see the toggle"
+    );
     for items in [&running, &stopped] {
         assert!(items.iter().any(|(_, l)| l.contains("Environment")));
         assert!(items.iter().any(|(_, l)| l.contains("Skills")));
@@ -833,12 +866,55 @@ fn filtered_empty_state_explains_zero_matches() {
 }
 
 #[test]
+fn scroll_note_names_history_and_fresh_output() {
+    assert_eq!(scroll_note_text(0, false), None);
+    assert_eq!(scroll_note_text(0, true), None);
+    assert_eq!(
+        scroll_note_text(3, false),
+        Some("↑ history 3 · Shift+End live".to_string())
+    );
+    let fresh = scroll_note_text(3, true).unwrap();
+    assert!(fresh.contains("new output"), "got {fresh:?}");
+    assert!(fresh.contains("Shift+End"), "got {fresh:?}");
+}
+
+#[test]
 fn history_cols_splits_list_and_reader() {
     use ratatui::layout::Rect;
     let popup = Rect::new(2, 2, 100, 20);
     let (left, right) = history_cols(popup);
     assert_eq!(left, Rect::new(3, 3, 30, 18));
     assert_eq!(right, Rect::new(33, 3, 68, 18));
+}
+
+#[test]
+fn waiting_summary_names_the_first_question() {
+    assert_eq!(waiting_summary(&[], 40), None);
+    assert_eq!(
+        waiting_summary(
+            &[("deploy".to_string(), "approve release?".to_string())],
+            10
+        ),
+        None,
+        "too narrow to help"
+    );
+    assert_eq!(
+        waiting_summary(
+            &[("deploy".to_string(), "approve release?".to_string())],
+            40
+        ),
+        Some(" ? deploy: approve release? ".to_string())
+    );
+    assert_eq!(
+        waiting_summary(
+            &[
+                ("a".to_string(), "ship it?".to_string()),
+                ("b".to_string(), "allow once?".to_string()),
+            ],
+            40
+        ),
+        Some(" ? a: ship it? +1 more ".to_string())
+    );
 }
 
 #[test]
@@ -857,6 +933,7 @@ fn list_table_aligns_hangul_names() {
         ledger: false,
         reports_to: None,
         pinned: false,
+        restart_on_crash: false,
     };
     let rows = list_table(&[mk("한글"), mk("abcdef")], false);
     let kind_col = |r: &str| width(&r[..r.find("agent").unwrap()]);

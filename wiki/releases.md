@@ -4,6 +4,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.15.32 | 보안 강화(터미널 이스케이프 살균, Stop 후크 JSON 정상 파싱, 종료 전 PID 재확인, 툴체인 SHA 고정, CI 액션 SHA 고정, 빌드 출처 증명, 설치 버전 대조)와 사용성 묶음(세션 전역 검색, 상태 필터, 히스토리 필터, 명령 하달 미리보기, 크래시 자동 재시작, 셸 완성, 대기열 스트립). | 태그 `v0.15.32` 참고 |
 | v0.15.31 | CI에 readme-encoding 잡 추가: README.md에 '??' 또는 U+FFFD가 있으면 실패(v0.15.19에서 인코딩 깨짐이 들어온 적 있음). | 태그 `v0.15.31` 참고 |
 | v0.15.30 | 공유 env를 프로젝트 .env에 쓸 때, 프로젝트가 .env를 무시하지 않으면 .git/info/exclude에 .env를 추가해 시크릿이 커밋되지 않게 함(줄을 지우면 옵트인). README의 깨진 문자(??, 화살표·대시·트리 등)를 복원. | 태그 `v0.15.30` 참고 |
 | v0.15.29 | - Management에 GitHub/문서 링크를 설명과 함께 관리하는 **References (`R`)** 볼트 추가 (`references.toml`) - URL만 입력하고 Name을 비우면 URL 경로에서 이름 자동 추출 및 정규화 지원 - 에이전트에 할당 시 기존 내용을 보존한 채 `CLAUDE.md`·`AGENTS.md`(및 존재하는 경우 `GEMINI.md`)에 마커 블록(`<!-- agentsquad:references:start/end -->`)으로 자동 추가, 할당 취소 시 해당 영역만 깔끔하게 제거 - 프로젝트 생성/편집 폼, 우클릭 메뉴(`R`), CLI(`squad refs list|add|remove|apply|unapply`, `squad add --ref`) 지원 | 태그 `v0.15.29` 참고 |
