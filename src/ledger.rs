@@ -136,6 +136,12 @@ pub fn ensure(project: &Path) -> Result<bool> {
 /// which is shared). A worktree or submodule, where `.git` is a file, is
 /// left alone.
 pub(crate) fn exclude_from_git(project: &Path) -> std::io::Result<()> {
+    exclude_entry_from_git(project, ".squad/")
+}
+
+/// `exclude_from_git` for any one pattern (`.squad/`, `.env`). A pattern
+/// already listed, with or without its trailing slash, is not added twice.
+pub(crate) fn exclude_entry_from_git(project: &Path, entry: &str) -> std::io::Result<()> {
     let git = project.join(".git");
     if !git.is_dir() {
         return Ok(());
@@ -144,16 +150,15 @@ pub(crate) fn exclude_from_git(project: &Path) -> std::io::Result<()> {
     fs::create_dir_all(&info)?;
     let file = info.join("exclude");
     let mut text = fs::read_to_string(&file).unwrap_or_default();
-    if text
-        .lines()
-        .any(|l| matches!(l.trim(), ".squad" | ".squad/"))
-    {
+    let bare = entry.trim_end_matches('/');
+    if text.lines().any(|l| l.trim().trim_end_matches('/') == bare) {
         return Ok(());
     }
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(".squad/\n");
+    text.push_str(entry);
+    text.push('\n');
     fs::write(file, text)
 }
 

@@ -253,6 +253,11 @@ pub fn apply_dotenv(dir: &Path, entries: &[EnvEntry]) -> Result<(usize, usize)> 
     }
 
     write_dotenv(dir, &lines, line_ending)?;
+    // These are secrets: unless the project already ignores `.env`, keep it
+    // out of commits via the local exclude list (deleting the line opts in).
+    if crate::ledger::git(dir, &["check-ignore", "-q", ".env"]).is_none() {
+        let _ = crate::ledger::exclude_entry_from_git(dir, ".env");
+    }
     Ok((added, updated))
 }
 

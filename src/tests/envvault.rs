@@ -80,3 +80,22 @@ fn apply_dotenv_creates_updates_and_preserves_comments() {
     assert_eq!(parsed.get("PORT").map(String::as_str), Some("3000"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn apply_dotenv_keeps_env_out_of_git_once() {
+    let entry = EnvEntry {
+        key: "K".into(),
+        value: "v".into(),
+    };
+    let repo = scratch_dir("envvault-exclude");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    apply_dotenv(&repo, std::slice::from_ref(&entry)).unwrap();
+    apply_dotenv(&repo, std::slice::from_ref(&entry)).unwrap();
+    let exclude = fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.lines().filter(|l| *l == ".env").count(), 1);
+
+    // Not a repository: nothing is created.
+    let plain = scratch_dir("envvault-exclude-plain");
+    apply_dotenv(&plain, std::slice::from_ref(&entry)).unwrap();
+    assert!(!plain.join(".git").exists());
+}
