@@ -19,6 +19,17 @@ jobs:
         with:
           tool: cargo-audit
       - run: cargo audit
+  # A README saved in the wrong encoding turns punctuation into "??" or U+FFFD
+  # (it happened in v0.15.19). Neither belongs in the README.
+  readme-encoding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          if grep -nF -e '??' -e "$(printf '\xef\xbf\xbd')" README.md; then
+            echo "::error file=README.md::Corrupted characters ('??' or U+FFFD); restore them and save as UTF-8"
+            exit 1
+          fi
   check:
     strategy:
       fail-fast: false
