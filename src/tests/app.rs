@@ -386,9 +386,13 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     empty.on_key(key(KeyCode::Tab), 24, 54);
     assert_eq!(empty.add_field, 7, "Tab from Skills goes to Tools");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 0, "Tab from Tools wraps to Path");
+    assert_eq!(empty.add_field, 8, "Tab from Tools goes to References");
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(empty.add_field, 0, "Tab from References wraps to Path");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 7, "BackTab from Path wraps to Tools");
+    assert_eq!(empty.add_field, 8, "BackTab from Path wraps to References");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(empty.add_field, 7, "BackTab from References goes to Tools");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
     assert_eq!(empty.add_field, 6, "BackTab from Tools goes to Skills");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
@@ -416,8 +420,8 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     app.context_sel = 0;
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(
-        app.context_sel, 9,
-        "Up wraps to last stopped menu item (Tools)"
+        app.context_sel, 10,
+        "Up wraps to last stopped menu item (References)"
     );
     app.on_key(key(KeyCode::Char('j')), 24, 54);
     assert_eq!(app.context_sel, 0, "j wraps back to first item");
@@ -740,7 +744,7 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
         ..Default::default()
     };
     let mut app = App::new(cfg, None);
-    // Down past the last project steps onto Management (Memory, Env, Skills, Tools), then wraps to top.
+    // Down past the last project steps onto Management (Memory, Env, Skills, Tools, Refs), then wraps to top.
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (1, None));
     app.on_key(key(KeyCode::Down), 24, 54);
@@ -751,10 +755,14 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     assert_eq!(app.mgmt_sel, Some(2));
     app.on_key(key(KeyCode::Down), 24, 54); // Tools
     assert_eq!(app.mgmt_sel, Some(3));
+    app.on_key(key(KeyCode::Down), 24, 54); // References
+    assert_eq!(app.mgmt_sel, Some(4));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (0, None));
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(3), "Up from the top reaches Tools");
+    assert_eq!(app.mgmt_sel, Some(4), "Up from the top reaches References");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(3), "Up reaches Tools");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(2), "Up reaches Skills");
     app.on_key(key(KeyCode::Up), 24, 54);
@@ -1342,5 +1350,163 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
 
     drop(app);
     env::remove_var("AGENTSQUAD_TOOLS");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
+    let dir = scratch_dir("refs-modal-e2e");
+    let proj_a = dir.join("agent-a");
+    let proj_b = dir.join("agent-b");
+    let proj_c = dir.join("agent-c");
+    fs::create_dir_all(&proj_a).unwrap();
+    fs::create_dir_all(&proj_b).unwrap();
+    fs::create_dir_all(&proj_c).unwrap();
+    let existing_claude = "# Agent A Notes\n\nExisting project rules stay intact.\n";
+    fs::write(proj_a.join("CLAUDE.md"), existing_claude).unwrap();
+    fs::write(proj_b.join("CLAUDE.md"), "# Agent B Notes\n").unwrap();
+    fs::write(proj_b.join("GEMINI.md"), "# Gemini B\n").unwrap();
+
+    let refs_file = dir.join("references.toml");
+    env::set_var("AGENTSQUAD_REFS", &refs_file);
+
+    let cfg = Config {
+        projects: vec![
+            proj("agent-a", proj_a.to_str().unwrap(), &["claude"]),
+            proj("agent-b", proj_b.to_str().unwrap(), &["agy"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    // `R` opens References modal; empty vault opens inline RefEditor on URL (field 1).
+    app.selected = 0;
+    app.on_key(key(KeyCode::Char('R')), 27, 70);
+    assert!(app.ref_modal.is_some());
+    assert_eq!(
+        app.ref_modal
+            .as_ref()
+            .unwrap()
+            .editor
+            .as_ref()
+            .unwrap()
+            .field,
+        1
+    );
+    assert!(!app.wants_ascii_ime());
+    term.draw(|f| app.draw(f)).unwrap();
+
+    // Add first GitHub reference without typing Name: auto-derives `react` from URL.
+    for ch in "https://github.com/facebook/react".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "React UI library".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.refs_vault.references.len(), 1);
+    assert_eq!(app.refs_vault.references[0].name, "react");
+    assert_eq!(app.refs_vault.references[0].description, "React UI library");
+
+    // Add second reference with explicit Name via BackTab -> field 0.
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    app.on_key(key(KeyCode::BackTab), 27, 70);
+    for ch in "ratatui-rs".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "https://github.com/ratatui/ratatui".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "TUI framework".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.refs_vault.references.len(), 2);
+    term.draw(|f| app.draw(f)).unwrap();
+
+    // Enter commits picked refs into CLAUDE.md (appended) and AGENTS.md.
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.ref_modal.is_none());
+    let claude_a = fs::read_to_string(proj_a.join("CLAUDE.md")).unwrap();
+    assert!(claude_a.starts_with("# Agent A Notes\n\nExisting project rules stay intact."));
+    assert!(claude_a.contains("<!-- agentsquad:references:start -->"));
+    assert!(claude_a.contains("**react** (https://github.com/facebook/react): React UI library"));
+    assert!(claude_a.contains("**ratatui-rs** (https://github.com/ratatui/ratatui): TUI framework"));
+    assert!(proj_a.join("AGENTS.md").is_file());
+
+    // Editing an already-assigned reference inside `R` modal marks it Differs and updates on Enter.
+    app.on_key(key(KeyCode::Char('R')), 27, 70);
+    app.ref_modal.as_mut().unwrap().sel = 0;
+    app.on_key(key(KeyCode::Char('e')), 27, 70);
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in " v2".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(
+        app.ref_modal
+            .as_ref()
+            .unwrap()
+            .project_state
+            .vault_state
+            .get("react"),
+        Some(&crate::config::SyncState::Differs)
+    );
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(fs::read_to_string(proj_a.join("CLAUDE.md"))
+        .unwrap()
+        .contains("React UI library v2"));
+
+    // Unassign one via Space + Enter: keeps remaining entry and user content.
+    app.on_key(key(KeyCode::Char('R')), 27, 70);
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    let partial_a = fs::read_to_string(proj_a.join("CLAUDE.md")).unwrap();
+    assert!(!partial_a.contains("react"));
+    assert!(partial_a.contains("ratatui-rs"));
+    assert!(partial_a.contains("Existing project rules stay intact."));
+
+    // Unassign the last reference: removes ONLY managed block from CLAUDE.md & deletes AGENTS.md.
+    app.on_key(key(KeyCode::Char('R')), 27, 70);
+    app.on_key(key(KeyCode::Down), 27, 70);
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(
+        fs::read_to_string(proj_a.join("CLAUDE.md")).unwrap(),
+        existing_claude
+    );
+    assert!(!proj_a.join("AGENTS.md").exists());
+
+    // Context menu `'R'` opens References modal on agent-b (updating CLAUDE.md, AGENTS.md, GEMINI.md).
+    app.selected = 1;
+    app.context_menu = Some(1);
+    app.on_key(key(KeyCode::Char('R')), 27, 70);
+    assert!(app.context_menu.is_none());
+    assert!(app.ref_modal.is_some());
+    app.on_key(key(KeyCode::Char('A')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(fs::read_to_string(proj_b.join("CLAUDE.md"))
+        .unwrap()
+        .starts_with("# Agent B Notes"));
+    assert!(fs::read_to_string(proj_b.join("GEMINI.md"))
+        .unwrap()
+        .contains("https://github.com/facebook/react"));
+
+    // Add form field 8 + apply_add_refs attaches picked refs to a new project.
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    app.add_field = 8;
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Char('A')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.apply_add_refs(&proj_c), Ok(Some((2, 0))));
+    assert!(proj_c.join("CLAUDE.md").is_file());
+    assert!(proj_c.join("AGENTS.md").is_file());
+
+    drop(app);
+    env::remove_var("AGENTSQUAD_REFS");
     let _ = fs::remove_dir_all(&dir);
 }

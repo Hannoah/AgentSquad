@@ -32,6 +32,7 @@ use crate::history;
 use crate::input::*;
 use crate::ledger;
 use crate::pathpick::{self, PathState, Pick};
+use crate::refs::{self, ProjectReferences, ReferenceVault};
 use crate::select::Selection;
 use crate::session::*;
 use crate::skills::{self, ProjectSkills, SkillVault};
@@ -291,6 +292,41 @@ pub(crate) struct ToolModal {
     pub(crate) editor: Option<ToolEditor>,
 }
 
+/// Inline form inside `RefModal` for registering or editing a shared reference link.
+pub(crate) struct RefEditor {
+    pub(crate) name: LineInput,
+    pub(crate) url: LineInput,
+    pub(crate) desc: LineInput,
+    /// Active input field: `0` = name (optional; derived from URL if blank), `1` = url, `2` = desc.
+    pub(crate) field: usize,
+    pub(crate) editing_name: Option<String>,
+    pub(crate) err: String,
+}
+
+impl RefEditor {
+    pub(crate) fn blank() -> Self {
+        RefEditor {
+            name: LineInput::new(),
+            url: LineInput::new(),
+            desc: LineInput::new(),
+            field: 1, // start on URL so user can paste a GitHub link immediately; Name auto-fills if empty
+            editing_name: None,
+            err: String::new(),
+        }
+    }
+}
+
+/// Shared Reference Links Vault & `CLAUDE.md` / `AGENTS.md` sync popup.
+pub(crate) struct RefModal {
+    pub(crate) target: VaultTarget,
+    pub(crate) sel: usize,
+    pub(crate) top: std::cell::Cell<usize>,
+    pub(crate) picked: BTreeSet<String>,
+    pub(crate) project_state: ProjectReferences,
+    pub(crate) confirm_delete: Option<String>,
+    pub(crate) editor: Option<RefEditor>,
+}
+
 /// What the read-only environment popup shows: project `pi`'s `.env`, read
 /// once when it opens.
 pub(crate) struct EnvInfo {
@@ -411,6 +447,8 @@ pub(crate) struct App {
     pub(crate) add_skills: BTreeSet<String>,
     /// Shared tools selected in Add/Edit mode to install on save.
     pub(crate) add_tools: BTreeSet<String>,
+    /// Shared references selected in Add/Edit mode to sync on save.
+    pub(crate) add_refs: BTreeSet<String>,
     /// Name of the project the form is editing; None when it adds one.
     pub(crate) add_edit: Option<String>,
     pub(crate) add_err: String,
@@ -483,6 +521,9 @@ pub(crate) struct App {
     /// Shared tools vault & project MCP/CLI sync modal (`T` or Add form).
     pub(crate) tools_vault: ToolVault,
     pub(crate) tool_modal: Option<ToolModal>,
+    /// Shared references vault & `CLAUDE.md`/`AGENTS.md` sync modal (`R` or Add form).
+    pub(crate) refs_vault: ReferenceVault,
+    pub(crate) ref_modal: Option<RefModal>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
     pub(crate) starting: HashMap<String, Vec<u8>>,
@@ -510,7 +551,7 @@ pub(crate) struct App {
     pub(crate) search_active: bool,
     pub(crate) hangul_hotkey_seen: bool,
     /// Arrow keys past the last project land on the Management rows:
-    /// `0` = Memory monitor, `1` = Env vault, `2` = Skills, `3` = Tools. None while a project is picked.
+    /// `0` = Memory monitor, `1` = Env vault, `2` = Skills, `3` = Tools, `4` = References.
     pub(crate) mgmt_sel: Option<usize>,
     /// Read-only environment popup opened from the right-click menu.
     pub(crate) env_info: Option<EnvInfo>,
@@ -526,6 +567,7 @@ impl App {
         let env_vault = envvault::load_env().unwrap_or_default();
         let skills_vault = skills::load_skills().unwrap_or_default();
         let tools_vault = tools::load_tools().unwrap_or_default();
+        let refs_vault = refs::load_refs().unwrap_or_default();
         let selected = start_selection(
             &cfg.projects,
             &order,
@@ -570,6 +612,7 @@ impl App {
             add_env: BTreeSet::new(),
             add_skills: BTreeSet::new(),
             add_tools: BTreeSet::new(),
+            add_refs: BTreeSet::new(),
             add_edit: None,
             add_err: String::new(),
             add_state: PathState::Blank,
@@ -621,6 +664,8 @@ impl App {
             skill_modal: None,
             tools_vault,
             tool_modal: None,
+            refs_vault,
+            ref_modal: None,
             starting: HashMap::new(),
             start_tx,
             start_rx,
@@ -648,6 +693,7 @@ impl App {
         self.env_modal.is_some()
             || self.skill_modal.is_some()
             || self.tool_modal.is_some()
+            || self.ref_modal.is_some()
             || self.history.is_some()
             || self.git_view.is_some()
             || self.quick_reply.is_some()
@@ -680,6 +726,7 @@ impl App {
                 .tool_modal
                 .as_ref()
                 .is_some_and(|m| m.editor.as_ref().is_some_and(|e| e.field != 0))
+            || self.ref_modal.as_ref().is_some_and(|m| m.editor.is_some())
             || self.quick_reply.as_ref().is_some_and(|q| q.typing)
         {
             return false;
@@ -689,7 +736,7 @@ impl App {
         }
         match self.mode {
             Mode::Manager | Mode::Help => true,
-            Mode::Add => matches!(self.add_field, 1 | 3 | 5 | 6 | 7),
+            Mode::Add => matches!(self.add_field, 1 | 3 | 5 | 6 | 7 | 8),
             Mode::Focus | Mode::Send | Mode::Filter | Mode::Search => false,
         }
     }
@@ -1058,6 +1105,31 @@ impl App {
         });
     }
 
+    pub(crate) fn open_ref_modal(&mut self, target: VaultTarget) {
+        if let Ok(fresh) = refs::load_refs() {
+            self.refs_vault = fresh;
+        }
+        let project_state = self
+            .target_dir(target)
+            .map(|dir| refs::read_project_refs(&dir, &self.refs_vault))
+            .unwrap_or_default();
+        let picked = match target {
+            VaultTarget::AddForm => self.add_refs.clone(),
+            VaultTarget::Project(_) => project_state.vault_state.keys().cloned().collect(),
+            VaultTarget::VaultOnly => BTreeSet::new(),
+        };
+        let editor = self.refs_vault.references.is_empty().then(RefEditor::blank);
+        self.ref_modal = Some(RefModal {
+            target,
+            sel: 0,
+            top: Default::default(),
+            picked,
+            project_state,
+            confirm_delete: None,
+            editor,
+        });
+    }
+
     /// Jump to the next project needing attention (`?`, failed/errored, or
     /// unseen finished task), falling back to the next running session.
     pub(crate) fn jump_attention(&mut self) {
@@ -1389,6 +1461,9 @@ impl App {
         if let Ok(fresh) = tools::load_tools() {
             self.tools_vault = fresh;
         }
+        if let Ok(fresh) = refs::load_refs() {
+            self.refs_vault = fresh;
+        }
         let dotenv = envvault::read_dotenv(&p.path);
         self.add_env = self
             .env_vault
@@ -1402,6 +1477,10 @@ impl App {
             .into_keys()
             .collect();
         self.add_tools = tools::read_project_tools(&p.path, &self.tools_vault)
+            .vault_state
+            .into_keys()
+            .collect();
+        self.add_refs = refs::read_project_refs(&p.path, &self.refs_vault)
             .vault_state
             .into_keys()
             .collect();
@@ -1429,6 +1508,7 @@ impl App {
         self.add_env.clear();
         self.add_skills.clear();
         self.add_tools.clear();
+        self.add_refs.clear();
         self.add_err.clear();
         self.add_state = PathState::Blank;
         self.add_top.set(0);

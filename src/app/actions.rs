@@ -231,10 +231,23 @@ impl App {
                 return;
             }
         };
+        let current_refs = refs::read_project_refs(&path, &self.refs_vault);
+        let refs_note =
+            match refs::sync_project_refs(&path, &self.refs_vault, &self.add_refs, &current_refs) {
+                Ok((0, 0, 0)) => String::new(),
+                Ok((added, updated, removed)) => {
+                    format!("; refs (+{added}, ~{updated}, -{removed})")
+                }
+                Err(e) => {
+                    self.add_err = format!("refs failed: {e:#}");
+                    return;
+                }
+            };
         self.add_edit = None;
         self.add_env.clear();
         self.add_skills.clear();
         self.add_tools.clear();
+        self.add_refs.clear();
         self.mode = Mode::Manager;
         let note = match (was_running, moved) {
             (true, true) => "; restart it to use the new folder and command",
@@ -242,7 +255,7 @@ impl App {
             _ => "",
         };
         self.message = (
-            format!("Saved {name}{note}{env_note}{skills_note}{tools_note}"),
+            format!("Saved {name}{note}{env_note}{skills_note}{tools_note}{refs_note}"),
             Notice::Info,
         );
     }
@@ -284,6 +297,19 @@ impl App {
         tools::apply_tool_names(dir, &self.tools_vault, &names)
             .map(Some)
             .map_err(|e| format!("tools failed: {e:#}"))
+    }
+
+    pub(crate) fn apply_add_refs(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<Option<(usize, usize)>, String> {
+        if self.add_refs.is_empty() {
+            return Ok(None);
+        }
+        let names: Vec<String> = self.add_refs.iter().cloned().collect();
+        refs::apply_ref_names(dir, &self.refs_vault, &names)
+            .map(Some)
+            .map_err(|e| format!("refs failed: {e:#}"))
     }
 
     /// Write checked vault keys whose value is missing/changed and remove
@@ -384,7 +410,7 @@ impl App {
     }
 
     /// Open Management row `m`: `0` Memory monitor, `1` Env vault, `2` Skills,
-    /// `3` Tools (scoped to the selected project, or vault-only when none exist).
+    /// `3` Tools, `4` References (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;
         let target = self.selected_vault_target();
@@ -393,6 +419,7 @@ impl App {
             1 => self.open_env_modal(target),
             2 => self.open_skill_modal(target),
             3 => self.open_tool_modal(target),
+            4 => self.open_ref_modal(target),
             _ => {}
         }
     }
@@ -620,6 +647,7 @@ impl App {
                 9 => self.open_env_info(pi),
                 10 => self.open_skill_modal(VaultTarget::Project(pi)),
                 11 => self.open_tool_modal(VaultTarget::Project(pi)),
+                12 => self.open_ref_modal(VaultTarget::Project(pi)),
                 _ => {}
             }
             return;
@@ -639,6 +667,7 @@ impl App {
             7 => self.open_env_info(pi),
             8 => self.open_skill_modal(VaultTarget::Project(pi)),
             9 => self.open_tool_modal(VaultTarget::Project(pi)),
+            10 => self.open_ref_modal(VaultTarget::Project(pi)),
             _ => {}
         }
     }
@@ -1337,6 +1366,216 @@ impl App {
                         }
                     }
                     VaultTarget::VaultOnly => self.tool_modal = None,
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn key_ref_modal(&mut self, k: KeyEvent) {
+        let Some(modal) = self.ref_modal.as_mut() else {
+            return;
+        };
+        if let Some(target_name) = modal.confirm_delete.clone() {
+            match confirm_key(k.code) {
+                Some(true) => {
+                    modal.confirm_delete = None;
+                    let mut next_vault = self.refs_vault.clone();
+                    refs::remove_ref(&mut next_vault, &target_name);
+                    match refs::save_refs(&next_vault) {
+                        Ok(()) => {
+                            self.refs_vault = next_vault;
+                            modal.picked.remove(&target_name);
+                            self.add_refs.remove(&target_name);
+                            let len = self.refs_vault.references.len();
+                            modal.sel = modal.sel.min(len.saturating_sub(1));
+                        }
+                        Err(e) => {
+                            self.message = (format!("Save failed: {e:#}"), Notice::Error);
+                        }
+                    }
+                }
+                Some(false) => modal.confirm_delete = None,
+                None => {}
+            }
+            return;
+        }
+        if let Some(ed) = modal.editor.as_mut() {
+            match k.code {
+                KeyCode::Esc => modal.editor = None,
+                KeyCode::Tab | KeyCode::Down => ed.field = (ed.field + 1) % 3,
+                KeyCode::BackTab | KeyCode::Up => ed.field = (ed.field + 2) % 3,
+                KeyCode::Enter => {
+                    let valid_url = match refs::normalize_url(&ed.url.as_str()) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            ed.err = e;
+                            return;
+                        }
+                    };
+                    let raw_name = if ed.name.as_str().trim().is_empty() {
+                        refs::infer_name_from_url(&valid_url)
+                    } else {
+                        ed.name.as_str().to_string()
+                    };
+                    let valid_name = match refs::validate_ref_name(&raw_name) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            ed.err = e;
+                            return;
+                        }
+                    };
+                    let entry = refs::ReferenceEntry {
+                        name: valid_name.clone(),
+                        url: valid_url,
+                        description: refs::sanitize_description(&ed.desc.as_str()),
+                    };
+                    let mut next_vault = self.refs_vault.clone();
+                    if let Some(old) = ed.editing_name.as_deref() {
+                        if !old.eq_ignore_ascii_case(&valid_name)
+                            && next_vault
+                                .references
+                                .iter()
+                                .any(|r| r.name.eq_ignore_ascii_case(&valid_name))
+                        {
+                            ed.err = format!("{valid_name} already exists.");
+                            return;
+                        }
+                        if !old.eq_ignore_ascii_case(&valid_name) {
+                            if let Some(pos) = next_vault
+                                .references
+                                .iter()
+                                .position(|r| r.name.eq_ignore_ascii_case(old))
+                            {
+                                next_vault.references[pos] = entry;
+                            }
+                            modal.picked.remove(old);
+                            self.add_refs.remove(old);
+                        } else if let Err(e) = refs::upsert_ref(&mut next_vault, entry) {
+                            ed.err = e;
+                            return;
+                        }
+                    } else if let Err(e) = refs::upsert_ref(&mut next_vault, entry) {
+                        ed.err = e;
+                        return;
+                    }
+                    if let Err(e) = refs::save_refs(&next_vault) {
+                        ed.err = format!("Save failed: {e:#}");
+                        return;
+                    }
+                    self.refs_vault = next_vault;
+                    if let VaultTarget::Project(pi) = modal.target {
+                        if let Some(p) = self.cfg.projects.get(pi) {
+                            modal.project_state =
+                                refs::read_project_refs(&p.path, &self.refs_vault);
+                        }
+                    }
+                    if let Some(pos) = self
+                        .refs_vault
+                        .references
+                        .iter()
+                        .position(|r| r.name == valid_name)
+                    {
+                        modal.sel = pos;
+                    }
+                    if modal.target != VaultTarget::VaultOnly {
+                        modal.picked.insert(valid_name);
+                    }
+                    modal.editor = None;
+                }
+                _ => {
+                    let input = match ed.field {
+                        0 => &mut ed.name,
+                        1 => &mut ed.url,
+                        _ => &mut ed.desc,
+                    };
+                    if input.edit_key(k) == Some(true) {
+                        ed.err.clear();
+                    }
+                }
+            }
+            return;
+        }
+        let kh = hotkey_event(k);
+        let len = self.refs_vault.references.len();
+        let can_pick = modal.target != VaultTarget::VaultOnly;
+        match kh.code {
+            KeyCode::Esc | KeyCode::Char('R') => self.ref_modal = None,
+            KeyCode::Up | KeyCode::Char('k') => modal.sel = (modal.sel + len) % (len + 1),
+            KeyCode::Down | KeyCode::Char('j') => modal.sel = (modal.sel + 1) % (len + 1),
+            KeyCode::Enter | KeyCode::Char(' ') if modal.sel >= len => {
+                modal.editor = Some(RefEditor::blank());
+            }
+            KeyCode::Char(' ') if can_pick && len > 0 => {
+                if let Some(entry) = self.refs_vault.references.get(modal.sel) {
+                    if !modal.picked.remove(&entry.name) {
+                        modal.picked.insert(entry.name.clone());
+                    }
+                }
+            }
+            KeyCode::Char('A') if can_pick && len > 0 => {
+                toggle_all_picked(
+                    &mut modal.picked,
+                    self.refs_vault.references.iter().map(|r| &r.name),
+                );
+            }
+            KeyCode::Char('a' | 'n') => modal.editor = Some(RefEditor::blank()),
+            KeyCode::Char('e') if len > 0 => {
+                if let Some(entry) = self.refs_vault.references.get(modal.sel) {
+                    let mut name_in = LineInput::new();
+                    name_in.set(&entry.name);
+                    let mut url_in = LineInput::new();
+                    url_in.set(&entry.url);
+                    let mut desc_in = LineInput::new();
+                    desc_in.set(&entry.description);
+                    modal.editor = Some(RefEditor {
+                        name: name_in,
+                        url: url_in,
+                        desc: desc_in,
+                        field: 1,
+                        editing_name: Some(entry.name.clone()),
+                        err: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete if len > 0 => {
+                if let Some(entry) = self.refs_vault.references.get(modal.sel) {
+                    modal.confirm_delete = Some(entry.name.clone());
+                }
+            }
+            KeyCode::Enter => {
+                let target = modal.target;
+                let picked = modal.picked.clone();
+                match target {
+                    VaultTarget::AddForm => {
+                        self.add_refs = picked;
+                        self.ref_modal = None;
+                    }
+                    VaultTarget::Project(pi) => {
+                        let current = modal.project_state.clone();
+                        let Some(p) = self.cfg.projects.get(pi) else {
+                            self.ref_modal = None;
+                            return;
+                        };
+                        match refs::sync_project_refs(&p.path, &self.refs_vault, &picked, &current)
+                        {
+                            Ok((0, 0, 0)) => self.ref_modal = None,
+                            Ok((added, updated, removed)) => {
+                                self.message = (
+                                    format!(
+                                        "Updated {} refs (+{added} added, {updated} updated, -{removed} removed)",
+                                        p.name
+                                    ),
+                                    Notice::Info,
+                                );
+                                self.ref_modal = None;
+                            }
+                            Err(e) => {
+                                self.message = (format!("Refs failed: {e:#}"), Notice::Error);
+                            }
+                        }
+                    }
+                    VaultTarget::VaultOnly => self.ref_modal = None,
                 }
             }
             _ => {}

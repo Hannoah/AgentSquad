@@ -27,6 +27,7 @@ mod input;
 mod json;
 mod ledger;
 mod pathpick;
+mod refs;
 mod select;
 mod session;
 mod skills;

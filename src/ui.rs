@@ -114,7 +114,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump to a project / the first / the last",
         "/, F       filter projects / search output (Esc clears)",
-        "a, E, K, T   add / env / skills / tools",
+        "a, E,K,T,R  add / env / skills / tools / refs",
         "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
         "h, g       history (SITREPs) / git status & diff",
@@ -446,6 +446,7 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('0', "Environment variables"),
             ('K', "Skills…"),
             ('T', "Tools…"),
+            ('R', "References…"),
         ]
     } else {
         vec![
@@ -459,6 +460,7 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('8', "Environment variables"),
             ('K', "Skills…"),
             ('T', "Tools…"),
+            ('R', "References…"),
         ]
     }
 }
@@ -497,11 +499,11 @@ pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> V
         ]));
     }
     lines.push(Line::from(""));
-    // The tenth row is keyed `0`, followed by `K`/`T` for Skills/Tools.
+    // The tenth row is keyed `0`, followed by `K`/`T`/`R` for Skills/Tools/References.
     let range = if items.iter().any(|(k, _)| *k == '0') {
-        "0-9/K/T"
+        "0-9/K/T/R"
     } else {
-        "1-8/K/T"
+        "1-8/K/T/R"
     };
     lines.push(Line::from(hint_spans(&[
         (range, "selects"),
@@ -800,15 +802,17 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [-- cmd]
+  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- cmd]
                                                      Register project (path optional for services;
-                                                     --create makes folder, --env/--skill/--tool attach capabilities)
+                                                     --create makes folder, --env/--skill/--tool/--ref attach items)
   squad env <list|set KEY VAL|remove KEY|apply proj|unapply proj KEY...>
                                                      Manage shared env vars and apply to .env
   squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply proj|unapply proj NAME...>
                                                      Manage shared skills (.agents/skills + .claude/skills)
   squad tools <list|add NAME [--kind mcp|cli] [--desc D] [--env K=V] -- CMD|remove NAME|apply proj|unapply proj NAME...>
                                                      Manage shared tools (MCP across agy/claude/muse/codex + .squad/TOOLS.md)
+  squad refs <list|add [NAME] --url URL [--desc D]|remove NAME|apply proj|unapply proj NAME...>
+                                                     Manage shared reference links (CLAUDE.md + AGENTS.md)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
@@ -818,7 +822,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · F/Ctrl+F  search output · a  add · E  shared env · K  skills · T  tools · e  edit · f  pin · [/]  collapse · z  zoom
+  /  filter · F/Ctrl+F  search output · a  add · E  env · K  skills · T  tools · R  refs · e  edit · f  pin · [/]  collapse · z  zoom
   m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
   h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help

@@ -81,6 +81,7 @@ impl App {
         self.draw_env_modal(f);
         self.draw_skill_modal(f);
         self.draw_tool_modal(f);
+        self.draw_ref_modal(f);
     }
 
     fn draw_collapsed_tooltip(&self, f: &mut Frame) {
@@ -105,7 +106,8 @@ impl App {
                 0 => " Memory monitor (M) ",
                 1 => " Env vault (E) ",
                 2 => " Skills (K) ",
-                _ => " Tools (T) ",
+                3 => " Tools (T) ",
+                _ => " References (R) ",
             };
             spans.push(Span::styled(
                 label,
@@ -962,6 +964,13 @@ impl App {
                 self.skill_modal.is_some(),
             ),
             (3usize, "Tools", "T", TOOLS_ROW, self.tool_modal.is_some()),
+            (
+                4usize,
+                "References",
+                "R",
+                REFS_ROW,
+                self.ref_modal.is_some(),
+            ),
         ];
         for (idx, label, key_tag, row_id, open) in mgmt_rows {
             if self.mgmt_sel == Some(idx) {
@@ -1489,7 +1498,8 @@ impl App {
                         0 => "Memory monitor (M)",
                         1 => "Env vault (E)",
                         2 => "Skills (K)",
-                        _ => "Tools (T)",
+                        3 => "Tools (T)",
+                        _ => "References (R)",
                     };
                     Some((label.to_string(), Color::Cyan))
                 } else if let Some(pi) = sel_pi {
@@ -1818,7 +1828,7 @@ impl App {
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
         let modal_w = usize::from(72u16.min(area.width)).saturating_sub(2);
         let err_rows = self.add_err_lines(modal_w).len() as u16;
-        let rows = 8 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
+        let rows = 9 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
         fixed_rect(72, rows + 2, area)
     }
 
@@ -1926,6 +1936,7 @@ impl App {
         let env_text = picked_summary(&self.add_env, self.env_vault.vars.len());
         let skills_text = picked_summary(&self.add_skills, self.skills_vault.skills.len());
         let tools_text = picked_summary(&self.add_tools, self.tools_vault.tools.len());
+        let refs_text = picked_summary(&self.add_refs, self.refs_vault.references.len());
         let fields = [
             (path_label, self.add_path.as_str()),
             ("Kind", kind_hint.to_string()),
@@ -1935,6 +1946,7 @@ impl App {
             ("Env (.env)", env_text),
             ("Skills", skills_text),
             ("Tools", tools_text),
+            ("References", refs_text),
         ];
         let (path_mark, path_mark_color) = self.add_mark(modal_w);
         let mark_w = if path_mark.is_empty() {
@@ -1945,7 +1957,7 @@ impl App {
         let mut lines = Vec::new();
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
-            let locked = (editing && !matches!(i, 0 | 2 | 3 | 5 | 6 | 7))
+            let locked = (editing && !matches!(i, 0 | 2 | 3 | 5 | 6 | 7 | 8))
                 || (!editing && self.add_kind == Kind::Service && i == 4);
             let mark = if active { ">" } else { " " };
             let label_style = if active {
@@ -2702,6 +2714,196 @@ impl App {
                 false,
                 inner_parts[3].width,
             )
+        };
+        f.render_widget(Paragraph::new(foot), inner_parts[3]);
+    }
+
+    fn draw_ref_modal(&self, f: &mut Frame) {
+        let Some(m) = &self.ref_modal else {
+            return;
+        };
+        let title = match m.target {
+            VaultTarget::AddForm => " Shared References Vault -> new project ".to_string(),
+            VaultTarget::Project(pi) => {
+                let name = self.cfg.projects.get(pi).map_or("?", |p| p.name.as_str());
+                format!(" Shared References -> {name} (CLAUDE.md + AGENTS.md) ")
+            }
+            VaultTarget::VaultOnly => " Shared References Vault ".to_string(),
+        };
+        let (popup, parts, has_editor) = vault_modal_layout(f, &title, m.editor.is_some(), 6);
+        let Some(inner_parts) = parts else {
+            return;
+        };
+        let can_pick = m.target != VaultTarget::VaultOnly;
+        let show_badge =
+            matches!(m.target, VaultTarget::Project(_)) || !m.project_state.vault_state.is_empty();
+        let name_w = 20usize.min(usize::from(inner_parts[1].width) / 3);
+        let badge_w = if show_badge { 11usize } else { 0 };
+        let prefix = if can_pick { "    " } else { "  " };
+        let detail_w = usize::from(inner_parts[1].width)
+            .saturating_sub(if can_pick { 6 } else { 4 } + name_w + badge_w + 5)
+            .max(8);
+        if inner_parts[0].height > 0 {
+            let head = if badge_w > 0 {
+                format!(
+                    "{prefix}{:<nw$}  {:<dw$}  status",
+                    "Name",
+                    "URL / Description",
+                    nw = name_w,
+                    dw = detail_w
+                )
+            } else {
+                format!("{prefix}{:<nw$}  URL / Description", "Name", nw = name_w)
+            };
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    head,
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                ))),
+                inner_parts[0],
+            );
+        }
+        let rows = usize::from(inner_parts[1].height).max(1);
+        let items = &self.refs_vault.references;
+        if items.is_empty() {
+            let mut empty_lines = vec![Line::from(Span::styled(
+                "  No shared references registered yet. Press a to add a GitHub link.",
+                Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ))];
+            for name in m
+                .project_state
+                .local_only
+                .iter()
+                .take(rows.saturating_sub(1))
+            {
+                empty_lines.push(Line::from(Span::styled(
+                    format!(
+                        "    {:<nw$}  {:<dw$}  local",
+                        fit(name, name_w),
+                        "(project reference)",
+                        nw = name_w,
+                        dw = detail_w
+                    ),
+                    Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                )));
+            }
+            f.render_widget(Paragraph::new(empty_lines), inner_parts[1]);
+        } else {
+            let total = items.len() + 1;
+            let start = keep_visible(m.top.get(), m.sel.min(total - 1), rows);
+            m.top.set(start);
+            let mut list: Vec<Line> = items
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(rows)
+                .map(|(i, entry)| {
+                    let active = i == m.sel;
+                    let checked = m.picked.contains(&entry.name);
+                    let row_style = vault_row_style(active);
+                    let mut spans = vault_row_prefix(can_pick, active, checked, row_style);
+                    spans.push(Span::styled(
+                        format!("{:<nw$}", fit(&entry.name, name_w), nw = name_w),
+                        row_style.add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled("  ", row_style));
+                    let detail = if entry.description.is_empty() {
+                        entry.url.clone()
+                    } else {
+                        format!("{} — {}", entry.url, entry.description)
+                    };
+                    spans.push(Span::styled(
+                        format!("{:<dw$}", fit(&detail, detail_w), dw = detail_w),
+                        if active {
+                            row_style
+                        } else {
+                            row_style.add_modifier(ratatui::style::Modifier::DIM)
+                        },
+                    ));
+                    if badge_w > 0 {
+                        spans.push(vault_sync_badge(
+                            m.project_state.vault_state.get(&entry.name).copied(),
+                            checked,
+                            active,
+                            row_style,
+                        ));
+                    }
+                    Line::from(spans)
+                })
+                .collect();
+            if (start..start + rows).contains(&items.len()) {
+                list.push(vault_new_row(
+                    "reference",
+                    m.sel >= items.len() && m.editor.is_none(),
+                ));
+            }
+            if !m.project_state.local_only.is_empty() && list.len() < rows {
+                let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
+                for name in m.project_state.local_only.iter().take(rows - list.len()) {
+                    list.push(Line::from(Span::styled(
+                        format!(
+                            "    {:<nw$}  {:<dw$}  local",
+                            fit(name, name_w),
+                            "(project reference)",
+                            nw = name_w,
+                            dw = detail_w
+                        ),
+                        dim,
+                    )));
+                }
+            }
+            f.render_widget(Paragraph::new(list), inner_parts[1]);
+            if total > rows {
+                scrollbar(f, popup, total, m.sel);
+            }
+        }
+        if let (true, Some(ed)) = (has_editor, m.editor.as_ref()) {
+            let ed_title = if ed.editing_name.is_some() {
+                " Edit Shared Reference "
+            } else {
+                " New Shared Reference "
+            };
+            let ed_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(Line::from(Span::styled(
+                    ed_title,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                )));
+            let ed_inner = ed_block.inner(inner_parts[2]);
+            f.render_widget(ed_block, inner_parts[2]);
+            let avail = usize::from(ed_inner.width).saturating_sub(11).max(4);
+            let mut ed_lines = Vec::with_capacity(4);
+            for (fi, (label, input)) in [("Name", &ed.name), ("URL", &ed.url), ("Desc", &ed.desc)]
+                .iter()
+                .enumerate()
+            {
+                ed_lines.push(render_editor_input_row(
+                    label,
+                    5,
+                    input,
+                    ed.field == fi,
+                    avail,
+                ));
+            }
+            ed_lines.push(editor_hint_or_err(
+                &ed.err,
+                usize::from(ed_inner.width),
+                false,
+            ));
+            f.render_widget(Paragraph::new(ed_lines), ed_inner);
+        }
+        let foot = if let Some(name) = &m.confirm_delete {
+            vault_delete_confirm_line("reference", name)
+        } else if m.editor.is_some() {
+            Line::from(Span::styled(
+                "Syncs CLAUDE.md + AGENTS.md (+ GEMINI.md if present); blank Name uses URL slug",
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else {
+            vault_footer_line(m.target, "sync refs", can_pick, false, inner_parts[3].width)
         };
         f.render_widget(Paragraph::new(foot), inner_parts[3]);
     }

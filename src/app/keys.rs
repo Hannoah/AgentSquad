@@ -34,6 +34,10 @@ impl App {
             self.key_tool_modal(k);
             return;
         }
+        if self.ref_modal.is_some() {
+            self.key_ref_modal(k);
+            return;
+        }
         if self.quick_reply.is_some() {
             self.key_quick_reply(k);
             return;
@@ -335,7 +339,7 @@ impl App {
             (false, Some(i)) => self.add_sel = Some(i - 1),
             (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
             (false, None) => {
-                self.add_field = 7;
+                self.add_field = 8;
             }
         }
     }
@@ -374,6 +378,9 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 7 => {
                 self.open_tool_modal(VaultTarget::AddForm);
             }
+            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 8 => {
+                self.open_ref_modal(VaultTarget::AddForm);
+            }
             KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
             KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
             KeyCode::Up if self.add_edit.is_some() && self.add_field == 0 => {
@@ -382,7 +389,7 @@ impl App {
             KeyCode::Down if self.add_edit.is_some() && self.add_field == 0 => {
                 self.step_path_list(true)
             }
-            // Editing reaches Path, Command, Autostart, Env (.env), Skills, and Tools.
+            // Editing reaches Path, Command, Autostart, Env (.env), Skills, Tools, and Refs.
             KeyCode::Tab | KeyCode::Down if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
                     0 => 2,
@@ -390,17 +397,19 @@ impl App {
                     3 => 5,
                     5 => 6,
                     6 => 7,
+                    7 => 8,
                     _ => 0,
                 };
             }
             KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
+                    8 => 7,
                     7 => 6,
                     6 => 5,
                     5 => 3,
                     3 => 2,
                     2 => 0,
-                    _ => 7,
+                    _ => 8,
                 };
             }
             KeyCode::Enter => {
@@ -480,6 +489,7 @@ impl App {
                                         (".env", self.apply_add_env(&proj_path)),
                                         ("skills", self.apply_add_skills(&proj_path)),
                                         ("tools", self.apply_add_tools(&proj_path)),
+                                        ("refs", self.apply_add_refs(&proj_path)),
                                     ] {
                                         match res {
                                             Ok(Some((added, updated))) => {
@@ -501,6 +511,7 @@ impl App {
                                     self.add_env.clear();
                                     self.add_skills.clear();
                                     self.add_tools.clear();
+                                    self.add_refs.clear();
                                     self.message = (
                                         format!("Registered {name} ({kind_label}){cap_note}"),
                                         notice,
@@ -564,7 +575,7 @@ impl App {
     }
 
     pub(super) fn key_manager(&mut self, k: KeyEvent, rows: u16, cols: u16) {
-        const MGMT_LAST: usize = 3;
+        const MGMT_LAST: usize = 4;
         if let Some(m) = self.mgmt_sel {
             match k.code {
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
@@ -660,6 +671,7 @@ impl App {
             KeyCode::Char('E') => self.open_env_modal(self.selected_vault_target()),
             KeyCode::Char('K') => self.open_skill_modal(self.selected_vault_target()),
             KeyCode::Char('T') => self.open_tool_modal(self.selected_vault_target()),
+            KeyCode::Char('R') => self.open_ref_modal(self.selected_vault_target()),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f' | 'F') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_search();
@@ -800,18 +812,20 @@ fn next_add_field(cur: usize, kind: Kind, forward: bool) -> usize {
             (3, true) => 5,
             (5, true) => 6,
             (6, true) => 7,
-            (7, true) => 0,
+            (7, true) => 8,
+            (8, true) => 0,
+            (8, false) => 7,
             (7, false) => 6,
             (6, false) => 5,
             (5, false) => 3,
             (3, false) => 2,
             (2, false) => 1,
             (1, false) => 0,
-            _ => 7,
+            _ => 8,
         }
     } else if forward {
-        (cur + 1) % 8
+        (cur + 1) % 9
     } else {
-        (cur + 7) % 8
+        (cur + 8) % 9
     }
 }

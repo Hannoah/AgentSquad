@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.28
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.29
 ```
 
 To install elsewhere:
@@ -163,6 +163,7 @@ case-insensitively by `remove` and `start`.
 | `E` | Shared Env Vault: register reusable environment variables (`env.toml`) and toggle-apply/remove them on the selected project's `.env` (`Space` toggles, `a` adds, `e` edits, `d` deletes, `v` reveals, `Enter` syncs) |
 | `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex` |
 | `T` | Shared Tools Vault: register reusable MCP servers (`mcp`) and CLI tools (`cli`) (`tools.toml`); syncs MCP servers to `.mcp.json` (`claude`/`muse`), `.agents/mcp_config.json` (`agy`), and `.codex/config.toml` (`codex`), and CLI tools to `.squad/TOOLS.md` |
+| `R` | Shared References Vault: register GitHub links & descriptions (`references.toml`) and append/remove a managed `<!-- agentsquad:references:start/end -->` block inside `CLAUDE.md` / `AGENTS.md` (+ `GEMINI.md` if present) without disturbing existing content |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `w`, click `? N` | Quick Reply: answer an agent waiting for input (`?`) without leaving your current view (`Enter`/`y`/`n`/`1`-`9` or `t` to type a custom reply, `Tab` cycles waiting agents) |
 | `g` | Git status & diff: inspect the selected project's branch, modified/untracked files, and colorized diffs (`Tab` switches git projects, `r` refreshes) |
@@ -233,7 +234,7 @@ other keyboard layouts, use that setting or `Ctrl+Q` then the digit.
 
 ```
 squad                                                              Open the manager
-squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [-- command args...]
+squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [--ref NAME] [-- command args...]
                                                                    Register a project (path optional for services)
 squad env <list|set KEY VAL|remove KEY|apply <proj>|unapply <proj> KEY...>
                                                                    Manage shared env vars and project .env
@@ -241,6 +242,8 @@ squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply <
                                                                    Manage shared skills (.agents/skills + .claude/skills)
 squad tools <list|add NAME [--kind mcp|cli] [--desc D] [--env K=V] -- CMD|remove NAME|apply <proj>|unapply <proj> NAME...>
                                                                    Manage shared MCP & CLI tools across agents
+squad refs <list|add [NAME] --url URL [--desc D]|remove NAME|apply <proj>|unapply <proj> NAME...>
+                                                                   Manage shared GitHub/doc reference links across CLAUDE.md/AGENTS.md
 squad list                                                         List projects (name, kind, path, command)
 squad remove <name>                                                Unregister (files are untouched)
 squad under <name> [<commander>]                                   Set whom an agent reports to (none clears it)

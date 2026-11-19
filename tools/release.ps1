@@ -130,11 +130,11 @@ try {
       $wordTag  = ([char]0xD0DC) + ([char]0xADF8)
       $wordNote = ([char]0xCC38) + ([char]0xACE0)
       $row = "| $tag | $cleanNotes | $wordTag ``$tag`` $wordNote |"
-      $sepRegex = [regex]'(?m)^\|---\|---\|---\|\r?$'
+      $sepRegex = [regex]'(?m)^\|---\|---\|---\|\r*$'
       if (-not $sepRegex.IsMatch($wiki)) {
         throw "Could not find table separator in wiki/releases.md."
       }
-      $wikiNew = $sepRegex.Replace($wiki, { param($m) $m.Value + $nl + $row }, 1)
+      $wikiNew = $sepRegex.Replace($wiki, { "|---|---|---|" + $nl + $row }, 1)
       [System.IO.File]::WriteAllText($releasesPath, $wikiNew, $utf8NoBom)
     }
   }

@@ -7,6 +7,7 @@ pub mod input;
 pub mod json;
 pub mod ledger;
 pub mod pathpick;
+pub mod refs;
 pub mod select;
 pub mod session;
 pub mod skills;
@@ -105,7 +106,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [--skill NAME[,NAME...]] [--tool NAME[,NAME...]] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [--skill NAME[,NAME...]] [--tool NAME[,NAME...]] [--ref NAME[,NAME...]] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -120,6 +121,7 @@ fn main() -> Result<()> {
             let mut env_keys: Vec<String> = Vec::new();
             let mut skill_names: Vec<String> = Vec::new();
             let mut tool_names: Vec<String> = Vec::new();
+            let mut ref_names: Vec<String> = Vec::new();
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
             while i < tail.len() {
@@ -157,6 +159,10 @@ fn main() -> Result<()> {
                         push_csv(&mut tool_names, tail.get(i + 1).context(USAGE)?);
                         i += 2;
                     }
+                    "--ref" | "--refs" => {
+                        push_csv(&mut ref_names, tail.get(i + 1).context(USAGE)?);
+                        i += 2;
+                    }
                     "--" => {
                         if i + 1 >= tail.len() {
                             bail!("Use -- before command: squad add [<path>] -- claude");
@@ -165,7 +171,7 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY, --skill NAME, --tool NAME or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY, --skill NAME, --tool NAME, --ref NAME or -- command")
                     }
                 }
             }
@@ -213,6 +219,21 @@ fn main() -> Result<()> {
                 }
                 Some(v)
             };
+            let r_vault = if ref_names.is_empty() {
+                None
+            } else {
+                let v = refs::load_refs()?;
+                for name in &ref_names {
+                    if !v
+                        .references
+                        .iter()
+                        .any(|r| r.name.eq_ignore_ascii_case(name))
+                    {
+                        bail!("Unknown shared reference: {name}. Register it with `squad refs add {name} --url <URL>`.");
+                    }
+                }
+                Some(v)
+            };
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
@@ -246,6 +267,13 @@ fn main() -> Result<()> {
                 let (added, updated) = tools::apply_tool_names(&p.path, &v, &tool_names)?;
                 println!(
                     "Updated {} tools (+{added} added, {updated} updated)",
+                    p.name
+                );
+            }
+            if let Some(v) = r_vault {
+                let (added, updated) = refs::apply_ref_names(&p.path, &v, &ref_names)?;
+                println!(
+                    "Updated {} refs (+{added} added, {updated} updated)",
                     p.name
                 );
             }
@@ -306,6 +334,7 @@ fn main() -> Result<()> {
         Some("env") => run_env_cli(&c, args.get(1..).unwrap_or(&[])),
         Some("skills") => run_skills_cli(&c, args.get(1..).unwrap_or(&[])),
         Some("tools") => run_tools_cli(&c, args.get(1..).unwrap_or(&[])),
+        Some("refs" | "references") => run_refs_cli(&c, args.get(1..).unwrap_or(&[])),
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
     }
 }
@@ -639,6 +668,131 @@ fn run_tools_cli(c: &config::Config, args: &[String]) -> Result<()> {
             let p = find_project(c, proj_name)?;
             let removed = tools::remove_tools(&p.path, &args[2..])?;
             println!("Updated {} tools (-{removed} removed)", p.name);
+            Ok(())
+        }
+        Some(_) => bail!("{USAGE}"),
+    }
+}
+
+fn run_refs_cli(c: &config::Config, args: &[String]) -> Result<()> {
+    const USAGE: &str = "Usage: squad refs <list | add [<name>] --url <URL> [--desc <text>] | remove <name> | apply <project> [NAME...] | unapply <project> NAME...>";
+    match args.first().map(String::as_str) {
+        Some("list") | None => {
+            let vault = refs::load_refs()?;
+            if vault.references.is_empty() {
+                println!("No shared references registered.");
+                println!("Add one with: squad refs add <name> --url https://github.com/<owner>/<repo> --desc \"...\"");
+                return Ok(());
+            }
+            for r in &vault.references {
+                if r.description.is_empty() {
+                    println!("{}  {}", r.name, r.url);
+                } else {
+                    println!("{}  {}  ({})", r.name, r.url, r.description);
+                }
+            }
+            Ok(())
+        }
+        Some("add" | "set") => {
+            let tail = args.get(1..).unwrap_or(&[]);
+            let mut name_arg: Option<String> = None;
+            let mut url: Option<String> = None;
+            let mut desc = String::new();
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--url" | "-u" => {
+                        url = Some(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
+                    "--desc" | "--description" | "-d" => {
+                        desc = tail.get(i + 1).context(USAGE)?.clone();
+                        i += 2;
+                    }
+                    "--name" | "-n" => {
+                        name_arg = Some(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
+                    other if other.starts_with("--") => bail!("Unknown option: {other}. {USAGE}"),
+                    pos => {
+                        let looks_like_url = pos.starts_with("http://")
+                            || pos.starts_with("https://")
+                            || pos.to_ascii_lowercase().starts_with("github.com/");
+                        if url.is_none() && looks_like_url {
+                            url = Some(pos.to_string());
+                        } else if name_arg.is_none() {
+                            name_arg = Some(pos.to_string());
+                        } else if url.is_none() {
+                            url = Some(pos.to_string());
+                        } else {
+                            bail!("{USAGE}");
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            let raw_url = url.context(USAGE)?;
+            let saved_url = refs::normalize_url(&raw_url).map_err(anyhow::Error::msg)?;
+            let raw_name = match name_arg.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(n) => n.to_string(),
+                None => refs::infer_name_from_url(&saved_url),
+            };
+            let saved_name = refs::validate_ref_name(&raw_name).map_err(anyhow::Error::msg)?;
+            let mut vault = refs::load_refs()?;
+            let inserted = refs::upsert_ref(
+                &mut vault,
+                refs::ReferenceEntry {
+                    name: saved_name.clone(),
+                    url: saved_url.clone(),
+                    description: desc,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            refs::save_refs(&vault)?;
+            let action = if inserted { "Registered" } else { "Updated" };
+            println!("{action} shared reference {saved_name} -> {saved_url}");
+            Ok(())
+        }
+        Some("remove" | "rm") => {
+            let name = args.get(1).context(USAGE)?;
+            let mut vault = refs::load_refs()?;
+            if !refs::remove_ref(&mut vault, name) {
+                bail!("Unknown shared reference: {name}");
+            }
+            refs::save_refs(&vault)?;
+            println!("Removed shared reference {}", name.trim());
+            Ok(())
+        }
+        Some("apply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            let p = find_project(c, proj_name)?;
+            let vault = refs::load_refs()?;
+            let names: Vec<String> = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                vault.references.iter().map(|r| r.name.clone()).collect()
+            };
+            if names.is_empty() {
+                bail!(
+                    "No shared references to apply. Register one with `squad refs add <name> --url <URL>`."
+                );
+            }
+            let (added, updated) = refs::apply_ref_names(&p.path, &vault, &names)?;
+            println!(
+                "Updated {} refs (+{added} added, {updated} updated)",
+                p.name
+            );
+            Ok(())
+        }
+        Some("unapply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            if args.len() < 3 {
+                bail!("{USAGE}");
+            }
+            let p = find_project(c, proj_name)?;
+            let vault = refs::load_refs()?;
+            let removed = refs::remove_refs(&p.path, &vault, &args[2..])?;
+            println!("Updated {} refs (-{removed} removed)", p.name);
             Ok(())
         }
         Some(_) => bail!("{USAGE}"),

@@ -66,6 +66,15 @@ impl App {
                 }
                 ed.err.clear();
             }
+        } else if let Some(ed) = self.ref_modal.as_mut().and_then(|m| m.editor.as_mut()) {
+            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                match ed.field {
+                    0 => ed.name.insert(ch),
+                    1 => ed.url.insert(ch),
+                    _ => ed.desc.insert(ch),
+                }
+            }
+            ed.err.clear();
         } else if self.mode == Mode::Add {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 if let Some(input) = self.add_input() {
@@ -104,6 +113,11 @@ impl App {
             let len = self.tools_vault.tools.len();
             m_tl.confirm_delete = None;
             m_tl.sel = step_modal_sel(m_tl.sel, len, lines > 0);
+            self.dirty = true;
+        } else if let (Some(lines), Some(m_rf)) = (wheel_lines(m.kind), self.ref_modal.as_mut()) {
+            let len = self.refs_vault.references.len();
+            m_rf.confirm_delete = None;
+            m_rf.sel = step_modal_sel(m_rf.sel, len, lines > 0);
             self.dirty = true;
         } else if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
             // The memory monitor is modal: the wheel moves its pick.
@@ -280,6 +294,25 @@ impl App {
                     ToolEditor::blank,
                 ) {
                     self.tool_modal = None;
+                }
+                self.dirty = true;
+            } else if let Some(m_rf) = self.ref_modal.as_mut() {
+                let list = &self.refs_vault.references;
+                if !handle_vault_click(
+                    area,
+                    m,
+                    6,
+                    m_rf.target,
+                    m_rf.top.get(),
+                    &mut m_rf.sel,
+                    &mut m_rf.confirm_delete,
+                    &mut m_rf.picked,
+                    &mut m_rf.editor,
+                    list.len(),
+                    |i| list[i].name.clone(),
+                    RefEditor::blank,
+                ) {
+                    self.ref_modal = None;
                 }
                 self.dirty = true;
             } else if let Some(qr) = self.quick_reply.as_mut() {
@@ -473,6 +506,10 @@ impl App {
                             7 => {
                                 self.add_field = 7;
                                 self.open_tool_modal(VaultTarget::AddForm);
+                            }
+                            8 => {
+                                self.add_field = 8;
+                                self.open_ref_modal(VaultTarget::AddForm);
                             }
                             _ => {}
                         },
