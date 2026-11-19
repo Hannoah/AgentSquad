@@ -373,7 +373,7 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     );
     assert_eq!(empty.mode, Mode::Add);
 
-    // 2. Service Add form skips Reports-to (field 4) on Tab/Down and reaches Env (field 5).
+    // 2. Service Add form skips Reports-to (field 4) on Tab/Down and reaches Env (5), Skills (6), Tools (7).
     empty.add_kind = Kind::Service;
     empty.add_field = 3; // Autostart
     empty.on_key(key(KeyCode::Tab), 24, 54);
@@ -382,9 +382,17 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
         "Tab from Autostart on Service skips Reports-to and goes to Env"
     );
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 0, "Tab from Env wraps to Path");
+    assert_eq!(empty.add_field, 6, "Tab from Env goes to Skills");
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(empty.add_field, 7, "Tab from Skills goes to Tools");
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(empty.add_field, 0, "Tab from Tools wraps to Path");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 5, "BackTab from Path wraps to Env");
+    assert_eq!(empty.add_field, 7, "BackTab from Path wraps to Tools");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(empty.add_field, 6, "BackTab from Tools goes to Skills");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(empty.add_field, 5, "BackTab from Skills goes to Env");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
     assert_eq!(
         empty.add_field, 3,
@@ -407,7 +415,10 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     app.context_menu = Some(0);
     app.context_sel = 0;
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.context_sel, 7, "Up wraps to last stopped menu item");
+    assert_eq!(
+        app.context_sel, 9,
+        "Up wraps to last stopped menu item (Tools)"
+    );
     app.on_key(key(KeyCode::Char('j')), 24, 54);
     assert_eq!(app.context_sel, 0, "j wraps back to first item");
     // Item index 3 on stopped menu is View history.
@@ -729,17 +740,25 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
         ..Default::default()
     };
     let mut app = App::new(cfg, None);
-    // Down past the last project steps onto Management, then wraps to the top.
+    // Down past the last project steps onto Management (Memory, Env, Skills, Tools), then wraps to top.
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (1, None));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!(app.mgmt_sel, Some(0));
-    app.on_key(key(KeyCode::Char('ㅓ')), 24, 54); // Hangul j
+    app.on_key(key(KeyCode::Char('ㅓ')), 24, 54); // Hangul j -> Env vault
     assert_eq!(app.mgmt_sel, Some(1));
+    app.on_key(key(KeyCode::Down), 24, 54); // Skills
+    assert_eq!(app.mgmt_sel, Some(2));
+    app.on_key(key(KeyCode::Down), 24, 54); // Tools
+    assert_eq!(app.mgmt_sel, Some(3));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (0, None));
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(1), "Up from the top reaches Env vault");
+    assert_eq!(app.mgmt_sel, Some(3), "Up from the top reaches Tools");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(2), "Up reaches Skills");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(1), "Up reaches Env vault");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(0));
     // Project actions have no target on a Management row.
@@ -1092,5 +1111,236 @@ fn collapsed_hover_tooltip_and_terminal_scrollback_search() {
     assert!(!app.search_active);
 
     drop(app);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
+    let dir = scratch_dir("skills-modal-e2e");
+    let proj_a = dir.join("agent-a");
+    let proj_b = dir.join("agent-b");
+    fs::create_dir_all(proj_a.join(".agents/skills/local-skill")).unwrap();
+    fs::write(
+        proj_a.join(".agents/skills/local-skill/SKILL.md"),
+        "---\nname: local-skill\ndescription: local\n---\n",
+    )
+    .unwrap();
+    fs::create_dir_all(&proj_b).unwrap();
+    let skills_file = dir.join("skills.toml");
+    env::set_var("AGENTSQUAD_SKILLS", &skills_file);
+
+    let cfg = Config {
+        projects: vec![
+            proj("agent-a", proj_a.to_str().unwrap(), &["claude"]),
+            proj("agent-b", proj_b.to_str().unwrap(), &["codex"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    // `K` opens Skills modal; empty vault opens inline editor automatically.
+    app.selected = 0;
+    app.on_key(key(KeyCode::Char('K')), 27, 70);
+    assert!(app.skill_modal.is_some());
+    assert!(app.skill_modal.as_ref().unwrap().editor.is_some());
+    assert!(!app.wants_ascii_ime());
+
+    for ch in "code-review".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "Review PR diffs carefully".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "Check correctness, tests, and edge cases.".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.skills_vault.skills.len(), 1);
+    assert_eq!(app.skills_vault.skills[0].name, "code-review");
+    assert!(app.wants_ascii_ime());
+
+    term.draw(|f| app.draw(f)).unwrap();
+    let screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("code-review"), "{screen}");
+    assert!(screen.contains("local-skill"), "{screen}");
+    assert!(screen.contains("+ New skill"), "{screen}");
+
+    // Enter syncs to both .agents/skills and .claude/skills on agent-a.
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.skill_modal.is_none());
+    assert!(proj_a.join(".agents/skills/code-review/SKILL.md").is_file());
+    assert!(proj_a.join(".claude/skills/code-review/SKILL.md").is_file());
+
+    // Edit project (`e`) loads installed skills into add_skills, and Add form field 6 picks skills.
+    app.open_edit();
+    assert!(app.add_skills.contains("code-review"));
+    app.add_field = 6;
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.skill_modal.is_some());
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(!app.add_skills.contains("code-review"));
+    app.on_key(key(KeyCode::Esc), 27, 70);
+
+    // Right-click context menu `'K'` opens Skills modal for the selected project.
+    app.selected = 1;
+    app.context_menu = Some(1);
+    app.on_key(key(KeyCode::Char('K')), 27, 70);
+    assert!(app.context_menu.is_none());
+    assert!(app.skill_modal.is_some());
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(proj_b.join(".agents/skills/code-review/SKILL.md").is_file());
+    assert!(proj_b.join(".claude/skills/code-review/SKILL.md").is_file());
+
+    // Verify apply_add_skills installs picked skills onto a new project folder.
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    app.add_field = 6;
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    let proj_c = dir.join("agent-c");
+    fs::create_dir_all(&proj_c).unwrap();
+    assert_eq!(app.apply_add_skills(&proj_c), Ok(Some((1, 0))));
+    assert!(proj_c.join(".agents/skills/code-review/SKILL.md").is_file());
+    assert!(proj_c.join(".claude/skills/code-review/SKILL.md").is_file());
+
+    drop(app);
+    env::remove_var("AGENTSQUAD_SKILLS");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
+    let dir = scratch_dir("tools-modal-e2e");
+    let proj_a = dir.join("agent-a");
+    let proj_b = dir.join("agent-b");
+    fs::create_dir_all(&proj_a).unwrap();
+    fs::create_dir_all(&proj_b).unwrap();
+    let tools_file = dir.join("tools.toml");
+    env::set_var("AGENTSQUAD_TOOLS", &tools_file);
+
+    let cfg = Config {
+        projects: vec![
+            proj("agent-a", proj_a.to_str().unwrap(), &["agy"]),
+            proj("agent-b", proj_b.to_str().unwrap(), &["muse"]),
+        ],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    // `T` opens Tools modal; empty vault opens inline ToolEditor on Kind (field 0).
+    app.selected = 0;
+    app.on_key(key(KeyCode::Char('T')), 27, 70);
+    assert!(app.tool_modal.is_some());
+    assert!(app.tool_modal.as_ref().unwrap().editor.is_some());
+    assert!(
+        app.wants_ascii_ime(),
+        "field 0 Kind toggle accepts ASCII Space"
+    );
+
+    // Register an MCP server tool first.
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    assert!(!app.wants_ascii_ime());
+    for ch in "github".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "npx -y @modelcontextprotocol/server-github".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "GitHub API".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.tools_vault.tools.len(), 1);
+    assert_eq!(app.tools_vault.tools[0].kind, crate::tools::ToolKind::Mcp);
+
+    // Add a second tool as CLI (`a`, toggle Kind with Space, fill Name/Cmd/Desc).
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    assert_eq!(
+        app.tool_modal
+            .as_ref()
+            .unwrap()
+            .editor
+            .as_ref()
+            .unwrap()
+            .kind,
+        crate::tools::ToolKind::Cli
+    );
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "ripgrep".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "rg --hidden".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    for ch in "Fast workspace search".chars() {
+        app.on_key(key(KeyCode::Char(ch)), 27, 70);
+    }
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert_eq!(app.tools_vault.tools.len(), 2);
+
+    term.draw(|f| app.draw(f)).unwrap();
+    let screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("github"), "{screen}");
+    assert!(screen.contains("ripgrep"), "{screen}");
+    assert!(screen.contains("+ New tool"), "{screen}");
+
+    // Enter syncs both tools to agent-a: .mcp.json + .agents/mcp_config.json + .codex/config.toml + .squad/TOOLS.md.
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(app.tool_modal.is_none());
+    assert!(proj_a.join(".mcp.json").is_file());
+    assert!(proj_a.join(".agents/mcp_config.json").is_file());
+    assert!(proj_a.join(".codex/config.toml").is_file());
+    let tools_md = fs::read_to_string(proj_a.join(".squad/TOOLS.md")).unwrap();
+    assert!(tools_md.contains("### ripgrep"), "{tools_md}");
+
+    // Right-click context menu `'T'` opens Tools modal on agent-b and apply_add_tools works from Add form.
+    app.selected = 1;
+    app.context_menu = Some(1);
+    app.on_key(key(KeyCode::Char('T')), 27, 70);
+    assert!(app.context_menu.is_none());
+    assert!(app.tool_modal.is_some());
+    app.on_key(key(KeyCode::Char('A')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    assert!(proj_b.join(".mcp.json").is_file());
+    assert!(proj_b.join(".agents/mcp_config.json").is_file());
+    assert!(proj_b.join(".codex/config.toml").is_file());
+    assert!(proj_b.join(".squad/TOOLS.md").is_file());
+
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    app.add_field = 7;
+    app.on_key(key(KeyCode::Char(' ')), 27, 70);
+    app.on_key(key(KeyCode::Char('A')), 27, 70);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    let proj_c = dir.join("agent-c");
+    fs::create_dir_all(&proj_c).unwrap();
+    assert_eq!(app.apply_add_tools(&proj_c), Ok(Some((2, 0))));
+    assert!(proj_c.join(".mcp.json").is_file());
+    assert!(proj_c.join(".squad/TOOLS.md").is_file());
+
+    drop(app);
+    env::remove_var("AGENTSQUAD_TOOLS");
     let _ = fs::remove_dir_all(&dir);
 }

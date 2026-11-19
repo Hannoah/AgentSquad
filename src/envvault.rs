@@ -1,9 +1,9 @@
-use crate::config::config_path;
+use crate::config::{atomic_write_bytes, config_path, load_toml_or_default, save_toml_to};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
-    env, fs, io,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -31,11 +31,7 @@ pub fn env_path() -> Result<PathBuf> {
 
 /// Load the shared env vault from `p` (empty vault when the file does not exist).
 pub fn load_env_from(p: &Path) -> Result<EnvVault> {
-    if !p.exists() {
-        return Ok(EnvVault::default());
-    }
-    let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
-    toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))
+    load_toml_or_default(p)
 }
 
 pub fn load_env() -> Result<EnvVault> {
@@ -44,27 +40,7 @@ pub fn load_env() -> Result<EnvVault> {
 
 /// Persist the shared env vault atomically via temp file + rename.
 pub fn save_env_to(vault: &EnvVault, p: &Path) -> Result<()> {
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
-    let text = toml::to_string_pretty(vault)?;
-    let written = (|| -> io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = f.set_permissions(fs::Permissions::from_mode(0o600));
-        }
-        io::Write::write_all(&mut f, text.as_bytes())?;
-        f.sync_all()?;
-        fs::rename(&tmp, p)
-    })();
-    if let Err(e) = written {
-        let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("Cannot write {}", p.display()));
-    }
-    Ok(())
+    save_toml_to(vault, p, true)
 }
 
 pub fn save_env(vault: &EnvVault) -> Result<()> {
@@ -314,23 +290,7 @@ fn write_dotenv(dir: &Path, lines: &[String], line_ending: &str) -> Result<()> {
     if !out.is_empty() {
         out.push_str(line_ending);
     }
-    let tmp = dir.join(format!(".env.tmp{}", std::process::id()));
-    let res = (|| -> io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = f.set_permissions(fs::Permissions::from_mode(0o600));
-        }
-        io::Write::write_all(&mut f, out.as_bytes())?;
-        f.sync_all()?;
-        fs::rename(&tmp, &dotenv)
-    })();
-    if let Err(e) = res {
-        let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("Cannot write {}", dotenv.display()));
-    }
-    Ok(())
+    atomic_write_bytes(&dotenv, out.as_bytes(), true)
 }
 
 /// Resolve `keys` from `vault` and apply them to `<dir>/.env`.

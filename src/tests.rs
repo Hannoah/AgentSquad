@@ -24,11 +24,14 @@ mod config;
 mod envvault;
 mod history;
 mod input;
+mod json;
 mod ledger;
 mod pathpick;
 mod select;
 mod session;
+mod skills;
 mod sys;
+mod tools;
 mod ui;
 mod updater;
 

@@ -46,6 +46,26 @@ impl App {
                 }
             }
             ed.err.clear();
+        } else if let Some(ed) = self.skill_modal.as_mut().and_then(|m| m.editor.as_mut()) {
+            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                match ed.field {
+                    0 => ed.name.insert(ch),
+                    1 => ed.desc.insert(ch),
+                    _ => ed.body.insert(ch),
+                }
+            }
+            ed.err.clear();
+        } else if let Some(ed) = self.tool_modal.as_mut().and_then(|m| m.editor.as_mut()) {
+            if ed.field != 0 {
+                for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
+                    match ed.field {
+                        1 => ed.name.insert(ch),
+                        2 => ed.command.insert(ch),
+                        _ => ed.desc.insert(ch),
+                    }
+                }
+                ed.err.clear();
+            }
         } else if self.mode == Mode::Add {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 if let Some(input) = self.add_input() {
@@ -73,11 +93,17 @@ impl App {
             // Down to the "+ New variable" row at index `len`.
             let len = self.env_vault.vars.len();
             m_env.confirm_delete = None;
-            m_env.sel = if lines > 0 {
-                m_env.sel.saturating_sub(1)
-            } else {
-                (m_env.sel + 1).min(len)
-            };
+            m_env.sel = step_modal_sel(m_env.sel, len, lines > 0);
+            self.dirty = true;
+        } else if let (Some(lines), Some(m_sk)) = (wheel_lines(m.kind), self.skill_modal.as_mut()) {
+            let len = self.skills_vault.skills.len();
+            m_sk.confirm_delete = None;
+            m_sk.sel = step_modal_sel(m_sk.sel, len, lines > 0);
+            self.dirty = true;
+        } else if let (Some(lines), Some(m_tl)) = (wheel_lines(m.kind), self.tool_modal.as_mut()) {
+            let len = self.tools_vault.tools.len();
+            m_tl.confirm_delete = None;
+            m_tl.sel = step_modal_sel(m_tl.sel, len, lines > 0);
             self.dirty = true;
         } else if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
             // The memory monitor is modal: the wheel moves its pick.
@@ -200,27 +226,60 @@ impl App {
                 confirm_click(lines, modal_rect(lines, area.into()), m.column, m.row)
             });
             if let Some(m_env) = self.env_modal.as_mut() {
-                let popup = env_popup(area.into());
-                let at = ratatui::layout::Position::new(m.column, m.row);
-                let list = env_list_rect(popup, m_env.editor.is_some());
-                if !popup.contains(at) {
+                let vars = &self.env_vault.vars;
+                if !handle_vault_click(
+                    area,
+                    m,
+                    5,
+                    m_env.target,
+                    m_env.top.get(),
+                    &mut m_env.sel,
+                    &mut m_env.confirm_delete,
+                    &mut m_env.picked,
+                    &mut m_env.editor,
+                    vars.len(),
+                    |i| vars[i].key.clone(),
+                    EnvEditor::blank,
+                ) {
                     self.env_modal = None;
-                } else if list.contains(at) {
-                    let i = m_env.top.get() + usize::from(m.row - list.y);
-                    if i == self.env_vault.vars.len() && m_env.editor.is_none() {
-                        m_env.confirm_delete = None;
-                        m_env.sel = i;
-                        m_env.editor = Some(EnvEditor::blank());
-                    } else if i < self.env_vault.vars.len() {
-                        m_env.confirm_delete = None;
-                        m_env.sel = i;
-                        if m_env.target != EnvTarget::VaultOnly && m_env.editor.is_none() {
-                            let key = &self.env_vault.vars[i].key;
-                            if !m_env.picked.remove(key) {
-                                m_env.picked.insert(key.clone());
-                            }
-                        }
-                    }
+                }
+                self.dirty = true;
+            } else if let Some(m_sk) = self.skill_modal.as_mut() {
+                let list = &self.skills_vault.skills;
+                if !handle_vault_click(
+                    area,
+                    m,
+                    6,
+                    m_sk.target,
+                    m_sk.top.get(),
+                    &mut m_sk.sel,
+                    &mut m_sk.confirm_delete,
+                    &mut m_sk.picked,
+                    &mut m_sk.editor,
+                    list.len(),
+                    |i| list[i].name.clone(),
+                    SkillEditor::blank,
+                ) {
+                    self.skill_modal = None;
+                }
+                self.dirty = true;
+            } else if let Some(m_tl) = self.tool_modal.as_mut() {
+                let list = &self.tools_vault.tools;
+                if !handle_vault_click(
+                    area,
+                    m,
+                    7,
+                    m_tl.target,
+                    m_tl.top.get(),
+                    &mut m_tl.sel,
+                    &mut m_tl.confirm_delete,
+                    &mut m_tl.picked,
+                    &mut m_tl.editor,
+                    list.len(),
+                    |i| list[i].name.clone(),
+                    ToolEditor::blank,
+                ) {
+                    self.tool_modal = None;
                 }
                 self.dirty = true;
             } else if let Some(qr) = self.quick_reply.as_mut() {
@@ -381,39 +440,10 @@ impl App {
                     }
                 } else {
                     let rel_y = m.row.saturating_sub(popup.y + 1);
-                    // The folder list sits between the Path row and Kind.
                     let list_h = self.add_list_h();
-                    if self.add_edit.is_some() {
-                        // Editing reaches Path, Command (row 2) and Autostart
-                        // (row 3); the folder list sits under the Path row.
-                        match rel_y {
-                            0 => self.add_field = 0,
-                            r if r <= list_h => {
-                                let win = self.add_pick_window();
-                                let row = usize::from(r.saturating_sub(2));
-                                if r >= 2 && row < win.len() {
-                                    self.pick_path(win.start + row);
-                                }
-                            }
-                            r => match r - list_h {
-                                2 => self.add_field = 2,
-                                3 => {
-                                    self.add_field = 3;
-                                    self.add_autostart = !self.add_autostart;
-                                }
-                                5 => {
-                                    self.add_field = 5;
-                                    self.open_env_modal(EnvTarget::AddForm);
-                                }
-                                _ => {}
-                            },
-                        }
-                        self.dirty = true;
-                        return;
-                    }
+                    let editing = self.add_edit.is_some();
                     match rel_y {
                         0 => self.add_field = 0,
-                        // Header is row 1; click on a folder row fills the path.
                         r if r <= list_h => {
                             let win = self.add_pick_window();
                             let row = usize::from(r.saturating_sub(2));
@@ -422,7 +452,7 @@ impl App {
                             }
                         }
                         r => match r - list_h {
-                            1 => {
+                            1 if !editing => {
                                 self.add_field = 1;
                                 self.add_kind = self.add_kind.toggled();
                             }
@@ -431,10 +461,18 @@ impl App {
                                 self.add_field = 3;
                                 self.add_autostart = !self.add_autostart;
                             }
-                            4 if self.add_kind == Kind::Agent => self.add_field = 4,
+                            4 if !editing && self.add_kind == Kind::Agent => self.add_field = 4,
                             5 => {
                                 self.add_field = 5;
-                                self.open_env_modal(EnvTarget::AddForm);
+                                self.open_env_modal(VaultTarget::AddForm);
+                            }
+                            6 => {
+                                self.add_field = 6;
+                                self.open_skill_modal(VaultTarget::AddForm);
+                            }
+                            7 => {
+                                self.add_field = 7;
+                                self.open_tool_modal(VaultTarget::AddForm);
                             }
                             _ => {}
                         },
@@ -459,8 +497,7 @@ impl App {
                 // Coming from a Management row, the project row was not
                 // highlighted, so this is a first click on it.
                 let was_mgmt = self.mgmt_sel.take().is_some();
-                if i == MEMORY_ROW || i == ENV_ROW {
-                    let m = usize::from(i == ENV_ROW);
+                if let Some(m) = mgmt_row_index(i) {
                     self.mgmt_sel = Some(m);
                     self.open_mgmt(m);
                 } else if self.selected == i && !was_mgmt && self.mode == Mode::Focus {
@@ -601,8 +638,7 @@ impl App {
                 m.row,
             ) {
                 self.mode = Mode::Manager;
-                if i == MEMORY_ROW || i == ENV_ROW {
-                    let m = usize::from(i == ENV_ROW);
+                if let Some(m) = mgmt_row_index(i) {
                     self.mgmt_sel = Some(m);
                     self.open_mgmt(m);
                 } else {
@@ -617,4 +653,53 @@ impl App {
             }
         }
     }
+}
+
+fn step_modal_sel(cur: usize, len: usize, up: bool) -> usize {
+    if up {
+        cur.saturating_sub(1)
+    } else {
+        (cur + 1).min(len)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_vault_click<E>(
+    area: Size,
+    m: MouseEvent,
+    editor_h: u16,
+    target: VaultTarget,
+    top: usize,
+    sel: &mut usize,
+    confirm_delete: &mut Option<String>,
+    picked: &mut BTreeSet<String>,
+    editor: &mut Option<E>,
+    names_len: usize,
+    name_at: impl FnOnce(usize) -> String,
+    blank: impl FnOnce() -> E,
+) -> bool {
+    let popup = vault_popup(area.into());
+    let at = ratatui::layout::Position::new(m.column, m.row);
+    let list = vault_list_rect(popup, if editor.is_some() { editor_h } else { 0 });
+    if !popup.contains(at) {
+        return false;
+    }
+    if list.contains(at) {
+        let i = top + usize::from(m.row - list.y);
+        if i == names_len && editor.is_none() {
+            *confirm_delete = None;
+            *sel = i;
+            *editor = Some(blank());
+        } else if i < names_len {
+            *confirm_delete = None;
+            *sel = i;
+            if target != VaultTarget::VaultOnly && editor.is_none() {
+                let name = name_at(i);
+                if !picked.remove(&name) {
+                    picked.insert(name);
+                }
+            }
+        }
+    }
+    true
 }

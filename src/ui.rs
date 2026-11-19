@@ -114,7 +114,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump to a project / the first / the last",
         "/, F       filter projects / search output (Esc clears)",
-        "a, E       add project / shared env vars (.env)",
+        "a, E, K, T   add / env / skills / tools",
         "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
         "h, g       history (SITREPs) / git status & diff",
@@ -444,6 +444,8 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('8', "Set superior…"),
             ('9', "Remove project…"),
             ('0', "Environment variables"),
+            ('K', "Skills…"),
+            ('T', "Tools…"),
         ]
     } else {
         vec![
@@ -455,6 +457,8 @@ pub fn context_menu_items(running: bool) -> Vec<(char, &'static str)> {
             ('6', "Set superior…"),
             ('7', "Remove project…"),
             ('8', "Environment variables"),
+            ('K', "Skills…"),
+            ('T', "Tools…"),
         ]
     }
 }
@@ -493,14 +497,14 @@ pub fn context_menu_lines_at(name: &str, running: bool, sel: Option<usize>) -> V
         ]));
     }
     lines.push(Line::from(""));
-    // The tenth row is keyed `0`, as on the number row.
-    let range = if items.len() >= 10 {
-        "0-9".to_string()
+    // The tenth row is keyed `0`, followed by `K`/`T` for Skills/Tools.
+    let range = if items.iter().any(|(k, _)| *k == '0') {
+        "0-9/K/T"
     } else {
-        format!("1-{}", items.len())
+        "1-8/K/T"
     };
     lines.push(Line::from(hint_spans(&[
-        (range.as_str(), "selects"),
+        (range, "selects"),
         ("↑↓/Enter", "runs"),
         ("Esc", "cancels"),
     ])));
@@ -669,18 +673,18 @@ pub fn procs_list_rect(popup: ratatui::layout::Rect) -> ratatui::layout::Rect {
         .min(inner.height.saturating_sub(header_h));
     ratatui::layout::Rect::new(inner.x, inner.y + header_h, inner.width, h)
 }
-pub fn env_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+pub fn vault_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     fixed_rect(
-        area.width.saturating_sub(6).min(76),
+        area.width.saturating_sub(6).min(78),
         area.height.saturating_sub(4).min(22),
         area,
     )
 }
-pub fn env_list_rect(popup: ratatui::layout::Rect, has_editor: bool) -> ratatui::layout::Rect {
+pub fn vault_list_rect(popup: ratatui::layout::Rect, editor_h: u16) -> ratatui::layout::Rect {
     let inner = popup.inner(ratatui::layout::Margin::new(1, 1));
     let header_h: u16 = u16::from(inner.height >= 4);
-    let editor_h: u16 = if has_editor && inner.height >= 9 {
-        5
+    let editor_h: u16 = if editor_h > 0 && inner.height >= editor_h + 4 {
+        editor_h
     } else {
         0
     };
@@ -690,6 +694,12 @@ pub fn env_list_rect(popup: ratatui::layout::Rect, has_editor: bool) -> ratatui:
         .max(1)
         .min(inner.height.saturating_sub(header_h));
     ratatui::layout::Rect::new(inner.x, inner.y + header_h, inner.width, h)
+}
+pub fn env_popup(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    vault_popup(area)
+}
+pub fn env_list_rect(popup: ratatui::layout::Rect, has_editor: bool) -> ratatui::layout::Rect {
+    vault_list_rect(popup, if has_editor { 5 } else { 0 })
 }
 pub fn fixed_rect(w: u16, h: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     let (w, h) = (w.min(area.width), h.min(area.height));
@@ -790,10 +800,15 @@ pub fn cli_help() -> String {
 
 Usage:
   squad                                              Open manager
-  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [-- cmd]
+  squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY] [--skill NAME] [--tool NAME] [-- cmd]
                                                      Register project (path optional for services;
-                                                     --create makes folder, --env writes .env)
-  squad env <list|set KEY VAL|remove KEY|apply proj> Manage shared env vars and apply to .env
+                                                     --create makes folder, --env/--skill/--tool attach capabilities)
+  squad env <list|set KEY VAL|remove KEY|apply proj|unapply proj KEY...>
+                                                     Manage shared env vars and apply to .env
+  squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply proj|unapply proj NAME...>
+                                                     Manage shared skills (.agents/skills + .claude/skills)
+  squad tools <list|add NAME [--kind mcp|cli] [--desc D] [--env K=V] -- CMD|remove NAME|apply proj|unapply proj NAME...>
+                                                     Manage shared tools (MCP across agy/claude/muse/codex + .squad/TOOLS.md)
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)
@@ -803,7 +818,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · F/Ctrl+F  search output · a  add · E  shared env (.env) · e  edit · f  pin · [/]  collapse · z  zoom
+  /  filter · F/Ctrl+F  search output · a  add · E  shared env · K  skills · T  tools · e  edit · f  pin · [/]  collapse · z  zoom
   m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
   h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help

@@ -135,7 +135,7 @@ pub fn ensure(project: &Path) -> Result<bool> {
 /// Add `.squad/` to the repository's local exclude list (not `.gitignore`,
 /// which is shared). A worktree or submodule, where `.git` is a file, is
 /// left alone.
-fn exclude_from_git(project: &Path) -> std::io::Result<()> {
+pub(crate) fn exclude_from_git(project: &Path) -> std::io::Result<()> {
     let git = project.join(".git");
     if !git.is_dir() {
         return Ok(());

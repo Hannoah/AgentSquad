@@ -199,15 +199,52 @@ impl App {
                 return;
             }
         };
+        let current_skills = skills::read_project_skills(&path, &self.skills_vault);
+        let skills_note = match skills::sync_project_skills(
+            &path,
+            &self.skills_vault,
+            &self.add_skills,
+            &current_skills,
+        ) {
+            Ok((0, 0, 0)) => String::new(),
+            Ok((added, updated, removed)) => {
+                format!("; skills (+{added}, ~{updated}, -{removed})")
+            }
+            Err(e) => {
+                self.add_err = format!("skills failed: {e:#}");
+                return;
+            }
+        };
+        let current_tools = tools::read_project_tools(&path, &self.tools_vault);
+        let tools_note = match tools::sync_project_tools(
+            &path,
+            &self.tools_vault,
+            &self.add_tools,
+            &current_tools,
+        ) {
+            Ok((0, 0, 0)) => String::new(),
+            Ok((added, updated, removed)) => {
+                format!("; tools (+{added}, ~{updated}, -{removed})")
+            }
+            Err(e) => {
+                self.add_err = format!("tools failed: {e:#}");
+                return;
+            }
+        };
         self.add_edit = None;
         self.add_env.clear();
+        self.add_skills.clear();
+        self.add_tools.clear();
         self.mode = Mode::Manager;
         let note = match (was_running, moved) {
             (true, true) => "; restart it to use the new folder and command",
             (true, false) => "; restart it to use the new command",
             _ => "",
         };
-        self.message = (format!("Saved {name}{note}{env_note}"), Notice::Info);
+        self.message = (
+            format!("Saved {name}{note}{env_note}{skills_note}{tools_note}"),
+            Notice::Info,
+        );
     }
 
     pub(crate) fn apply_add_env(
@@ -221,6 +258,32 @@ impl App {
         envvault::apply_dotenv_keys(dir, &self.env_vault, &keys)
             .map(Some)
             .map_err(|e| format!(".env failed: {e:#}"))
+    }
+
+    pub(crate) fn apply_add_skills(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<Option<(usize, usize)>, String> {
+        if self.add_skills.is_empty() {
+            return Ok(None);
+        }
+        let names: Vec<String> = self.add_skills.iter().cloned().collect();
+        skills::apply_skill_names(dir, &self.skills_vault, &names)
+            .map(Some)
+            .map_err(|e| format!("skills failed: {e:#}"))
+    }
+
+    pub(crate) fn apply_add_tools(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<Option<(usize, usize)>, String> {
+        if self.add_tools.is_empty() {
+            return Ok(None);
+        }
+        let names: Vec<String> = self.add_tools.iter().cloned().collect();
+        tools::apply_tool_names(dir, &self.tools_vault, &names)
+            .map(Some)
+            .map_err(|e| format!("tools failed: {e:#}"))
     }
 
     /// Write checked vault keys whose value is missing/changed and remove
@@ -313,20 +376,24 @@ impl App {
         self.dirty = true;
     }
 
-    /// `M`: list the processes holding the most RAM on the machine.
-    /// Open Management row `m`: `0` Memory monitor, `1` Env vault (for the
-    /// selected project's `.env`, or the vault alone with none registered).
+    pub(crate) fn selected_vault_target(&self) -> VaultTarget {
+        self.order
+            .get(self.selected)
+            .copied()
+            .map_or(VaultTarget::VaultOnly, VaultTarget::Project)
+    }
+
+    /// Open Management row `m`: `0` Memory monitor, `1` Env vault, `2` Skills,
+    /// `3` Tools (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;
-        if m == 0 {
-            self.open_procs();
-        } else {
-            let target = self
-                .order
-                .get(self.selected)
-                .copied()
-                .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
-            self.open_env_modal(target);
+        let target = self.selected_vault_target();
+        match m {
+            0 => self.open_procs(),
+            1 => self.open_env_modal(target),
+            2 => self.open_skill_modal(target),
+            3 => self.open_tool_modal(target),
+            _ => {}
         }
     }
 
@@ -551,6 +618,8 @@ impl App {
                 7 => self.begin_set_superior(pi),
                 8 => self.confirm_remove = Some(pi),
                 9 => self.open_env_info(pi),
+                10 => self.open_skill_modal(VaultTarget::Project(pi)),
+                11 => self.open_tool_modal(VaultTarget::Project(pi)),
                 _ => {}
             }
             return;
@@ -568,17 +637,20 @@ impl App {
             5 => self.begin_set_superior(pi),
             6 => self.confirm_remove = Some(pi),
             7 => self.open_env_info(pi),
+            8 => self.open_skill_modal(VaultTarget::Project(pi)),
+            9 => self.open_tool_modal(VaultTarget::Project(pi)),
             _ => {}
         }
     }
 
     /// Keys while the quick-action menu is open: arrows/`j`/`k` move highlight,
-    /// `Enter` runs the highlighted row, number keys `1-9` run directly, `Esc` closes.
+    /// `Enter` runs the highlighted row, shortcut keys run directly, `Esc` closes.
     pub(super) fn key_context_menu(&mut self, k: KeyEvent, rows: u16, cols: u16) {
         let Some(pi) = self.context_menu else {
             return;
         };
-        let count = context_menu_items(slot_running(&self.sessions, pi)).len();
+        let items = context_menu_items(slot_running(&self.sessions, pi));
+        let count = items.len();
         match k.code {
             KeyCode::Esc => self.context_menu = None,
             KeyCode::Down | KeyCode::Char('j') if count > 0 => {
@@ -593,13 +665,9 @@ impl App {
                 self.run_context_action(pi, action, rows, cols);
             }
             KeyCode::Char(c) => {
-                if let Some(d) = c.to_digit(10) {
-                    // `0` is the tenth row, as on the number row.
-                    let idx = if d == 0 { 10 } else { d as usize };
-                    if idx >= 1 && idx <= count {
-                        self.context_menu = None;
-                        self.run_context_action(pi, idx - 1, rows, cols);
-                    }
+                if let Some(idx) = items.iter().position(|(key, _)| *key == c) {
+                    self.context_menu = None;
+                    self.run_context_action(pi, idx, rows, cols);
                 }
             }
             _ => {}
@@ -823,9 +891,452 @@ impl App {
                             }
                         }
                     }
-                    EnvTarget::VaultOnly => {
+                    VaultTarget::VaultOnly => {
                         self.env_modal = None;
                     }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn key_skill_modal(&mut self, k: KeyEvent) {
+        let Some(modal) = self.skill_modal.as_mut() else {
+            return;
+        };
+        if let Some(target_name) = modal.confirm_delete.clone() {
+            match confirm_key(k.code) {
+                Some(true) => {
+                    modal.confirm_delete = None;
+                    let mut next_vault = self.skills_vault.clone();
+                    skills::remove_skill(&mut next_vault, &target_name);
+                    match skills::save_skills(&next_vault) {
+                        Ok(()) => {
+                            self.skills_vault = next_vault;
+                            modal.picked.remove(&target_name);
+                            self.add_skills.remove(&target_name);
+                            let len = self.skills_vault.skills.len();
+                            modal.sel = modal.sel.min(len.saturating_sub(1));
+                        }
+                        Err(e) => {
+                            self.message = (format!("Save failed: {e:#}"), Notice::Error);
+                        }
+                    }
+                }
+                Some(false) => modal.confirm_delete = None,
+                None => {}
+            }
+            return;
+        }
+        if let Some(ed) = modal.editor.as_mut() {
+            match k.code {
+                KeyCode::Esc => modal.editor = None,
+                KeyCode::Tab | KeyCode::Down => ed.field = (ed.field + 1) % 3,
+                KeyCode::BackTab | KeyCode::Up => ed.field = (ed.field + 2) % 3,
+                KeyCode::Enter => {
+                    let valid_name = match skills::validate_skill_name(&ed.name.as_str()) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            ed.err = e;
+                            return;
+                        }
+                    };
+                    let body_raw = ed.body.as_str();
+                    let (source_path, instructions) = if let Some(orig) = ed
+                        .preserved_multiline
+                        .as_ref()
+                        .filter(|_| body_raw == ed.initial_body_preview)
+                    {
+                        (None, orig.clone())
+                    } else {
+                        match skills::classify_source_or_body(&body_raw) {
+                            Ok(pair) => pair,
+                            Err(e) => {
+                                ed.err = e;
+                                return;
+                            }
+                        }
+                    };
+                    let mut desc = ed.desc.as_str().trim().to_string();
+                    if desc.is_empty() {
+                        if let Some(src) = &source_path {
+                            if let Some(inferred) = skills::infer_description(src) {
+                                desc = inferred;
+                            }
+                        }
+                    }
+                    let entry = skills::SkillEntry {
+                        name: valid_name.clone(),
+                        description: desc,
+                        source_path,
+                        instructions,
+                    };
+                    let mut next_vault = self.skills_vault.clone();
+                    if let Some(old) = ed.editing_name.as_deref() {
+                        if old != valid_name {
+                            if next_vault.skills.iter().any(|s| s.name == valid_name) {
+                                ed.err = format!("{valid_name} already exists.");
+                                return;
+                            }
+                            if let Some(pos) = next_vault.skills.iter().position(|s| s.name == old)
+                            {
+                                next_vault.skills[pos] = entry;
+                            }
+                            modal.picked.remove(old);
+                            self.add_skills.remove(old);
+                        } else if let Err(e) = skills::upsert_skill(&mut next_vault, entry) {
+                            ed.err = e;
+                            return;
+                        }
+                    } else if let Err(e) = skills::upsert_skill(&mut next_vault, entry) {
+                        ed.err = e;
+                        return;
+                    }
+                    if let Err(e) = skills::save_skills(&next_vault) {
+                        ed.err = format!("Save failed: {e:#}");
+                        return;
+                    }
+                    self.skills_vault = next_vault;
+                    if let Some(pos) = self
+                        .skills_vault
+                        .skills
+                        .iter()
+                        .position(|s| s.name == valid_name)
+                    {
+                        modal.sel = pos;
+                    }
+                    if modal.target != VaultTarget::VaultOnly {
+                        modal.picked.insert(valid_name);
+                    }
+                    modal.editor = None;
+                }
+                _ => {
+                    let input = match ed.field {
+                        0 => &mut ed.name,
+                        1 => &mut ed.desc,
+                        _ => &mut ed.body,
+                    };
+                    if input.edit_key(k) == Some(true) {
+                        ed.err.clear();
+                    }
+                }
+            }
+            return;
+        }
+        let kh = hotkey_event(k);
+        let len = self.skills_vault.skills.len();
+        let can_pick = modal.target != VaultTarget::VaultOnly;
+        match kh.code {
+            KeyCode::Esc | KeyCode::Char('K') => self.skill_modal = None,
+            KeyCode::Up | KeyCode::Char('k') => modal.sel = (modal.sel + len) % (len + 1),
+            KeyCode::Down | KeyCode::Char('j') => modal.sel = (modal.sel + 1) % (len + 1),
+            KeyCode::Enter | KeyCode::Char(' ') if modal.sel >= len => {
+                modal.editor = Some(SkillEditor::blank());
+            }
+            KeyCode::Char(' ') if can_pick && len > 0 => {
+                if let Some(entry) = self.skills_vault.skills.get(modal.sel) {
+                    if !modal.picked.remove(&entry.name) {
+                        modal.picked.insert(entry.name.clone());
+                    }
+                }
+            }
+            KeyCode::Char('A') if can_pick && len > 0 => {
+                toggle_all_picked(
+                    &mut modal.picked,
+                    self.skills_vault.skills.iter().map(|s| &s.name),
+                );
+            }
+            KeyCode::Char('a' | 'n') => modal.editor = Some(SkillEditor::blank()),
+            KeyCode::Char('e') if len > 0 => {
+                if let Some(entry) = self.skills_vault.skills.get(modal.sel) {
+                    let mut name_in = LineInput::new();
+                    name_in.set(&entry.name);
+                    let mut desc_in = LineInput::new();
+                    desc_in.set(&entry.description);
+                    let mut body_in = LineInput::new();
+                    let (preview, preserved) = if let Some(src) = &entry.source_path {
+                        (src.clone(), None)
+                    } else if entry.instructions.contains('\n') || entry.instructions.contains('\r')
+                    {
+                        let single = entry
+                            .instructions
+                            .lines()
+                            .map(str::trim)
+                            .filter(|l| !l.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        (single, Some(entry.instructions.clone()))
+                    } else {
+                        (entry.instructions.clone(), None)
+                    };
+                    body_in.set(&preview);
+                    modal.editor = Some(SkillEditor {
+                        name: name_in,
+                        desc: desc_in,
+                        body: body_in,
+                        field: 1,
+                        editing_name: Some(entry.name.clone()),
+                        initial_body_preview: preview,
+                        preserved_multiline: preserved,
+                        err: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete if len > 0 => {
+                if let Some(entry) = self.skills_vault.skills.get(modal.sel) {
+                    modal.confirm_delete = Some(entry.name.clone());
+                }
+            }
+            KeyCode::Enter => {
+                let target = modal.target;
+                let picked = modal.picked.clone();
+                match target {
+                    VaultTarget::AddForm => {
+                        self.add_skills = picked;
+                        self.skill_modal = None;
+                    }
+                    VaultTarget::Project(pi) => {
+                        let current = modal.project_state.clone();
+                        let Some(p) = self.cfg.projects.get(pi) else {
+                            self.skill_modal = None;
+                            return;
+                        };
+                        match skills::sync_project_skills(
+                            &p.path,
+                            &self.skills_vault,
+                            &picked,
+                            &current,
+                        ) {
+                            Ok((0, 0, 0)) => self.skill_modal = None,
+                            Ok((added, updated, removed)) => {
+                                self.message = (
+                                    format!(
+                                        "Updated {} skills (+{added} added, {updated} updated, -{removed} removed)",
+                                        p.name
+                                    ),
+                                    Notice::Info,
+                                );
+                                self.skill_modal = None;
+                            }
+                            Err(e) => {
+                                self.message = (format!("Skills failed: {e:#}"), Notice::Error);
+                            }
+                        }
+                    }
+                    VaultTarget::VaultOnly => self.skill_modal = None,
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn key_tool_modal(&mut self, k: KeyEvent) {
+        let Some(modal) = self.tool_modal.as_mut() else {
+            return;
+        };
+        if let Some(target_name) = modal.confirm_delete.clone() {
+            match confirm_key(k.code) {
+                Some(true) => {
+                    modal.confirm_delete = None;
+                    let mut next_vault = self.tools_vault.clone();
+                    tools::remove_tool(&mut next_vault, &target_name);
+                    match tools::save_tools(&next_vault) {
+                        Ok(()) => {
+                            self.tools_vault = next_vault;
+                            modal.picked.remove(&target_name);
+                            self.add_tools.remove(&target_name);
+                            let len = self.tools_vault.tools.len();
+                            modal.sel = modal.sel.min(len.saturating_sub(1));
+                        }
+                        Err(e) => {
+                            self.message = (format!("Save failed: {e:#}"), Notice::Error);
+                        }
+                    }
+                }
+                Some(false) => modal.confirm_delete = None,
+                None => {}
+            }
+            return;
+        }
+        if let Some(ed) = modal.editor.as_mut() {
+            match k.code {
+                KeyCode::Esc => modal.editor = None,
+                KeyCode::Tab | KeyCode::Down => ed.field = (ed.field + 1) % 4,
+                KeyCode::BackTab | KeyCode::Up => ed.field = (ed.field + 3) % 4,
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if ed.field == 0 => {
+                    ed.kind = ed.kind.toggled();
+                    ed.err.clear();
+                }
+                KeyCode::Enter => {
+                    let valid_name = match tools::validate_tool_name(&ed.name.as_str()) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            ed.err = e;
+                            return;
+                        }
+                    };
+                    let valid_cmd =
+                        match tools::validate_tool_command(ed.kind, &ed.command.as_str()) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                ed.err = e;
+                                return;
+                            }
+                        };
+                    let entry = tools::ToolEntry {
+                        name: valid_name.clone(),
+                        kind: ed.kind,
+                        command: valid_cmd,
+                        description: ed.desc.as_str().trim().to_string(),
+                        env: ed.preserved_env.clone(),
+                    };
+                    let mut next_vault = self.tools_vault.clone();
+                    if let Some(old) = ed.editing_name.as_deref() {
+                        if !old.eq_ignore_ascii_case(&valid_name)
+                            && next_vault
+                                .tools
+                                .iter()
+                                .any(|t| t.name.eq_ignore_ascii_case(&valid_name))
+                        {
+                            ed.err = format!("{valid_name} already exists.");
+                            return;
+                        }
+                        if !old.eq_ignore_ascii_case(&valid_name) {
+                            if let Some(pos) = next_vault
+                                .tools
+                                .iter()
+                                .position(|t| t.name.eq_ignore_ascii_case(old))
+                            {
+                                next_vault.tools[pos] = entry;
+                            }
+                            modal.picked.remove(old);
+                            self.add_tools.remove(old);
+                        } else if let Err(e) = tools::upsert_tool(&mut next_vault, entry) {
+                            ed.err = e;
+                            return;
+                        }
+                    } else if let Err(e) = tools::upsert_tool(&mut next_vault, entry) {
+                        ed.err = e;
+                        return;
+                    }
+                    if let Err(e) = tools::save_tools(&next_vault) {
+                        ed.err = format!("Save failed: {e:#}");
+                        return;
+                    }
+                    self.tools_vault = next_vault;
+                    if let Some(pos) = self
+                        .tools_vault
+                        .tools
+                        .iter()
+                        .position(|t| t.name == valid_name)
+                    {
+                        modal.sel = pos;
+                    }
+                    if modal.target != VaultTarget::VaultOnly {
+                        modal.picked.insert(valid_name);
+                    }
+                    modal.editor = None;
+                }
+                _ if ed.field != 0 => {
+                    let input = match ed.field {
+                        1 => &mut ed.name,
+                        2 => &mut ed.command,
+                        _ => &mut ed.desc,
+                    };
+                    if input.edit_key(k) == Some(true) {
+                        ed.err.clear();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        let kh = hotkey_event(k);
+        let len = self.tools_vault.tools.len();
+        let can_pick = modal.target != VaultTarget::VaultOnly;
+        match kh.code {
+            KeyCode::Esc | KeyCode::Char('T') => self.tool_modal = None,
+            KeyCode::Up | KeyCode::Char('k') => modal.sel = (modal.sel + len) % (len + 1),
+            KeyCode::Down | KeyCode::Char('j') => modal.sel = (modal.sel + 1) % (len + 1),
+            KeyCode::Enter | KeyCode::Char(' ') if modal.sel >= len => {
+                modal.editor = Some(ToolEditor::blank());
+            }
+            KeyCode::Char(' ') if can_pick && len > 0 => {
+                if let Some(entry) = self.tools_vault.tools.get(modal.sel) {
+                    if !modal.picked.remove(&entry.name) {
+                        modal.picked.insert(entry.name.clone());
+                    }
+                }
+            }
+            KeyCode::Char('A') if can_pick && len > 0 => {
+                toggle_all_picked(
+                    &mut modal.picked,
+                    self.tools_vault.tools.iter().map(|t| &t.name),
+                );
+            }
+            KeyCode::Char('a' | 'n') => modal.editor = Some(ToolEditor::blank()),
+            KeyCode::Char('e') if len > 0 => {
+                if let Some(entry) = self.tools_vault.tools.get(modal.sel) {
+                    let mut name_in = LineInput::new();
+                    name_in.set(&entry.name);
+                    let mut cmd_in = LineInput::new();
+                    cmd_in.set(&entry.command);
+                    let mut desc_in = LineInput::new();
+                    desc_in.set(&entry.description);
+                    modal.editor = Some(ToolEditor {
+                        kind: entry.kind,
+                        name: name_in,
+                        command: cmd_in,
+                        desc: desc_in,
+                        field: 2,
+                        editing_name: Some(entry.name.clone()),
+                        preserved_env: entry.env.clone(),
+                        err: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete if len > 0 => {
+                if let Some(entry) = self.tools_vault.tools.get(modal.sel) {
+                    modal.confirm_delete = Some(entry.name.clone());
+                }
+            }
+            KeyCode::Enter => {
+                let target = modal.target;
+                let picked = modal.picked.clone();
+                match target {
+                    VaultTarget::AddForm => {
+                        self.add_tools = picked;
+                        self.tool_modal = None;
+                    }
+                    VaultTarget::Project(pi) => {
+                        let current = modal.project_state.clone();
+                        let Some(p) = self.cfg.projects.get(pi) else {
+                            self.tool_modal = None;
+                            return;
+                        };
+                        match tools::sync_project_tools(
+                            &p.path,
+                            &self.tools_vault,
+                            &picked,
+                            &current,
+                        ) {
+                            Ok((0, 0, 0)) => self.tool_modal = None,
+                            Ok((added, updated, removed)) => {
+                                self.message = (
+                                    format!(
+                                        "Updated {} tools (+{added} added, {updated} updated, -{removed} removed)",
+                                        p.name
+                                    ),
+                                    Notice::Info,
+                                );
+                                self.tool_modal = None;
+                            }
+                            Err(e) => {
+                                self.message = (format!("Tools failed: {e:#}"), Notice::Error);
+                            }
+                        }
+                    }
+                    VaultTarget::VaultOnly => self.tool_modal = None,
                 }
             }
             _ => {}
@@ -869,7 +1380,13 @@ impl App {
                         .into_iter()
                         .map(|j| projects[j].name.as_str())
                         .collect();
-                    let mut bytes = ledger::brief_line(&p.name, commander, &subs).into_bytes();
+                    let mut line = ledger::brief_line(&p.name, commander, &subs);
+                    if p.path.join(ledger::DIR).join("TOOLS.md").is_file() {
+                        line.push_str(
+                            " Available project tools are listed in .squad/TOOLS.md: read it before running commands.",
+                        );
+                    }
+                    let mut bytes = line.into_bytes();
                     bytes.push(b'\r');
                     match s.input(&bytes) {
                         Ok(()) => {
@@ -1221,5 +1738,14 @@ impl App {
         self.search_idx = 0;
         self.search_active = false;
         self.search_pi = None;
+    }
+}
+
+fn toggle_all_picked<'a>(picked: &mut BTreeSet<String>, names: impl Iterator<Item = &'a String>) {
+    let all: Vec<String> = names.cloned().collect();
+    if all.iter().all(|n| picked.contains(n)) {
+        picked.clear();
+    } else {
+        picked.extend(all);
     }
 }

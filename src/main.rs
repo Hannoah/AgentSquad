@@ -4,11 +4,14 @@ pub mod envvault;
 pub mod history;
 pub mod ime;
 pub mod input;
+pub mod json;
 pub mod ledger;
 pub mod pathpick;
 pub mod select;
 pub mod session;
+pub mod skills;
 pub mod sys;
+pub mod tools;
 pub mod ui;
 pub mod updater;
 
@@ -102,7 +105,7 @@ fn main() -> Result<()> {
         Some("add") => {
             // The path may be omitted for services: `squad add --kind service -- cmd`.
             const USAGE: &str =
-                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [-- command args...] (path optional for services)";
+                "Usage: squad add [<path>] [--kind agent|service] [--autostart] [--ledger] [--create] [--under <commander>] [--env KEY[,KEY...]] [--skill NAME[,NAME...]] [--tool NAME[,NAME...]] [-- command args...] (path optional for services)";
             let tail: &[String] = args.get(1..).unwrap_or(&[]);
             let (path_raw, tail) = match tail.first().map(String::as_str) {
                 Some(flag) if flag.starts_with("--") => ("", tail),
@@ -115,6 +118,8 @@ fn main() -> Result<()> {
             let mut create = false;
             let mut under: Option<String> = None;
             let mut env_keys: Vec<String> = Vec::new();
+            let mut skill_names: Vec<String> = Vec::new();
+            let mut tool_names: Vec<String> = Vec::new();
             let mut command: Option<Vec<String>> = None;
             let mut i = 0;
             while i < tail.len() {
@@ -141,10 +146,15 @@ fn main() -> Result<()> {
                         i += 2;
                     }
                     "--env" => {
-                        let raw = tail.get(i + 1).context(USAGE)?;
-                        for k in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                            env_keys.push(k.to_string());
-                        }
+                        push_csv(&mut env_keys, tail.get(i + 1).context(USAGE)?);
+                        i += 2;
+                    }
+                    "--skill" | "--skills" => {
+                        push_csv(&mut skill_names, tail.get(i + 1).context(USAGE)?);
+                        i += 2;
+                    }
+                    "--tool" | "--tools" => {
+                        push_csv(&mut tool_names, tail.get(i + 1).context(USAGE)?);
                         i += 2;
                     }
                     "--" => {
@@ -155,7 +165,7 @@ fn main() -> Result<()> {
                         break;
                     }
                     other => {
-                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY or -- command")
+                        bail!("Unknown option: {other}. Use --kind agent|service, --autostart, --ledger, --create, --under <commander>, --env KEY, --skill NAME, --tool NAME or -- command")
                     }
                 }
             }
@@ -180,6 +190,29 @@ fn main() -> Result<()> {
                 }
                 Some(v)
             };
+            let s_vault = if skill_names.is_empty() {
+                None
+            } else {
+                let v = skills::load_skills()?;
+                for name in &skill_names {
+                    let norm = skills::validate_skill_name(name).map_err(anyhow::Error::msg)?;
+                    if !v.skills.iter().any(|s| s.name == norm) {
+                        bail!("Unknown shared skill: {name}. Register it with `squad skills add {name} ...`.");
+                    }
+                }
+                Some(v)
+            };
+            let t_vault = if tool_names.is_empty() {
+                None
+            } else {
+                let v = tools::load_tools()?;
+                for name in &tool_names {
+                    if !v.tools.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
+                        bail!("Unknown shared tool: {name}. Register it with `squad tools add {name} ...`.");
+                    }
+                }
+                Some(v)
+            };
             let mut p = build_project(&c.projects, path_raw, kind, command.unwrap_or_else(shell))
                 .map_err(anyhow::Error::msg)?;
             p.autostart = autostart;
@@ -199,6 +232,20 @@ fn main() -> Result<()> {
                 let (added, updated) = envvault::apply_dotenv_keys(&p.path, &v, &env_keys)?;
                 println!(
                     "Updated {}/.env (+{added} added, {updated} updated)",
+                    p.name
+                );
+            }
+            if let Some(v) = s_vault {
+                let (added, updated) = skills::apply_skill_names(&p.path, &v, &skill_names)?;
+                println!(
+                    "Updated {} skills (+{added} added, {updated} updated)",
+                    p.name
+                );
+            }
+            if let Some(v) = t_vault {
+                let (added, updated) = tools::apply_tool_names(&p.path, &v, &tool_names)?;
+                println!(
+                    "Updated {} tools (+{added} added, {updated} updated)",
                     p.name
                 );
             }
@@ -257,8 +304,23 @@ fn main() -> Result<()> {
             run(c, Some(i), Vec::new())
         }
         Some("env") => run_env_cli(&c, args.get(1..).unwrap_or(&[])),
+        Some("skills") => run_skills_cli(&c, args.get(1..).unwrap_or(&[])),
+        Some("tools") => run_tools_cli(&c, args.get(1..).unwrap_or(&[])),
         Some(other) => bail!("Unknown command: {other}. Use squad --help"),
     }
+}
+
+fn push_csv(dst: &mut Vec<String>, raw: &str) {
+    for item in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        dst.push(item.to_string());
+    }
+}
+
+fn find_project<'a>(c: &'a config::Config, name: &str) -> Result<&'a config::Project> {
+    c.projects
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name))
+        .with_context(|| format!("Unknown project: {name}"))
 }
 
 fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
@@ -300,11 +362,7 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
         }
         Some("apply") => {
             let name = args.get(1).context(USAGE)?;
-            let p = c
-                .projects
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case(name))
-                .with_context(|| format!("Unknown project: {name}"))?;
+            let p = find_project(c, name)?;
             let vault = envvault::load_env()?;
             let keys: Vec<String> = if args.len() > 2 {
                 args[2..].to_vec()
@@ -326,13 +384,261 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
             if args.len() < 3 {
                 bail!("{USAGE}");
             }
-            let p = c
-                .projects
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case(name))
-                .with_context(|| format!("Unknown project: {name}"))?;
+            let p = find_project(c, name)?;
             let removed = envvault::remove_dotenv(&p.path, &args[2..])?;
             println!("Updated {}/.env (-{removed} removed)", p.name);
+            Ok(())
+        }
+        Some(_) => bail!("{USAGE}"),
+    }
+}
+
+fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
+    const USAGE: &str = "Usage: squad skills <list | add <name> [--path <dir|file> | --prompt <text>] [--desc <text>] | remove <name> | apply <project> [NAME...] | unapply <project> NAME...>";
+    match args.first().map(String::as_str) {
+        Some("list") | None => {
+            let vault = skills::load_skills()?;
+            if vault.skills.is_empty() {
+                println!("No shared skills registered.");
+                println!("Add one with: squad skills add <name> --path <dir|SKILL.md>");
+                return Ok(());
+            }
+            for s in &vault.skills {
+                let src = s
+                    .source_path
+                    .as_deref()
+                    .map(|p| format!("path:{p}"))
+                    .unwrap_or_else(|| "inline".to_string());
+                if s.description.is_empty() {
+                    println!("{}  [{src}]", s.name);
+                } else {
+                    println!("{}  [{src}]  {}", s.name, s.description);
+                }
+            }
+            Ok(())
+        }
+        Some("add" | "set") => {
+            let name = args.get(1).context(USAGE)?;
+            let tail = args.get(2..).unwrap_or(&[]);
+            let mut path_arg: Option<String> = None;
+            let mut prompt_arg: Option<String> = None;
+            let mut desc = String::new();
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--path" => {
+                        path_arg = Some(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
+                    "--prompt" | "--instructions" => {
+                        prompt_arg = Some(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
+                    "--desc" | "--description" => {
+                        desc = tail.get(i + 1).context(USAGE)?.clone();
+                        i += 2;
+                    }
+                    other => bail!("Unknown option: {other}. {USAGE}"),
+                }
+            }
+            let (source_path, instructions) = match (path_arg, prompt_arg) {
+                (Some(_), Some(_)) => bail!("Specify either --path or --prompt, not both."),
+                (Some(p), None) => {
+                    let (src, body) =
+                        skills::classify_source_or_body(&p).map_err(anyhow::Error::msg)?;
+                    if src.is_none() {
+                        bail!("Source path does not exist: {p}");
+                    }
+                    (src, body)
+                }
+                (None, Some(text)) => {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        bail!("Prompt cannot be empty.");
+                    }
+                    (None, trimmed.to_string())
+                }
+                (None, None) => bail!("{USAGE}"),
+            };
+            let mut vault = skills::load_skills()?;
+            let entry = skills::SkillEntry {
+                name: name.to_string(),
+                description: desc,
+                source_path,
+                instructions,
+            };
+            let norm = skills::validate_skill_name(&entry.name).map_err(anyhow::Error::msg)?;
+            let inserted = skills::upsert_skill(&mut vault, entry).map_err(anyhow::Error::msg)?;
+            skills::save_skills(&vault)?;
+            let action = if inserted { "Registered" } else { "Updated" };
+            println!("{action} shared skill {norm}");
+            Ok(())
+        }
+        Some("remove" | "rm") => {
+            let name = args.get(1).context(USAGE)?;
+            let mut vault = skills::load_skills()?;
+            if !skills::remove_skill(&mut vault, name) {
+                bail!("Unknown shared skill: {name}");
+            }
+            skills::save_skills(&vault)?;
+            println!("Removed shared skill {}", name.trim().to_ascii_lowercase());
+            Ok(())
+        }
+        Some("apply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            let p = find_project(c, proj_name)?;
+            let vault = skills::load_skills()?;
+            let names: Vec<String> = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                vault.skills.iter().map(|s| s.name.clone()).collect()
+            };
+            if names.is_empty() {
+                bail!(
+                    "No shared skills to apply. Register one with `squad skills add <name> ...`."
+                );
+            }
+            let (added, updated) = skills::apply_skill_names(&p.path, &vault, &names)?;
+            println!(
+                "Updated {} skills (+{added} added, {updated} updated)",
+                p.name
+            );
+            Ok(())
+        }
+        Some("unapply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            if args.len() < 3 {
+                bail!("{USAGE}");
+            }
+            let p = find_project(c, proj_name)?;
+            let removed = skills::remove_skills(&p.path, &args[2..])?;
+            println!("Updated {} skills (-{removed} removed)", p.name);
+            Ok(())
+        }
+        Some(_) => bail!("{USAGE}"),
+    }
+}
+
+fn run_tools_cli(c: &config::Config, args: &[String]) -> Result<()> {
+    const USAGE: &str = "Usage: squad tools <list | add <name> [--kind mcp|cli] [--desc <text>] [--env KEY=VAL]... [--] <command|url...> | remove <name> | apply <project> [NAME...] | unapply <project> NAME...>";
+    match args.first().map(String::as_str) {
+        Some("list") | None => {
+            let vault = tools::load_tools()?;
+            if vault.tools.is_empty() {
+                println!("No shared tools registered.");
+                println!("Add one with: squad tools add <name> -- npx -y <mcp-package>");
+                return Ok(());
+            }
+            for t in &vault.tools {
+                if t.description.is_empty() {
+                    println!("[{}] {}  {}", t.kind.as_str(), t.name, t.command);
+                } else {
+                    println!(
+                        "[{}] {}  {}  ({})",
+                        t.kind.as_str(),
+                        t.name,
+                        t.command,
+                        t.description
+                    );
+                }
+            }
+            Ok(())
+        }
+        Some("add" | "set") => {
+            let name = args.get(1).context(USAGE)?;
+            let tail = args.get(2..).unwrap_or(&[]);
+            let mut kind = tools::ToolKind::Mcp;
+            let mut desc = String::new();
+            let mut env_map = std::collections::BTreeMap::new();
+            let mut cmd_parts: Vec<String> = Vec::new();
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--kind" => {
+                        kind = tail.get(i + 1).context(USAGE)?.parse()?;
+                        i += 2;
+                    }
+                    "--desc" | "--description" => {
+                        desc = tail.get(i + 1).context(USAGE)?.clone();
+                        i += 2;
+                    }
+                    "--url" => {
+                        cmd_parts.push(tail.get(i + 1).context(USAGE)?.clone());
+                        i += 2;
+                    }
+                    "--env" | "-e" => {
+                        let pair = tail.get(i + 1).context(USAGE)?;
+                        let (k, v) = pair.split_once('=').with_context(|| {
+                            format!("Expected KEY=VALUE for --env, got: {pair}")
+                        })?;
+                        let valid_k = envvault::validate_env_key(k).map_err(anyhow::Error::msg)?;
+                        env_map.insert(valid_k, v.to_string());
+                        i += 2;
+                    }
+                    "--" => {
+                        cmd_parts.extend(tail[i + 1..].iter().cloned());
+                        break;
+                    }
+                    other if other.starts_with("--") => bail!("Unknown option: {other}. {USAGE}"),
+                    _ => {
+                        cmd_parts.extend(tail[i..].iter().cloned());
+                        break;
+                    }
+                }
+            }
+            let command = config::join_command(&cmd_parts);
+            let mut vault = tools::load_tools()?;
+            let entry = tools::ToolEntry {
+                name: name.to_string(),
+                kind,
+                command,
+                description: desc,
+                env: env_map,
+            };
+            let valid_name = tools::validate_tool_name(&entry.name).map_err(anyhow::Error::msg)?;
+            let inserted = tools::upsert_tool(&mut vault, entry).map_err(anyhow::Error::msg)?;
+            tools::save_tools(&vault)?;
+            let action = if inserted { "Registered" } else { "Updated" };
+            println!("{action} shared {} tool {valid_name}", kind.as_str());
+            Ok(())
+        }
+        Some("remove" | "rm") => {
+            let name = args.get(1).context(USAGE)?;
+            let mut vault = tools::load_tools()?;
+            if !tools::remove_tool(&mut vault, name) {
+                bail!("Unknown shared tool: {name}");
+            }
+            tools::save_tools(&vault)?;
+            println!("Removed shared tool {}", name.trim());
+            Ok(())
+        }
+        Some("apply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            let p = find_project(c, proj_name)?;
+            let vault = tools::load_tools()?;
+            let names: Vec<String> = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                vault.tools.iter().map(|t| t.name.clone()).collect()
+            };
+            if names.is_empty() {
+                bail!("No shared tools to apply. Register one with `squad tools add <name> ...`.");
+            }
+            let (added, updated) = tools::apply_tool_names(&p.path, &vault, &names)?;
+            println!(
+                "Updated {} tools (+{added} added, {updated} updated)",
+                p.name
+            );
+            Ok(())
+        }
+        Some("unapply") => {
+            let proj_name = args.get(1).context(USAGE)?;
+            if args.len() < 3 {
+                bail!("{USAGE}");
+            }
+            let p = find_project(c, proj_name)?;
+            let removed = tools::remove_tools(&p.path, &args[2..])?;
+            println!("Updated {} tools (-{removed} removed)", p.name);
             Ok(())
         }
         Some(_) => bail!("{USAGE}"),

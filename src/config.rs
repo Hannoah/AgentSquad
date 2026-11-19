@@ -215,25 +215,7 @@ pub fn load() -> Result<Config> {
     load_from(&p)
 }
 pub fn save_to(c: &Config, p: &Path) -> Result<()> {
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    // Write-then-rename so a crash mid-write never leaves a torn config.
-    // pid in the name: two squads saving at once must not share a temp file.
-    let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
-    let text = toml::to_string_pretty(c)?;
-    // Synced before the rename: a power cut must not leave an empty config.
-    let written = fs::File::create(&tmp)
-        .and_then(|mut f| {
-            io::Write::write_all(&mut f, text.as_bytes())?;
-            f.sync_all()
-        })
-        .and_then(|()| fs::rename(&tmp, p));
-    if let Err(e) = written {
-        let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("Cannot write {}", p.display()));
-    }
-    Ok(())
+    save_toml_to(c, p, false)
 }
 pub fn save(c: &Config) -> Result<()> {
     let p = config_path()?;
@@ -870,4 +852,68 @@ pub fn fit(s: &str, w: usize) -> String {
     }
     // Keep a visible marker so a clipped name/command reads as clipped.
     take_cols(s.chars(), w - 1) + "…"
+}
+
+/// Installation state of a shared vault item relative to a project folder.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SyncState {
+    Installed,
+    Differs,
+}
+
+/// Current user's home directory, preferring `USERPROFILE` on Windows and `HOME` on Unix.
+pub fn home_dir_string() -> Option<String> {
+    let raw = if cfg!(windows) {
+        env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"))
+    } else {
+        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
+    }?;
+    let s = raw.to_string_lossy().into_owned();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Write `bytes` to `p` atomically via a per-process temp file + `sync_all` + rename.
+/// Sets `0o600` on Unix when `private` is true.
+pub fn atomic_write_bytes(p: &Path, bytes: &[u8], private: bool) -> Result<()> {
+    if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let tmp = p.with_file_name(format!(".{file_name}.tmp{}", std::process::id()));
+    let written = (|| -> io::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = f.set_permissions(fs::Permissions::from_mode(0o600));
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        io::Write::write_all(&mut f, bytes)?;
+        f.sync_all()?;
+        fs::rename(&tmp, p)
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("Cannot write {}", p.display()));
+    }
+    Ok(())
+}
+
+/// Deserialize a TOML file at `p`, returning `T::default()` when absent.
+pub fn load_toml_or_default<T: serde::de::DeserializeOwned + Default>(p: &Path) -> Result<T> {
+    if !p.exists() {
+        return Ok(T::default());
+    }
+    let text = fs::read_to_string(p).with_context(|| format!("Cannot read {}", p.display()))?;
+    toml::from_str(&text).with_context(|| format!("Cannot parse {}", p.display()))
+}
+
+/// Serialize `val` as pretty TOML and persist atomically to `p`.
+pub fn save_toml_to<T: Serialize>(val: &T, p: &Path, private: bool) -> Result<()> {
+    let text = toml::to_string_pretty(val)?;
+    atomic_write_bytes(p, text.as_bytes(), private)
 }

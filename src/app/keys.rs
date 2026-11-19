@@ -26,6 +26,14 @@ impl App {
             self.key_env_modal(k);
             return;
         }
+        if self.skill_modal.is_some() {
+            self.key_skill_modal(k);
+            return;
+        }
+        if self.tool_modal.is_some() {
+            self.key_tool_modal(k);
+            return;
+        }
         if self.quick_reply.is_some() {
             self.key_quick_reply(k);
             return;
@@ -327,7 +335,7 @@ impl App {
             (false, Some(i)) => self.add_sel = Some(i - 1),
             (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
             (false, None) => {
-                self.add_field = 5;
+                self.add_field = 7;
             }
         }
     }
@@ -358,7 +366,13 @@ impl App {
                 self.pick_path(self.add_sel.unwrap_or(0));
             }
             KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 5 => {
-                self.open_env_modal(EnvTarget::AddForm);
+                self.open_env_modal(VaultTarget::AddForm);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 6 => {
+                self.open_skill_modal(VaultTarget::AddForm);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 7 => {
+                self.open_tool_modal(VaultTarget::AddForm);
             }
             KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
             KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
@@ -368,21 +382,25 @@ impl App {
             KeyCode::Down if self.add_edit.is_some() && self.add_field == 0 => {
                 self.step_path_list(true)
             }
-            // Editing reaches Path, Command, Autostart, and Env (.env).
+            // Editing reaches Path, Command, Autostart, Env (.env), Skills, and Tools.
             KeyCode::Tab | KeyCode::Down if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
                     0 => 2,
                     2 => 3,
                     3 => 5,
+                    5 => 6,
+                    6 => 7,
                     _ => 0,
                 };
             }
             KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
+                    7 => 6,
+                    6 => 5,
                     5 => 3,
                     3 => 2,
                     2 => 0,
-                    _ => 5,
+                    _ => 7,
                 };
             }
             KeyCode::Enter => {
@@ -456,16 +474,35 @@ impl App {
                                     enable_chain_ledger(&mut self.cfg.projects, last);
                                     ledger::report_transfer(&self.cfg.projects, &name, None);
                                     ledger::write_rosters(&self.cfg.projects);
-                                    let (env_note, notice) = match self.apply_add_env(&proj_path) {
-                                        Ok(Some((added, updated))) => {
-                                            (format!(" (.env: +{added}, ~{updated})"), Notice::Info)
+                                    let mut cap_notes = Vec::new();
+                                    let mut notice = Notice::Info;
+                                    for (label, res) in [
+                                        (".env", self.apply_add_env(&proj_path)),
+                                        ("skills", self.apply_add_skills(&proj_path)),
+                                        ("tools", self.apply_add_tools(&proj_path)),
+                                    ] {
+                                        match res {
+                                            Ok(Some((added, updated))) => {
+                                                cap_notes
+                                                    .push(format!("{label}: +{added}, ~{updated}"));
+                                            }
+                                            Ok(None) => {}
+                                            Err(e) => {
+                                                cap_notes.push(e);
+                                                notice = Notice::Warn;
+                                            }
                                         }
-                                        Ok(None) => (String::new(), Notice::Info),
-                                        Err(e) => (format!(" ({e})"), Notice::Warn),
+                                    }
+                                    let cap_note = if cap_notes.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" ({})", cap_notes.join("; "))
                                     };
                                     self.add_env.clear();
+                                    self.add_skills.clear();
+                                    self.add_tools.clear();
                                     self.message = (
-                                        format!("Registered {name} ({kind_label}){env_note}"),
+                                        format!("Registered {name} ({kind_label}){cap_note}"),
                                         notice,
                                     );
                                 }
@@ -527,19 +564,20 @@ impl App {
     }
 
     pub(super) fn key_manager(&mut self, k: KeyEvent, rows: u16, cols: u16) {
+        const MGMT_LAST: usize = 3;
         if let Some(m) = self.mgmt_sel {
             match k.code {
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
-                    self.mgmt_sel = (m == 0).then_some(1);
+                    self.mgmt_sel = (m < MGMT_LAST).then_some(m + 1);
                     if self.mgmt_sel.is_none() && self.order.is_empty() {
                         self.mgmt_sel = Some(0);
                     }
                     self.selected = 0;
                 }
                 KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('p') => {
-                    self.mgmt_sel = (m == 1).then_some(0);
+                    self.mgmt_sel = m.checked_sub(1);
                     if self.mgmt_sel.is_none() && self.order.is_empty() {
-                        self.mgmt_sel = Some(1);
+                        self.mgmt_sel = Some(MGMT_LAST);
                     }
                     self.selected = self.order.len().saturating_sub(1);
                 }
@@ -587,7 +625,7 @@ impl App {
                 if self.selected > 0 && !self.order.is_empty() {
                     self.selected -= 1;
                 } else {
-                    self.mgmt_sel = Some(1);
+                    self.mgmt_sel = Some(MGMT_LAST);
                 }
             }
             KeyCode::Tab if !self.order.is_empty() => self.jump_attention(),
@@ -619,14 +657,9 @@ impl App {
             KeyCode::Char('g') if !self.order.is_empty() => self.open_git_view(),
             KeyCode::Char('w') => self.open_quick_reply(),
             KeyCode::Char('M') => self.open_procs(),
-            KeyCode::Char('E') => {
-                let target = self
-                    .order
-                    .get(self.selected)
-                    .copied()
-                    .map_or(EnvTarget::VaultOnly, EnvTarget::Project);
-                self.open_env_modal(target);
-            }
+            KeyCode::Char('E') => self.open_env_modal(self.selected_vault_target()),
+            KeyCode::Char('K') => self.open_skill_modal(self.selected_vault_target()),
+            KeyCode::Char('T') => self.open_tool_modal(self.selected_vault_target()),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f' | 'F') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_search();
@@ -765,16 +798,20 @@ fn next_add_field(cur: usize, kind: Kind, forward: bool) -> usize {
             (1, true) => 2,
             (2, true) => 3,
             (3, true) => 5,
-            (5, true) => 0,
+            (5, true) => 6,
+            (6, true) => 7,
+            (7, true) => 0,
+            (7, false) => 6,
+            (6, false) => 5,
             (5, false) => 3,
             (3, false) => 2,
             (2, false) => 1,
             (1, false) => 0,
-            _ => 5,
+            _ => 7,
         }
     } else if forward {
-        (cur + 1) % 6
+        (cur + 1) % 8
     } else {
-        (cur + 5) % 6
+        (cur + 7) % 8
     }
 }
