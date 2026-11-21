@@ -54,23 +54,24 @@ pub fn update_check_enabled() -> bool {
 /// which cannot read zip files, so go through System32 explicitly.
 /// Resolved with `GetSystemDirectoryW`, not the `SystemRoot` variable, so
 /// a hostile parent environment cannot redirect tool lookups at squad.
+#[cfg(windows)]
 pub fn system_tool(name: &str) -> PathBuf {
-    if !cfg!(windows) {
-        return PathBuf::from(name);
-    }
-    let dir: PathBuf = {
-        use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-        let mut buf = [0u16; 261];
-        // SAFETY: the buffer holds `buf.len()` wide chars; the API writes
-        // at most that many including the NUL terminator.
-        let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) };
-        if len == 0 || (len as usize) >= buf.len() {
-            PathBuf::from(r"C:\Windows\System32")
-        } else {
-            String::from_utf16_lossy(&buf[..len as usize]).into()
-        }
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut buf = [0u16; 261];
+    // SAFETY: the buffer holds `buf.len()` wide chars; the API writes
+    // at most that many including the NUL terminator.
+    let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) };
+    let dir: PathBuf = if len == 0 || (len as usize) >= buf.len() {
+        PathBuf::from(r"C:\Windows\System32")
+    } else {
+        String::from_utf16_lossy(&buf[..len as usize]).into()
     };
     dir.join(name)
+}
+/// Elsewhere the tool is found on `PATH`.
+#[cfg(not(windows))]
+pub fn system_tool(name: &str) -> PathBuf {
+    PathBuf::from(name)
 }
 /// A child process with no console window and no stdin.
 pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
