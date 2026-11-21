@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.19 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.33 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.32
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.33
 ```
 
 To install elsewhere:
@@ -161,7 +161,7 @@ case-insensitively by `remove` and `start`.
 | `F`, `Ctrl+F` | Search the selected session's scrollback and live screen (`↑`/`↓` or `F3`/`Shift+F3` steps matches, `Enter` keeps highlights, `Esc` clears) |
 | `G` | Search every session's scrollback at once (`↑`/`↓` picks a session, `Enter` jumps to it with the same query loaded, `Esc` closes) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
-| `E` | Shared Env Vault: register reusable environment variables (`env.toml`) and toggle-apply/remove them on the selected project's `.env` (`Space` toggles, `a` adds, `e` edits, `d` deletes, `v` reveals, `Enter` syncs) |
+| `E` | Shared Env Vault: register reusable environment variables (`env.toml`) and toggle-apply/remove them on the selected project's `.env` (`Space` toggles, `a` adds, `e` edits, `d` deletes, `v` reveals, `Enter` syncs). Values are stored in plain text (`env.toml`, mode `0600` on macOS; on Windows it relies on your profile folder's permissions), and a project's `.env` is added to `.git/info/exclude` so it stays out of commits |
 | `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex` |
 | `T` | Shared Tools Vault: register reusable MCP servers (`mcp`) and CLI tools (`cli`) (`tools.toml`); syncs MCP servers to `.mcp.json` (`claude`/`muse`), `.agents/mcp_config.json` (`agy`), and `.codex/config.toml` (`codex`), and CLI tools to `.squad/TOOLS.md` |
 | `R` | Shared References Vault: register GitHub links & descriptions (`references.toml`) and append/remove a managed `<!-- agentsquad:references:start/end -->` block inside `CLAUDE.md` / `AGENTS.md` (+ `GEMINI.md` if present) without disturbing existing content |

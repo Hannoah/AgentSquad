@@ -361,3 +361,30 @@ fn history_filter_matches_entry_names_case_insensitively() {
     assert_eq!(filter_sitrep_names(&items, "ADD-auth"), vec![1]);
     assert!(filter_sitrep_names(&items, "zzz").is_empty());
 }
+
+#[test]
+fn exclude_reaches_the_shared_exclude_file_from_a_worktree() {
+    use crate::ledger;
+    let base = scratch_dir("exclude-worktree");
+    let (main, wt) = (base.join("main"), base.join("wt"));
+    fs::create_dir_all(&main).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&main, &["init", "-q"]);
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "x"]);
+    git(&main, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+    assert!(wt.join(".git").is_file(), "a worktree's .git is a file");
+
+    ledger::exclude_entry_from_git(&wt, ".env").unwrap();
+    fs::write(wt.join(".env"), "K=v\n").unwrap();
+    assert!(ledger::git(&wt, &["check-ignore", "-q", ".env"]).is_some());
+    let _ = fs::remove_dir_all(&base);
+}

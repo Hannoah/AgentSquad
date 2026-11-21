@@ -136,7 +136,7 @@ pub fn load_last_project() -> Option<String> {
 /// Best effort: forgetting the selection is not worth an error.
 pub fn save_last_project(name: &str) {
     if let Ok(p) = last_project_path() {
-        let _ = fs::write(p, name);
+        let _ = atomic_write_bytes(&p, name.as_bytes(), false);
     }
 }
 /// Row to select at startup: an explicit `squad start` target wins, then

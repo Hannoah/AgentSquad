@@ -142,14 +142,23 @@ pub(crate) fn exclude_from_git(project: &Path) -> std::io::Result<()> {
 
 /// `exclude_from_git` for any one pattern (`.squad/`, `.env`). A pattern
 /// already listed, with or without its trailing slash, is not added twice.
+/// In a worktree or submodule (`.git` is a file) git itself says where the
+/// shared exclude file lives.
 pub(crate) fn exclude_entry_from_git(project: &Path, entry: &str) -> std::io::Result<()> {
-    let git = project.join(".git");
-    if !git.is_dir() {
+    let dot_git = project.join(".git");
+    let file = if dot_git.is_dir() {
+        dot_git.join("info").join("exclude")
+    } else if dot_git.is_file() {
+        let Some(path) = git(project, &["rev-parse", "--git-path", "info/exclude"]) else {
+            return Ok(());
+        };
+        project.join(path.trim()) // an absolute answer replaces `project`
+    } else {
         return Ok(());
+    };
+    if let Some(info) = file.parent() {
+        fs::create_dir_all(info)?;
     }
-    let info = git.join("info");
-    fs::create_dir_all(&info)?;
-    let file = info.join("exclude");
     let mut text = fs::read_to_string(&file).unwrap_or_default();
     let bare = entry.trim_end_matches('/');
     if text.lines().any(|l| l.trim().trim_end_matches('/') == bare) {

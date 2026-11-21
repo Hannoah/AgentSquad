@@ -108,7 +108,7 @@ try {
 
   if (Test-Path $readmePath) {
     $readme = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom)
-    $readmeNew = [regex]::Replace($readme, '-Version v\d+\.\d+\.\d+', "-Version $tag")
+    $readmeNew = [regex]::Replace($readme, '(-Version |SQUAD_VERSION=)v\d+\.\d+\.\d+', "`${1}$tag")
     if ($readmeNew -ne $readme) {
       [System.IO.File]::WriteAllText($readmePath, $readmeNew, $utf8NoBom)
     }

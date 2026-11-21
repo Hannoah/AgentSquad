@@ -510,10 +510,9 @@ pub fn remove_skills(dir: &Path, names: &[String]) -> Result<usize> {
     }
     let mut removed = 0usize;
     for raw in names {
-        let name = raw.trim().to_ascii_lowercase();
-        if name.is_empty() {
-            continue;
-        }
+        // Validated like every other entry point: `.` or `..` would otherwise
+        // wipe the whole skills folder (or its parent) via remove_dir_all.
+        let name = validate_skill_name(raw).map_err(anyhow::Error::msg)?;
         let mut any = false;
         for root in SKILL_ROOTS {
             let target = dir.join(root).join(&name);

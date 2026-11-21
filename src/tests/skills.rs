@@ -148,3 +148,15 @@ fn classify_source_or_body_distinguishes_paths_from_inline() {
     assert_eq!(body, "Run unit tests before finishing.");
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn remove_skills_rejects_names_that_escape_the_skill_folder() {
+    let proj = scratch_dir("skills-unapply-escape");
+    let local = proj.join(".claude/skills/local-only");
+    fs::create_dir_all(&local).unwrap();
+    for bad in [".", "..", "../x", "a/b"] {
+        assert!(remove_skills(&proj, &[bad.to_string()]).is_err(), "{bad}");
+    }
+    assert!(local.is_dir(), "local-only skill must survive");
+    let _ = fs::remove_dir_all(&proj);
+}
