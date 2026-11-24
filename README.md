@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.35 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.36 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.35
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.36
 ```
 
 To install elsewhere:
@@ -162,7 +162,7 @@ case-insensitively by `remove` and `start`.
 | `G` | Search every session's scrollback at once (`↑`/`↓` picks a session, `Enter` jumps to it with the same query loaded, `Esc` closes) |
 | `a` | Add a project without leaving the manager (form checks the path as you type and previews the registered name; the Path field lists matching subfolders to pick with `↑`/`↓` + `Enter`, `Tab` completes) |
 | `E` | Shared Env Vault: register reusable environment variables (`env.toml`) and toggle-apply/remove them on the selected project's `.env` (`Space` toggles, `a` adds, `e` edits, `d` deletes, `v` reveals, `Enter` syncs). Values are stored in plain text (`env.toml`, mode `0600` on macOS; on Windows it relies on your profile folder's permissions), and a project's `.env` is added to `.git/info/exclude` so it stays out of commits |
-| `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex`. A skill folder there that differs from the vault version (hand-edited, or the project's own skill of the same name) is copied to `skill-backups/` next to the config file before a sync replaces or removes it |
+| `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex`. Skills the project already has stay; assigned ones are added next to them. When the project has its own folder under an assigned skill's name (or a hand-edited copy) that differs from the vault version, `Enter` asks before replacing or deleting it (`y` replace, `n` keep yours, `Esc` back); the add/edit form and `squad skills apply` keep such folders and say so (`--force` replaces them) |
 | `T` | Shared Tools Vault: register reusable MCP servers (`mcp`) and CLI tools (`cli`) (`tools.toml`); syncs MCP servers to `.mcp.json` (`claude`/`muse`), `.agents/mcp_config.json` (`agy`), and `.codex/config.toml` (`codex`), and CLI tools to `.squad/TOOLS.md` |
 | `R` | Shared References Vault: register GitHub links & descriptions (`references.toml`) and append/remove a managed `<!-- agentsquad:references:start/end -->` block inside `CLAUDE.md` / `AGENTS.md` (+ `GEMINI.md` if present) without disturbing existing content |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
@@ -239,7 +239,7 @@ squad add [<path>] [--kind agent|service] [--autostart] [--restart-on-crash] [--
                                                                    Register a project (path optional for services)
 squad env <list|set KEY VAL|remove KEY|apply <proj>|unapply <proj> KEY...>
                                                                    Manage shared env vars and project .env
-squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply <proj>|unapply <proj> NAME...>
+squad skills <list|add NAME [--path P|--prompt S] [--desc D]|remove NAME|apply <proj> [NAME...] [--force]|unapply <proj> NAME...>
                                                                    Manage shared skills (.agents/skills + .claude/skills)
 squad tools <list|add NAME [--kind mcp|cli] [--desc D] [--env K=V] -- CMD|remove NAME|apply <proj>|unapply <proj> NAME...>
                                                                    Manage shared MCP & CLI tools across agents

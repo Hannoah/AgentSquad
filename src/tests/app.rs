@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{
-    auto_restart_due, crash_log_needs_rotation, App, GHit, GSearch, AUTO_RESTART_MAX_TRIES,
-    CRASH_LOG_MAX_BYTES,
+    auto_restart_due, crash_log_needs_rotation, App, GHit, GSearch, SkillModal, VaultTarget,
+    AUTO_RESTART_MAX_TRIES, CRASH_LOG_MAX_BYTES,
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, layout::Size};
@@ -1378,6 +1378,88 @@ fn collapsed_hover_tooltip_and_terminal_scrollback_search() {
 }
 
 #[test]
+fn skills_modal_asks_before_replacing_a_projects_own_skill() {
+    let dir = scratch_dir("skills-modal-ask");
+    let proj_a = dir.join("agent-a");
+    let own = proj_a.join(".claude/skills/review");
+    fs::create_dir_all(&own).unwrap();
+    fs::write(own.join("SKILL.md"), "---\nname: review\n---\nMine.\n").unwrap();
+    let cfg = Config {
+        projects: vec![proj("agent-a", proj_a.to_str().unwrap(), &["claude"])],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    app.skills_vault = Default::default();
+    crate::skills::upsert_skill(
+        &mut app.skills_vault,
+        crate::skills::SkillEntry {
+            name: "review".into(),
+            description: "Vault review".into(),
+            source_path: None,
+            instructions: "Vault version.".into(),
+        },
+    )
+    .unwrap();
+    // Built by hand: `open_skill_modal` reloads the vault from a file path
+    // other tests point elsewhere at the same time.
+    let open = |app: &mut App| {
+        let state = crate::skills::read_project_skills(&proj_a, &app.skills_vault);
+        app.skill_modal = Some(SkillModal {
+            target: VaultTarget::Project(0),
+            sel: 0,
+            top: Default::default(),
+            // Opened from the project, its own `review` reads as picked.
+            picked: state.vault_state.keys().cloned().collect(),
+            project_state: state,
+            confirm_delete: None,
+            confirm_overwrite: None,
+            editor: None,
+        });
+    };
+    let mine = || fs::read_to_string(own.join("SKILL.md")).unwrap();
+
+    // Enter asks first; Esc goes back without touching anything.
+    open(&mut app);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    let m = app.skill_modal.as_ref().expect("still open, asking");
+    assert_eq!(m.confirm_overwrite, Some(vec!["review".to_string()]));
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let screen: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("differ from the vault"), "{screen}");
+    app.on_key(key(KeyCode::Esc), 27, 70);
+    assert!(app
+        .skill_modal
+        .as_ref()
+        .unwrap()
+        .confirm_overwrite
+        .is_none());
+    assert!(mine().contains("Mine."));
+
+    // n keeps the project's own skill.
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    app.on_key(key(KeyCode::Char('n')), 27, 70);
+    assert!(app.skill_modal.is_none());
+    assert!(mine().contains("Mine."));
+    assert!(!proj_a.join(".agents/skills/review").exists());
+
+    // y replaces it with the vault version.
+    open(&mut app);
+    app.on_key(key(KeyCode::Enter), 27, 70);
+    app.on_key(key(KeyCode::Char('y')), 27, 70);
+    assert!(app.skill_modal.is_none());
+    assert!(mine().contains("Vault version."));
+    assert!(proj_a.join(".agents/skills/review/SKILL.md").is_file());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     let dir = scratch_dir("skills-modal-e2e");
     let proj_a = dir.join("agent-a");
@@ -1473,7 +1555,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     app.on_key(key(KeyCode::Enter), 27, 70);
     let proj_c = dir.join("agent-c");
     fs::create_dir_all(&proj_c).unwrap();
-    assert_eq!(app.apply_add_skills(&proj_c), Ok(Some((1, 0, None))));
+    assert_eq!(app.apply_add_skills(&proj_c), Ok(Some((1, 0, Vec::new()))));
     assert!(proj_c.join(".agents/skills/code-review/SKILL.md").is_file());
     assert!(proj_c.join(".claude/skills/code-review/SKILL.md").is_file());
 

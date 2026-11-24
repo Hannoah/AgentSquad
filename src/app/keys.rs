@@ -486,10 +486,11 @@ impl App {
                                     let mut cap_notes = Vec::new();
                                     let mut notice = Notice::Info;
                                     let skills_res = self.apply_add_skills(&proj_path);
-                                    let skill_backup = skills_res
+                                    let skills_kept = skills_res
                                         .as_ref()
                                         .ok()
-                                        .and_then(|o| o.as_ref()?.2.clone());
+                                        .and_then(|o| o.as_ref().map(|r| r.2.clone()))
+                                        .unwrap_or_default();
                                     for (label, res) in [
                                         (".env", self.apply_add_env(&proj_path)),
                                         ("skills", skills_res.map(|o| o.map(|(a, u, _)| (a, u)))),
@@ -508,10 +509,11 @@ impl App {
                                             }
                                         }
                                     }
-                                    if let Some(b) = skill_backup {
+                                    if !skills_kept.is_empty() {
+                                        // The folder already had its own skills by these names.
                                         cap_notes.push(format!(
-                                            "differing skills backed up to {}",
-                                            b.display()
+                                            "kept own skills {} (K overwrites after asking)",
+                                            skills_kept.join(", ")
                                         ));
                                         notice = Notice::Warn;
                                     }

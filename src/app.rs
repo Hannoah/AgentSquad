@@ -261,6 +261,9 @@ pub(crate) struct SkillModal {
     pub(crate) picked: BTreeSet<String>,
     pub(crate) project_state: ProjectSkills,
     pub(crate) confirm_delete: Option<String>,
+    /// Skills whose same-named folders in the project differ from the vault
+    /// version: the sync waits for y (overwrite), n (keep them) or Esc.
+    pub(crate) confirm_overwrite: Option<Vec<String>>,
     pub(crate) editor: Option<SkillEditor>,
 }
 
@@ -1294,6 +1297,7 @@ impl App {
             picked,
             project_state,
             confirm_delete: None,
+            confirm_overwrite: None,
             editor,
         });
     }

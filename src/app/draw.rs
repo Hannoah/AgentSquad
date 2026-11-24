@@ -2681,7 +2681,9 @@ impl App {
             ));
             f.render_widget(Paragraph::new(ed_lines), ed_inner);
         }
-        let foot = if let Some(name) = &m.confirm_delete {
+        let foot = if let Some(names) = &m.confirm_overwrite {
+            skill_overwrite_confirm_line(names)
+        } else if let Some(name) = &m.confirm_delete {
             vault_delete_confirm_line("skill", name)
         } else if m.editor.is_some() {
             Line::from(Span::styled(
@@ -3335,6 +3337,26 @@ fn vault_delete_confirm_line(kind: &str, name: &str) -> Line<'static> {
     spans.extend(hint_spans(&[
         ("y / Enter", "deletes"),
         ("n / Esc", "cancels"),
+    ]));
+    Line::from(spans)
+}
+
+/// The skills sync's question: the project's own folders by these names
+/// differ from the vault version, so replacing or deleting them needs a yes.
+fn skill_overwrite_confirm_line(names: &[String]) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!(
+            "{} in this project differ from the vault. Replace?  ",
+            sanitize_chrome_line(&names.join(", "))
+        ),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )];
+    spans.extend(hint_spans(&[
+        ("y / Enter", "replace"),
+        ("n", "keep mine"),
+        ("Esc", "back"),
     ]));
     Line::from(spans)
 }

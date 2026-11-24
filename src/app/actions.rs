@@ -205,12 +205,13 @@ impl App {
             &self.skills_vault,
             &self.add_skills,
             &current_skills,
+            false,
         ) {
-            Ok((0, 0, 0, _)) => String::new(),
-            Ok((added, updated, removed, backup)) => {
+            Ok((0, 0, 0, kept)) if kept.is_empty() => String::new(),
+            Ok((added, updated, removed, kept)) => {
                 format!(
                     "; skills (+{added}, ~{updated}, -{removed}){}",
-                    skill_backup_note(backup.as_deref())
+                    kept_skills_note(&kept)
                 )
             }
             Err(e) => {
@@ -276,16 +277,17 @@ impl App {
             .map_err(|e| format!(".env failed: {e:#}"))
     }
 
-    /// (added, updated, backup folder of differing copies it replaced).
+    /// (added, updated, skills kept because the folder already holds a
+    /// different skill of that name; `K` can overwrite them after asking).
     pub(crate) fn apply_add_skills(
         &self,
         dir: &std::path::Path,
-    ) -> Result<Option<(usize, usize, Option<std::path::PathBuf>)>, String> {
+    ) -> Result<Option<(usize, usize, Vec<String>)>, String> {
         if self.add_skills.is_empty() {
             return Ok(None);
         }
         let names: Vec<String> = self.add_skills.iter().cloned().collect();
-        skills::apply_skill_names(dir, &self.skills_vault, &names)
+        skills::apply_skill_names(dir, &self.skills_vault, &names, false)
             .map(Some)
             .map_err(|e| format!("skills failed: {e:#}"))
     }
@@ -1130,6 +1132,46 @@ impl App {
         }
     }
 
+    /// Sync the skills modal's picks into its project and close it (it stays
+    /// open on failure). `overwrite` also replaces or deletes same-named
+    /// folders that differ from the vault version; without it they are kept.
+    fn sync_skill_modal(&mut self, overwrite: bool) {
+        let Some(modal) = self.skill_modal.as_ref() else {
+            return;
+        };
+        let VaultTarget::Project(pi) = modal.target else {
+            return;
+        };
+        let Some(p) = self.cfg.projects.get(pi) else {
+            self.skill_modal = None;
+            return;
+        };
+        let name = p.name.clone();
+        match skills::sync_project_skills(
+            &p.path,
+            &self.skills_vault,
+            &modal.picked,
+            &modal.project_state,
+            overwrite,
+        ) {
+            Ok((0, 0, 0, kept)) if kept.is_empty() => {}
+            Ok((added, updated, removed, kept)) => {
+                self.message = (
+                    format!(
+                        "Updated {name} skills (+{added} added, {updated} updated, -{removed} removed){}",
+                        kept_skills_note(&kept)
+                    ),
+                    Notice::Info,
+                );
+            }
+            Err(e) => {
+                self.message = (format!("Skills failed: {e:#}"), Notice::Error);
+                return;
+            }
+        }
+        self.skill_modal = None;
+    }
+
     pub(super) fn key_skill_modal(&mut self, k: KeyEvent) {
         let Some(modal) = self.skill_modal.as_mut() else {
             return;
@@ -1154,6 +1196,22 @@ impl App {
                     }
                 }
                 Some(false) => modal.confirm_delete = None,
+                None => {}
+            }
+            return;
+        }
+        if modal.confirm_overwrite.is_some() {
+            match confirm_key(k.code) {
+                Some(true) => {
+                    modal.confirm_overwrite = None;
+                    self.sync_skill_modal(true);
+                }
+                // Esc goes back to the list; n syncs everything else.
+                Some(false) if k.code == KeyCode::Esc => modal.confirm_overwrite = None,
+                Some(false) => {
+                    modal.confirm_overwrite = None;
+                    self.sync_skill_modal(false);
+                }
                 None => {}
             }
             return;
@@ -1326,32 +1384,22 @@ impl App {
                         self.skill_modal = None;
                     }
                     VaultTarget::Project(pi) => {
-                        let current = modal.project_state.clone();
                         let Some(p) = self.cfg.projects.get(pi) else {
                             self.skill_modal = None;
                             return;
                         };
-                        match skills::sync_project_skills(
+                        // A same-named folder that is not the vault version is
+                        // the user's work: replacing or deleting it needs a yes.
+                        let conflicts = skills::sync_conflicts(
                             &p.path,
                             &self.skills_vault,
                             &picked,
-                            &current,
-                        ) {
-                            Ok((0, 0, 0, _)) => self.skill_modal = None,
-                            Ok((added, updated, removed, backup)) => {
-                                self.message = (
-                                    format!(
-                                        "Updated {} skills (+{added} added, {updated} updated, -{removed} removed){}",
-                                        p.name,
-                                        skill_backup_note(backup.as_deref())
-                                    ),
-                                    if backup.is_some() { Notice::Warn } else { Notice::Info },
-                                );
-                                self.skill_modal = None;
-                            }
-                            Err(e) => {
-                                self.message = (format!("Skills failed: {e:#}"), Notice::Error);
-                            }
+                            &modal.project_state,
+                        );
+                        if conflicts.is_empty() {
+                            self.sync_skill_modal(false);
+                        } else {
+                            modal.confirm_overwrite = Some(conflicts);
                         }
                     }
                     VaultTarget::VaultOnly => self.skill_modal = None,
@@ -2209,10 +2257,12 @@ fn toggle_all_picked<'a>(picked: &mut BTreeSet<String>, names: impl Iterator<Ite
     }
 }
 
-/// Status-bar tail naming where differing skill folders were copied before a
-/// sync replaced or removed them; empty when nothing was set aside.
-pub(crate) fn skill_backup_note(backup: Option<&std::path::Path>) -> String {
-    backup.map_or_else(String::new, |b| {
-        format!("; differing skills backed up to {}", b.display())
-    })
+/// Status-bar tail naming the skills a sync left alone because the project
+/// has a different folder under that name; empty when none were.
+pub(crate) fn kept_skills_note(kept: &[String]) -> String {
+    if kept.is_empty() {
+        String::new()
+    } else {
+        format!("; kept own {} (K overwrites after asking)", kept.join(", "))
+    }
 }

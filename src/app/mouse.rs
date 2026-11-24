@@ -263,20 +263,23 @@ impl App {
                 self.dirty = true;
             } else if let Some(m_sk) = self.skill_modal.as_mut() {
                 let list = &self.skills_vault.skills;
-                if !handle_vault_click(
-                    area,
-                    m,
-                    6,
-                    m_sk.target,
-                    m_sk.top.get(),
-                    &mut m_sk.sel,
-                    &mut m_sk.confirm_delete,
-                    &mut m_sk.picked,
-                    &mut m_sk.editor,
-                    list.len(),
-                    |i| list[i].name.clone(),
-                    SkillEditor::blank,
-                ) {
+                // A click while the overwrite question waits only dismisses it.
+                if m_sk.confirm_overwrite.take().is_none()
+                    && !handle_vault_click(
+                        area,
+                        m,
+                        6,
+                        m_sk.target,
+                        m_sk.top.get(),
+                        &mut m_sk.sel,
+                        &mut m_sk.confirm_delete,
+                        &mut m_sk.picked,
+                        &mut m_sk.editor,
+                        list.len(),
+                        |i| list[i].name.clone(),
+                        SkillEditor::blank,
+                    )
+                {
                     self.skill_modal = None;
                 }
                 self.dirty = true;

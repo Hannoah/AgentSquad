@@ -11,7 +11,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// Project-scoped skill directories discovered by agy, codex, muse, and claude.
@@ -428,64 +427,6 @@ pub fn read_project_skills(dir: &Path, vault: &SkillVault) -> ProjectSkills {
     state
 }
 
-/// Where squad copies a skill folder before replacing or deleting it, when
-/// that folder is not exactly what the vault installs (a hand-edited copy,
-/// or the project's own skill under the same name).
-// ponytail: never pruned; skills are small text trees. Prune if the folder grows.
-pub fn backup_base() -> Result<PathBuf> {
-    Ok(config_path()?.with_file_name("skill-backups"))
-}
-
-/// Backups taken during one sync of one project, all in one stamped folder.
-struct Backup<'a> {
-    project: &'a Path,
-    at: Option<PathBuf>,
-}
-impl<'a> Backup<'a> {
-    fn new(project: &'a Path) -> Self {
-        Self { project, at: None }
-    }
-    /// Copy `<project>/<root>/<name>` aside unless it is missing or equals
-    /// `expected` (what the vault would write; None: anything is kept).
-    fn keep(
-        &mut self,
-        root: &str,
-        name: &str,
-        expected: Option<&BTreeMap<PathBuf, Vec<u8>>>,
-    ) -> Result<()> {
-        let src = self.project.join(root).join(name);
-        if !src.exists() {
-            return Ok(());
-        }
-        // Unreadable means it cannot be backed up, so it must not be deleted either.
-        let have = read_dir_tree(&src)
-            .with_context(|| format!("Cannot back up {}; left as is", src.display()))?;
-        if expected == Some(&have) {
-            return Ok(());
-        }
-        if self.at.is_none() {
-            let stamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis());
-            let proj = self
-                .project
-                .file_name()
-                .map_or_else(|| "project".into(), |n| n.to_string_lossy().into_owned());
-            self.at = Some(backup_base()?.join(format!("{stamp}-{proj}")));
-        }
-        let to = self
-            .at
-            .as_ref()
-            .unwrap()
-            .join(root.replace('/', "_"))
-            .join(name);
-        for (rel, bytes) in have {
-            atomic_write_bytes(&to.join(rel), &bytes, false)?;
-        }
-        Ok(())
-    }
-}
-
 fn sync_skill_dir(
     dest: &Path,
     files: &BTreeMap<PathBuf, Vec<u8>>,
@@ -511,15 +452,10 @@ fn sync_skill_dir(
     Ok(())
 }
 
-/// Install or update `entries` into `<dir>/.agents/skills/<name>` and `<dir>/.claude/skills/<name>`.
-/// Returns (added, updated, backup folder if a differing copy was set aside).
-pub fn apply_skills(dir: &Path, entries: &[SkillEntry]) -> Result<(usize, usize, Option<PathBuf>)> {
-    let mut backup = Backup::new(dir);
-    let (added, updated) = apply_into(dir, entries, &mut backup)?;
-    Ok((added, updated, backup.at))
-}
-
-fn apply_into(dir: &Path, entries: &[SkillEntry], backup: &mut Backup) -> Result<(usize, usize)> {
+/// Install or update `entries` into `<dir>/.agents/skills/<name>` and
+/// `<dir>/.claude/skills/<name>`, replacing whatever folder is there. Callers
+/// that did not ask the user go through `conflicts` first.
+fn apply_skills(dir: &Path, entries: &[SkillEntry]) -> Result<(usize, usize)> {
     if entries.is_empty() {
         return Ok((0, 0));
     }
@@ -539,7 +475,6 @@ fn apply_into(dir: &Path, entries: &[SkillEntry], backup: &mut Backup) -> Result
             .iter()
             .any(|r| dir.join(r).join(&entry.name).exists());
         for root in SKILL_ROOTS {
-            backup.keep(root, &entry.name, Some(&files))?;
             let dest = dir.join(root).join(&entry.name);
             sync_skill_dir(&dest, &files, src_dir.as_deref())?;
         }
@@ -550,6 +485,28 @@ fn apply_into(dir: &Path, entries: &[SkillEntry], backup: &mut Backup) -> Result
         }
     }
     Ok((added, updated))
+}
+
+/// Of `names` (vault skill names), those with a folder in `dir` that is not
+/// what the vault installs: a hand edit, or the project's own skill under the
+/// same name. Replacing or deleting those needs the user's yes. An unreadable
+/// folder counts too, since it cannot be compared.
+fn conflicts(dir: &Path, vault: &SkillVault, names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            let expected = vault
+                .skills
+                .iter()
+                .find(|s| s.name == **name)
+                .and_then(|e| expected_skill_tree(e).ok());
+            SKILL_ROOTS.iter().any(|r| {
+                let p = dir.join(r).join(name.as_str());
+                p.exists() && read_dir_tree(&p) != expected
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 fn pick_entries(vault: &SkillVault, names: &[String]) -> Result<Vec<SkillEntry>> {
@@ -566,33 +523,31 @@ fn pick_entries(vault: &SkillVault, names: &[String]) -> Result<Vec<SkillEntry>>
     Ok(selected)
 }
 
+/// Install `names` from the vault. A same-named folder that differs from the
+/// vault version is replaced only with `overwrite`; otherwise it is left as
+/// is and its name returned. Returns (added, updated, skipped).
 pub fn apply_skill_names(
     dir: &Path,
     vault: &SkillVault,
     names: &[String],
-) -> Result<(usize, usize, Option<PathBuf>)> {
-    apply_skills(dir, &pick_entries(vault, names)?)
+    overwrite: bool,
+) -> Result<(usize, usize, Vec<String>)> {
+    let mut entries = pick_entries(vault, names)?;
+    let skipped = if overwrite {
+        Vec::new()
+    } else {
+        let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
+        conflicts(dir, vault, &names)
+    };
+    entries.retain(|e| !skipped.contains(&e.name));
+    let (added, updated) = apply_skills(dir, &entries)?;
+    Ok((added, updated, skipped))
 }
 
 /// Remove `names` from `<dir>/.agents/skills/` and `<dir>/.claude/skills/`.
-/// A folder that is not exactly the `vault` version is backed up first.
-/// Returns (removed, backup folder if one was made).
-pub fn remove_skills(
-    dir: &Path,
-    vault: &SkillVault,
-    names: &[String],
-) -> Result<(usize, Option<PathBuf>)> {
-    let mut backup = Backup::new(dir);
-    let removed = remove_into(dir, vault, names, &mut backup)?;
-    Ok((removed, backup.at))
-}
-
-fn remove_into(
-    dir: &Path,
-    vault: &SkillVault,
-    names: &[String],
-    backup: &mut Backup,
-) -> Result<usize> {
+/// For an explicit request (`squad skills unapply`); a sync goes through
+/// `sync_project_skills`, which asks before deleting a differing folder.
+pub fn remove_skills(dir: &Path, names: &[String]) -> Result<usize> {
     if names.is_empty() || !dir.is_dir() {
         return Ok(0);
     }
@@ -601,16 +556,10 @@ fn remove_into(
         // Validated like every other entry point: `.` or `..` would otherwise
         // wipe the whole skills folder (or its parent) via remove_dir_all.
         let name = validate_skill_name(raw).map_err(anyhow::Error::msg)?;
-        let expected = vault
-            .skills
-            .iter()
-            .find(|s| s.name == name)
-            .and_then(|e| expected_skill_tree(e).ok());
         let mut any = false;
         for root in SKILL_ROOTS {
             let target = dir.join(root).join(&name);
             if target.exists() {
-                backup.keep(root, &name, expected.as_ref())?;
                 fs::remove_dir_all(&target)
                     .with_context(|| format!("Cannot remove {}", target.display()))?;
                 any = true;
@@ -631,30 +580,62 @@ fn remove_into(
     Ok(removed)
 }
 
-/// Sync checked skills into `<dir>` and remove unchecked vault skills, leaving local-only skills untouched.
-/// Returns (added, updated, removed, backup folder if a differing copy was set aside).
-pub fn sync_project_skills(
-    dir: &Path,
+/// What a sync to `picked` does: vault skills to (re)install and ones to remove.
+fn sync_plan(
     vault: &SkillVault,
     picked: &BTreeSet<String>,
     current: &ProjectSkills,
-) -> Result<(usize, usize, usize, Option<PathBuf>)> {
-    let write: Vec<String> = picked
+) -> (Vec<String>, Vec<String>) {
+    let write = picked
         .iter()
         .filter(|name| current.vault_state.get(*name) != Some(&SyncState::Installed))
         .cloned()
         .collect();
-    let remove: Vec<String> = vault
+    let remove = vault
         .skills
         .iter()
         .filter(|s| current.vault_state.contains_key(&s.name) && !picked.contains(&s.name))
         .map(|s| s.name.clone())
         .collect();
-    if write.is_empty() && remove.is_empty() {
-        return Ok((0, 0, 0, None));
-    }
-    let mut backup = Backup::new(dir);
-    let (added, updated) = apply_into(dir, &pick_entries(vault, &write)?, &mut backup)?;
-    let removed = remove_into(dir, vault, &remove, &mut backup)?;
-    Ok((added, updated, removed, backup.at))
+    (write, remove)
+}
+
+/// Skills a sync to `picked` would replace or delete although their folders
+/// differ from the vault version: ask before passing `overwrite`.
+pub fn sync_conflicts(
+    dir: &Path,
+    vault: &SkillVault,
+    picked: &BTreeSet<String>,
+    current: &ProjectSkills,
+) -> Vec<String> {
+    let (write, remove) = sync_plan(vault, picked, current);
+    [
+        conflicts(dir, vault, &write),
+        conflicts(dir, vault, &remove),
+    ]
+    .concat()
+}
+
+/// Sync checked skills into `<dir>` and remove unchecked vault skills, leaving
+/// local-only skills untouched. Without `overwrite`, folders that differ from
+/// the vault version (see `sync_conflicts`) are kept. Returns (added,
+/// updated, removed, kept).
+pub fn sync_project_skills(
+    dir: &Path,
+    vault: &SkillVault,
+    picked: &BTreeSet<String>,
+    current: &ProjectSkills,
+    overwrite: bool,
+) -> Result<(usize, usize, usize, Vec<String>)> {
+    let (mut write, mut remove) = sync_plan(vault, picked, current);
+    let kept = if overwrite {
+        Vec::new()
+    } else {
+        sync_conflicts(dir, vault, picked, current)
+    };
+    write.retain(|n| !kept.contains(n));
+    remove.retain(|n| !kept.contains(n));
+    let (added, updated) = apply_skills(dir, &pick_entries(vault, &write)?)?;
+    let removed = remove_skills(dir, &remove)?;
+    Ok((added, updated, removed, kept))
 }

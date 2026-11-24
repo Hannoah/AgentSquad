@@ -278,13 +278,13 @@ fn main() -> Result<()> {
                 );
             }
             if let Some(v) = s_vault {
-                let (added, updated, backup) =
-                    skills::apply_skill_names(&p.path, &v, &skill_names)?;
+                let (added, updated, kept) =
+                    skills::apply_skill_names(&p.path, &v, &skill_names, false)?;
                 println!(
                     "Updated {} skills (+{added} added, {updated} updated)",
                     p.name
                 );
-                print_skill_backup(backup.as_deref());
+                print_kept_skills(&p.name, &kept);
             }
             if let Some(v) = t_vault {
                 let (added, updated) = tools::apply_tool_names(&p.path, &v, &tool_names)?;
@@ -453,7 +453,7 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
 }
 
 fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
-    const USAGE: &str = "Usage: squad skills <list | add <name> [--path <dir|file> | --prompt <text>] [--desc <text>] | remove <name> | apply <project> [NAME...] | unapply <project> NAME...>";
+    const USAGE: &str = "Usage: squad skills <list | add <name> [--path <dir|file> | --prompt <text>] [--desc <text>] | remove <name> | apply <project> [NAME...] [--force] | unapply <project> NAME...>";
     match args.first().map(String::as_str) {
         Some("list") | None => {
             let vault = skills::load_skills()?;
@@ -547,22 +547,25 @@ fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
             let proj_name = args.get(1).context(USAGE)?;
             let p = find_project(c, proj_name)?;
             let vault = skills::load_skills()?;
-            let names: Vec<String> = if args.len() > 2 {
-                args[2..].to_vec()
-            } else {
+            let tail = args.get(2..).unwrap_or(&[]);
+            let force = tail.iter().any(|a| a == "--force");
+            let named: Vec<String> = tail.iter().filter(|a| *a != "--force").cloned().collect();
+            let names: Vec<String> = if named.is_empty() {
                 vault.skills.iter().map(|s| s.name.clone()).collect()
+            } else {
+                named
             };
             if names.is_empty() {
                 bail!(
                     "No shared skills to apply. Register one with `squad skills add <name> ...`."
                 );
             }
-            let (added, updated, backup) = skills::apply_skill_names(&p.path, &vault, &names)?;
+            let (added, updated, kept) = skills::apply_skill_names(&p.path, &vault, &names, force)?;
             println!(
                 "Updated {} skills (+{added} added, {updated} updated)",
                 p.name
             );
-            print_skill_backup(backup.as_deref());
+            print_kept_skills(&p.name, &kept);
             Ok(())
         }
         Some("unapply") => {
@@ -571,23 +574,21 @@ fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
                 bail!("{USAGE}");
             }
             let p = find_project(c, proj_name)?;
-            let vault = skills::load_skills()?;
-            let (removed, backup) = skills::remove_skills(&p.path, &vault, &args[2..])?;
+            let removed = skills::remove_skills(&p.path, &args[2..])?;
             println!("Updated {} skills (-{removed} removed)", p.name);
-            print_skill_backup(backup.as_deref());
             Ok(())
         }
         Some(_) => bail!("{USAGE}"),
     }
 }
 
-/// Say where skill folders that differed from the vault were copied before
-/// squad replaced or removed them.
-fn print_skill_backup(backup: Option<&std::path::Path>) {
-    if let Some(b) = backup {
+/// Name the skills left alone because the project already has a different
+/// folder under that name, and how to replace them anyway.
+fn print_kept_skills(project: &str, kept: &[String]) {
+    if !kept.is_empty() {
+        let names = kept.join(" ");
         println!(
-            "Skills that differed from the vault were backed up to {}",
-            b.display()
+            "Kept {names}: {project} already has a different skill with that name. Overwrite with: squad skills apply {project} {names} --force"
         );
     }
 }

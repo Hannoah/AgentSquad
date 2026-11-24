@@ -59,9 +59,15 @@ fn skill_vault_roundtrip_and_multi_agent_sync() {
     let loaded = load_skills_from(&vault_path).unwrap();
     assert_eq!(loaded, vault);
 
-    let (added, updated, backup) =
-        apply_skill_names(&proj, &loaded, &["inline-guide".into(), "repo-lint".into()]).unwrap();
-    assert_eq!((added, updated, backup), (2, 0, None));
+    let (added, updated, kept) = apply_skill_names(
+        &proj,
+        &loaded,
+        &["inline-guide".into(), "repo-lint".into()],
+        false,
+    )
+    .unwrap();
+    assert_eq!((added, updated), (2, 0));
+    assert!(kept.is_empty());
 
     // Both universal (.agents/skills for agy/codex/muse/claude) and Claude (.claude/skills) exist.
     for root in SKILL_ROOTS {
@@ -104,9 +110,11 @@ fn skill_vault_roundtrip_and_multi_agent_sync() {
 
     let mut keep = BTreeSet::new();
     keep.insert("repo-lint".to_string());
-    let (a, u, r, backup) = sync_project_skills(&proj, &loaded, &keep, &snap2).unwrap();
-    // Exact vault copies (and a missing one) need no backup.
-    assert_eq!((a, u, r, backup), (0, 1, 1, None));
+    // Exact vault copies (and a missing one) are squad's own: no question asked.
+    assert!(sync_conflicts(&proj, &loaded, &keep, &snap2).is_empty());
+    let (a, u, r, kept) = sync_project_skills(&proj, &loaded, &keep, &snap2, false).unwrap();
+    assert_eq!((a, u, r), (0, 1, 1));
+    assert!(kept.is_empty());
     assert!(proj.join(".claude/skills/repo-lint/SKILL.md").is_file());
     assert!(!proj.join(".agents/skills/inline-guide").exists());
     assert!(!proj.join(".claude/skills/inline-guide").exists());
@@ -128,10 +136,7 @@ fn skill_vault_roundtrip_and_multi_agent_sync() {
         },
     )
     .unwrap();
-    let (_, _, backup) = apply_skill_names(&proj, &self_vault, &["repo-lint".into()]).unwrap();
-    if let Some(b) = backup {
-        let _ = fs::remove_dir_all(b);
-    }
+    apply_skill_names(&proj, &self_vault, &["repo-lint".into()], true).unwrap();
     assert!(proj
         .join(".agents/skills/repo-lint/scripts/check.sh")
         .is_file());
@@ -159,92 +164,71 @@ fn remove_skills_rejects_names_that_escape_the_skill_folder() {
     let local = proj.join(".claude/skills/local-only");
     fs::create_dir_all(&local).unwrap();
     for bad in [".", "..", "../x", "a/b"] {
-        let vault = SkillVault::default();
-        assert!(
-            remove_skills(&proj, &vault, &[bad.to_string()]).is_err(),
-            "{bad}"
-        );
+        assert!(remove_skills(&proj, &[bad.to_string()]).is_err(), "{bad}");
     }
     assert!(local.is_dir(), "local-only skill must survive");
     let _ = fs::remove_dir_all(&proj);
 }
 
 #[test]
-fn differing_skill_folders_are_backed_up_before_replace_or_remove() {
-    let proj = scratch_dir("skills-backup");
+fn same_named_own_skills_are_kept_unless_overwrite_is_given() {
+    let proj = scratch_dir("skills-conflict");
     let mut vault = SkillVault::default();
-    upsert_skill(
-        &mut vault,
-        SkillEntry {
-            name: "lint".into(),
-            description: "Vault lint".into(),
-            source_path: None,
-            instructions: "Vault version.".into(),
-        },
-    )
-    .unwrap();
-    // The project already has its own skill under the vault's name.
+    for name in ["lint", "fmt"] {
+        upsert_skill(
+            &mut vault,
+            SkillEntry {
+                name: name.into(),
+                description: format!("Vault {name}"),
+                source_path: None,
+                instructions: "Vault version.".into(),
+            },
+        )
+        .unwrap();
+    }
+    // The project already has its own `lint`, and an unrelated skill.
     let own = proj.join(".claude/skills/lint");
-    fs::create_dir_all(own.join("scripts")).unwrap();
-    fs::write(
-        own.join("SKILL.md"),
-        "---
-name: lint
----
-My own lint.
-",
-    )
-    .unwrap();
-    fs::write(
-        own.join("scripts/run.sh"),
-        "echo mine
-",
-    )
-    .unwrap();
+    fs::create_dir_all(&own).unwrap();
+    fs::write(own.join("SKILL.md"), "---\nname: lint\n---\nMy own lint.\n").unwrap();
+    let other = proj.join(".claude/skills/mine");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("SKILL.md"), "---\nname: mine\n---\n").unwrap();
 
-    let (added, updated, backup) = apply_skill_names(&proj, &vault, &["lint".into()]).unwrap();
-    assert_eq!((added, updated), (0, 1));
-    let b = backup.expect("the hand-written skill was backed up");
-    let kept = b.join(".claude_skills/lint");
-    assert_eq!(
-        fs::read_to_string(kept.join("SKILL.md")).unwrap(),
-        "---
-name: lint
----
-My own lint.
-"
+    // Assigning adds `fmt` but keeps the project's own `lint`.
+    let names = ["lint".to_string(), "fmt".to_string()];
+    let (added, updated, kept) = apply_skill_names(&proj, &vault, &names, false).unwrap();
+    assert_eq!((added, updated, kept), (1, 0, vec!["lint".to_string()]));
+    assert!(fs::read_to_string(own.join("SKILL.md"))
+        .unwrap()
+        .contains("My own lint."));
+    assert!(!proj.join(".agents/skills/lint").exists());
+    assert!(proj.join(".claude/skills/fmt/SKILL.md").is_file());
+    assert!(
+        other.join("SKILL.md").is_file(),
+        "unrelated skills are never touched"
     );
+
+    // The modal asks about `lint` only; unchecking it would delete it, so that asks too.
+    let snap = read_project_skills(&proj, &vault);
+    let all: BTreeSet<String> = names.iter().cloned().collect();
     assert_eq!(
-        fs::read_to_string(kept.join("scripts/run.sh")).unwrap(),
-        "echo mine
-"
+        sync_conflicts(&proj, &vault, &all, &snap),
+        vec!["lint".to_string()]
     );
+    let only_fmt: BTreeSet<String> = ["fmt".to_string()].into();
+    assert_eq!(
+        sync_conflicts(&proj, &vault, &only_fmt, &snap),
+        vec!["lint".to_string()]
+    );
+    let (.., removed, kept) = sync_project_skills(&proj, &vault, &only_fmt, &snap, false).unwrap();
+    assert_eq!((removed, kept), (0, vec!["lint".to_string()]));
+    assert!(own.join("SKILL.md").is_file());
+
+    // A yes replaces it with the vault version.
+    let (_, updated, kept) = apply_skill_names(&proj, &vault, &names, true).unwrap();
+    assert_eq!((updated, kept.len()), (2, 0));
     assert!(fs::read_to_string(own.join("SKILL.md"))
         .unwrap()
         .contains("Vault version."));
-    let _ = fs::remove_dir_all(&b);
-
-    // Removing exact vault copies makes no backup ...
-    let (removed, backup) = remove_skills(&proj, &vault, &["lint".into()]).unwrap();
-    assert_eq!((removed, backup), (1, None));
-
-    // ... but a hand edit, or a skill the vault does not know, is kept.
-    apply_skill_names(&proj, &vault, &["lint".into()]).unwrap();
-    fs::write(
-        proj.join(".agents/skills/lint/notes.md"),
-        "edited
-",
-    )
-    .unwrap();
-    let (removed, backup) = remove_skills(&proj, &vault, &["lint".into()]).unwrap();
-    assert_eq!(removed, 1);
-    let b = backup.expect("edited copy backed up");
-    assert!(b.join(".agents_skills/lint/notes.md").is_file());
-    assert!(
-        !b.join(".claude_skills/lint").exists(),
-        "unchanged copy not backed up"
-    );
-    assert!(!proj.join(".agents/skills/lint").exists());
-    let _ = fs::remove_dir_all(&b);
     let _ = fs::remove_dir_all(&proj);
 }
