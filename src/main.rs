@@ -278,11 +278,13 @@ fn main() -> Result<()> {
                 );
             }
             if let Some(v) = s_vault {
-                let (added, updated) = skills::apply_skill_names(&p.path, &v, &skill_names)?;
+                let (added, updated, backup) =
+                    skills::apply_skill_names(&p.path, &v, &skill_names)?;
                 println!(
                     "Updated {} skills (+{added} added, {updated} updated)",
                     p.name
                 );
+                print_skill_backup(backup.as_deref());
             }
             if let Some(v) = t_vault {
                 let (added, updated) = tools::apply_tool_names(&p.path, &v, &tool_names)?;
@@ -555,11 +557,12 @@ fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
                     "No shared skills to apply. Register one with `squad skills add <name> ...`."
                 );
             }
-            let (added, updated) = skills::apply_skill_names(&p.path, &vault, &names)?;
+            let (added, updated, backup) = skills::apply_skill_names(&p.path, &vault, &names)?;
             println!(
                 "Updated {} skills (+{added} added, {updated} updated)",
                 p.name
             );
+            print_skill_backup(backup.as_deref());
             Ok(())
         }
         Some("unapply") => {
@@ -568,11 +571,24 @@ fn run_skills_cli(c: &config::Config, args: &[String]) -> Result<()> {
                 bail!("{USAGE}");
             }
             let p = find_project(c, proj_name)?;
-            let removed = skills::remove_skills(&p.path, &args[2..])?;
+            let vault = skills::load_skills()?;
+            let (removed, backup) = skills::remove_skills(&p.path, &vault, &args[2..])?;
             println!("Updated {} skills (-{removed} removed)", p.name);
+            print_skill_backup(backup.as_deref());
             Ok(())
         }
         Some(_) => bail!("{USAGE}"),
+    }
+}
+
+/// Say where skill folders that differed from the vault were copied before
+/// squad replaced or removed them.
+fn print_skill_backup(backup: Option<&std::path::Path>) {
+    if let Some(b) = backup {
+        println!(
+            "Skills that differed from the vault were backed up to {}",
+            b.display()
+        );
     }
 }
 

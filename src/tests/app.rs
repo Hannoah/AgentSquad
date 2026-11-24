@@ -1261,9 +1261,27 @@ fn git_view_lists_changes_and_renders_diff() {
     let mut app = App::new(cfg, None);
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
 
+    // git runs on the viewer's worker: opening returns at once, the list follows.
+    let settle = |app: &mut App| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.git_view.as_ref().is_some_and(|g| g.busy()) && std::time::Instant::now() < end {
+            app.pump();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
     app.on_key(key(KeyCode::Char('g')), 27, 75);
-    let gv = app.git_view.as_ref().expect("git view opens");
+    assert!(app.git_view.as_ref().expect("git view opens").busy());
+    settle(&mut app);
+    let gv = app.git_view.as_ref().unwrap();
     assert_eq!(gv.files.len(), 2);
+    let tracked_at = gv
+        .files
+        .iter()
+        .position(|(_, f)| f.ends_with("tracked.txt") && !f.ends_with("untracked.txt"))
+        .unwrap();
+    app.git_view.as_mut().unwrap().select(tracked_at);
+    settle(&mut app);
+    assert!(app.git_view.as_ref().unwrap().diff.contains("+two"));
     term.draw(|f| app.draw(f)).unwrap();
     let screen: String = term
         .backend()
@@ -1276,6 +1294,7 @@ fn git_view_lists_changes_and_renders_diff() {
     assert!(screen.contains("tracked.txt"));
     assert!(screen.contains("untracked.txt"));
 
+    app.on_key(key(KeyCode::Home), 27, 75);
     app.on_key(key(KeyCode::Down), 27, 75);
     assert_eq!(app.git_view.as_ref().unwrap().sel, 1);
     app.on_key(key(KeyCode::Esc), 27, 75);
@@ -1454,7 +1473,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     app.on_key(key(KeyCode::Enter), 27, 70);
     let proj_c = dir.join("agent-c");
     fs::create_dir_all(&proj_c).unwrap();
-    assert_eq!(app.apply_add_skills(&proj_c), Ok(Some((1, 0))));
+    assert_eq!(app.apply_add_skills(&proj_c), Ok(Some((1, 0, None))));
     assert!(proj_c.join(".agents/skills/code-review/SKILL.md").is_file());
     assert!(proj_c.join(".claude/skills/code-review/SKILL.md").is_file());
 

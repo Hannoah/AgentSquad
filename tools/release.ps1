@@ -5,7 +5,7 @@
 .DESCRIPTION
   Automates the full release pipeline for AgentSquad:
     1. Bumps version in Cargo.toml, Cargo.lock, README.md, and wiki/releases.md
-    2. Runs cargo fmt, cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test --locked, and cargo build --release --locked
+    2. Runs cargo fmt, cargo fmt --check, cargo clippy --all-targets -- -D warnings (also for aarch64-apple-darwin), cargo test --locked, and cargo build --release --locked
     3. Deploys target\release\squad.exe to %LOCALAPPDATA%\AgentSquad\bin\squad.exe (moving aside a live binary if running)
     4. Commits all changes as "Release vX.Y.Z: <Summary>", creates tag vX.Y.Z, and pushes main + tag to origin
 
@@ -142,6 +142,11 @@ try {
   Invoke-Checked "cargo fmt" { cargo fmt }
   Invoke-Checked "cargo fmt --check" { cargo fmt --check }
   Invoke-Checked "cargo clippy --all-targets -- -D warnings" { cargo clippy --all-targets -- -D warnings }
+  # The tag goes out with main, so a macOS-only break would surface only in the
+  # release workflow, which then publishes nothing (v0.15.30-v0.15.33 shipped no
+  # assets). Clippy needs no linker, so it checks the macOS cfg paths from here.
+  Invoke-Checked "rustup target add aarch64-apple-darwin" { rustup target add aarch64-apple-darwin }
+  Invoke-Checked "cargo clippy --target aarch64-apple-darwin" { cargo clippy --target aarch64-apple-darwin --all-targets -- -D warnings }
   Invoke-Checked "cargo test --locked" { cargo test --locked }
   Invoke-Checked "cargo build --release --locked" { cargo build --release --locked }
 

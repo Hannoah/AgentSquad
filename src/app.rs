@@ -359,7 +359,6 @@ pub(crate) struct QuickReply {
 pub(crate) struct GitView {
     pub(crate) pi: usize,
     pub(crate) project: String,
-    pub(crate) path: std::path::PathBuf,
     pub(crate) branch: String,
     pub(crate) files: Vec<(String, std::path::PathBuf)>,
     pub(crate) sel: usize,
@@ -367,14 +366,101 @@ pub(crate) struct GitView {
     pub(crate) scroll: u16,
     pub(crate) diff: String,
     pub(crate) wrap_w: std::cell::Cell<u16>,
+    /// The file list is being read; `branch`/`files` are the previous ones.
+    pub(crate) refreshing: bool,
+    /// The picked file's diff is being read; `diff` is the previous one.
+    pub(crate) loading_diff: bool,
+    status_req: u64,
+    diff_req: u64,
+    tx: mpsc::Sender<GitReq>,
+    rx: mpsc::Receiver<GitReply>,
+}
+
+type GitFiles = Vec<(String, std::path::PathBuf)>;
+/// A diff and the changed file it shows (None: the tree is clean).
+type GitDiff = (Option<std::path::PathBuf>, String);
+
+/// Work for a git viewer's worker. Each carries its request number, so a
+/// reply that a newer request overtook is dropped.
+enum GitReq {
+    /// Branch and changed files; `want` (else row `sel`) is diffed too.
+    Status {
+        req: u64,
+        want: Option<std::path::PathBuf>,
+        sel: usize,
+    },
+    Diff {
+        req: u64,
+        entry: Option<(String, std::path::PathBuf)>,
+    },
+}
+enum GitReply {
+    Status {
+        req: u64,
+        branch: String,
+        files: GitFiles,
+        diff: GitDiff,
+    },
+    Diff {
+        req: u64,
+        diff: GitDiff,
+    },
+}
+
+/// Runs git for one viewer, off the UI thread: `git status -uall` and
+/// `git diff` take seconds in a big repository. Ends when the viewer closes.
+fn git_worker(path: std::path::PathBuf, rx: mpsc::Receiver<GitReq>, tx: mpsc::Sender<GitReply>) {
+    let diff_of = |entry: Option<&(String, std::path::PathBuf)>| -> GitDiff {
+        entry.map_or(
+            (None, "Working tree clean.".to_string()),
+            |(status, rel)| (Some(rel.clone()), ledger::file_diff(&path, status, rel)),
+        )
+    };
+    while let Ok(first) = rx.recv() {
+        // Holding j/k queues a request per row: only the newest of each kind matters.
+        let (mut status, mut diff) = (None, None);
+        for r in std::iter::once(first).chain(rx.try_iter()) {
+            if matches!(r, GitReq::Status { .. }) {
+                status = Some(r);
+            } else {
+                diff = Some(r);
+            }
+        }
+        if let Some(GitReq::Status { req, want, sel }) = status {
+            let branch = ledger::repo_branch(&path).unwrap_or_else(|| "HEAD".to_string());
+            let files = ledger::status_entries(&path).unwrap_or_default();
+            let at = want
+                .and_then(|w| files.iter().position(|(_, f)| *f == w))
+                .unwrap_or_else(|| sel.min(files.len().saturating_sub(1)));
+            let diff = diff_of(files.get(at));
+            let reply = GitReply::Status {
+                req,
+                branch,
+                files,
+                diff,
+            };
+            if tx.send(reply).is_err() {
+                return;
+            }
+        }
+        if let Some(GitReq::Diff { req, entry }) = diff {
+            let diff = diff_of(entry.as_ref());
+            if tx.send(GitReply::Diff { req, diff }).is_err() {
+                return;
+            }
+        }
+    }
 }
 
 impl GitView {
     pub(crate) fn open(pi: usize, project: &str, path: &std::path::Path, branch: String) -> Self {
+        let (tx, worker_rx) = mpsc::channel();
+        let (worker_tx, rx) = mpsc::channel();
+        let path = path.to_path_buf();
+        thread::spawn(move || git_worker(path, worker_rx, worker_tx));
         let mut g = Self {
             pi,
             project: project.to_string(),
-            path: path.to_path_buf(),
             branch,
             files: Vec::new(),
             sel: 0,
@@ -382,27 +468,88 @@ impl GitView {
             scroll: 0,
             diff: String::new(),
             wrap_w: std::cell::Cell::new(u16::MAX),
+            refreshing: false,
+            loading_diff: false,
+            status_req: 0,
+            diff_req: 0,
+            tx,
+            rx,
         };
         g.refresh();
         g
     }
 
-    pub(crate) fn refresh(&mut self) {
-        let prev = self.files.get(self.sel).map(|(_, p)| p.clone());
-        self.branch = ledger::repo_branch(&self.path).unwrap_or_else(|| "HEAD".to_string());
-        self.files = ledger::status_entries(&self.path).unwrap_or_default();
-        self.sel = prev
-            .and_then(|p| self.files.iter().position(|(_, f)| *f == p))
-            .unwrap_or_else(|| self.sel.min(self.files.len().saturating_sub(1)));
-        self.load();
+    fn current_path(&self) -> Option<std::path::PathBuf> {
+        self.files.get(self.sel).map(|(_, p)| p.clone())
     }
 
+    /// Re-read the branch and changed files (and the picked file's diff).
+    pub(crate) fn refresh(&mut self) {
+        self.status_req += 1;
+        self.refreshing = true;
+        let _ = self.tx.send(GitReq::Status {
+            req: self.status_req,
+            want: self.current_path(),
+            sel: self.sel,
+        });
+    }
+
+    /// Ask for the picked file's diff; the old text stays until it arrives,
+    /// so stepping through files does not flash.
     pub(crate) fn load(&mut self) {
         self.scroll = 0;
-        self.diff = self.files.get(self.sel).map_or_else(
-            || "Working tree clean.".to_string(),
-            |(status, rel)| ledger::file_diff(&self.path, status, rel),
-        );
+        self.diff_req += 1;
+        self.loading_diff = true;
+        let _ = self.tx.send(GitReq::Diff {
+            req: self.diff_req,
+            entry: self.files.get(self.sel).cloned(),
+        });
+    }
+
+    /// A reply is still on its way.
+    pub(crate) fn busy(&self) -> bool {
+        self.refreshing || self.loading_diff
+    }
+
+    /// Take the worker's replies. True when something on screen changed.
+    pub(crate) fn poll(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(reply) = self.rx.try_recv() {
+            match reply {
+                GitReply::Status {
+                    req,
+                    branch,
+                    files,
+                    diff,
+                } if req == self.status_req => {
+                    let keep = self.current_path();
+                    self.branch = branch;
+                    self.files = files;
+                    self.sel = keep
+                        .and_then(|p| self.files.iter().position(|(_, f)| *f == p))
+                        .unwrap_or_else(|| self.sel.min(self.files.len().saturating_sub(1)));
+                    self.refreshing = false;
+                    if diff.0 == self.current_path() {
+                        // Newer than any diff still in flight for an older pick.
+                        self.diff_req += 1;
+                        self.loading_diff = false;
+                        self.diff = diff.1;
+                        self.scroll = 0;
+                    } else {
+                        self.load();
+                    }
+                    changed = true;
+                }
+                GitReply::Diff { req, diff } if req == self.diff_req => {
+                    self.loading_diff = false;
+                    self.diff = diff.1;
+                    self.scroll = 0;
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        changed
     }
 
     pub(crate) fn select(&mut self, i: usize) {
@@ -1278,6 +1425,9 @@ impl App {
         while let Ok(started) = self.start_rx.try_recv() {
             self.finish_start(started);
         }
+        if self.git_view.as_mut().is_some_and(GitView::poll) {
+            self.dirty = true;
+        }
         while let Ok(m) = self.res_rx.try_recv() {
             self.sampling = false;
             if let Some(snap) = m.sys {
@@ -1574,6 +1724,7 @@ impl App {
             || self.updating
             || self.dirty
             || !self.starting.is_empty()
+            || self.git_view.as_ref().is_some_and(GitView::busy)
         {
             Duration::from_millis(10)
         } else if self.has_active_spinner() {

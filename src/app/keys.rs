@@ -485,9 +485,14 @@ impl App {
                                     ledger::write_rosters(&self.cfg.projects);
                                     let mut cap_notes = Vec::new();
                                     let mut notice = Notice::Info;
+                                    let skills_res = self.apply_add_skills(&proj_path);
+                                    let skill_backup = skills_res
+                                        .as_ref()
+                                        .ok()
+                                        .and_then(|o| o.as_ref()?.2.clone());
                                     for (label, res) in [
                                         (".env", self.apply_add_env(&proj_path)),
-                                        ("skills", self.apply_add_skills(&proj_path)),
+                                        ("skills", skills_res.map(|o| o.map(|(a, u, _)| (a, u)))),
                                         ("tools", self.apply_add_tools(&proj_path)),
                                         ("refs", self.apply_add_refs(&proj_path)),
                                     ] {
@@ -502,6 +507,13 @@ impl App {
                                                 notice = Notice::Warn;
                                             }
                                         }
+                                    }
+                                    if let Some(b) = skill_backup {
+                                        cap_notes.push(format!(
+                                            "differing skills backed up to {}",
+                                            b.display()
+                                        ));
+                                        notice = Notice::Warn;
                                     }
                                     let cap_note = if cap_notes.is_empty() {
                                         String::new()

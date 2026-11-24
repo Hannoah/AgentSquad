@@ -206,9 +206,12 @@ impl App {
             &self.add_skills,
             &current_skills,
         ) {
-            Ok((0, 0, 0)) => String::new(),
-            Ok((added, updated, removed)) => {
-                format!("; skills (+{added}, ~{updated}, -{removed})")
+            Ok((0, 0, 0, _)) => String::new(),
+            Ok((added, updated, removed, backup)) => {
+                format!(
+                    "; skills (+{added}, ~{updated}, -{removed}){}",
+                    skill_backup_note(backup.as_deref())
+                )
             }
             Err(e) => {
                 self.add_err = format!("skills failed: {e:#}");
@@ -273,10 +276,11 @@ impl App {
             .map_err(|e| format!(".env failed: {e:#}"))
     }
 
+    /// (added, updated, backup folder of differing copies it replaced).
     pub(crate) fn apply_add_skills(
         &self,
         dir: &std::path::Path,
-    ) -> Result<Option<(usize, usize)>, String> {
+    ) -> Result<Option<(usize, usize, Option<std::path::PathBuf>)>, String> {
         if self.add_skills.is_empty() {
             return Ok(None);
         }
@@ -1333,14 +1337,15 @@ impl App {
                             &picked,
                             &current,
                         ) {
-                            Ok((0, 0, 0)) => self.skill_modal = None,
-                            Ok((added, updated, removed)) => {
+                            Ok((0, 0, 0, _)) => self.skill_modal = None,
+                            Ok((added, updated, removed, backup)) => {
                                 self.message = (
                                     format!(
-                                        "Updated {} skills (+{added} added, {updated} updated, -{removed} removed)",
-                                        p.name
+                                        "Updated {} skills (+{added} added, {updated} updated, -{removed} removed){}",
+                                        p.name,
+                                        skill_backup_note(backup.as_deref())
                                     ),
-                                    Notice::Info,
+                                    if backup.is_some() { Notice::Warn } else { Notice::Info },
                                 );
                                 self.skill_modal = None;
                             }
@@ -2099,7 +2104,7 @@ impl App {
             KeyCode::End => g.select(usize::MAX),
             KeyCode::Char('r') => {
                 g.refresh();
-                self.message = ("Git status refreshed.".to_string(), Notice::Info);
+                self.message = ("Refreshing git status…".to_string(), Notice::Info);
             }
             _ => {}
         }
@@ -2202,4 +2207,12 @@ fn toggle_all_picked<'a>(picked: &mut BTreeSet<String>, names: impl Iterator<Ite
     } else {
         picked.extend(all);
     }
+}
+
+/// Status-bar tail naming where differing skill folders were copied before a
+/// sync replaced or removed them; empty when nothing was set aside.
+pub(crate) fn skill_backup_note(backup: Option<&std::path::Path>) -> String {
+    backup.map_or_else(String::new, |b| {
+        format!("; differing skills backed up to {}", b.display())
+    })
 }

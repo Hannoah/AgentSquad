@@ -188,7 +188,9 @@ impl App {
         };
         let popup = history_popup(f.area());
         f.render_widget(ratatui::widgets::Clear, popup);
-        let status_note = if g.files.is_empty() {
+        let status_note = if g.busy() {
+            "loading…".to_string()
+        } else if g.files.is_empty() {
             "clean".to_string()
         } else {
             format!("{} changed", g.files.len())
@@ -209,7 +211,9 @@ impl App {
                 ),
                 Span::styled(
                     format!("({status_note}) "),
-                    Style::default().fg(if g.files.is_empty() {
+                    Style::default().fg(if g.busy() {
+                        Color::DarkGray
+                    } else if g.files.is_empty() {
                         Color::Green
                     } else {
                         Color::Yellow
@@ -228,7 +232,12 @@ impl App {
         let rows = usize::from(left_col.height).max(1);
         let start = keep_visible(g.top.get(), g.sel, rows);
         g.top.set(start);
-        let list: Vec<Line> = if g.files.is_empty() {
+        let list: Vec<Line> = if g.files.is_empty() && g.refreshing {
+            vec![Line::from(Span::styled(
+                "  reading git status…",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        } else if g.files.is_empty() {
             vec![Line::from(Span::styled(
                 "  (clean)",
                 Style::default().fg(Color::Green),
