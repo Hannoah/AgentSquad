@@ -74,18 +74,27 @@ fn main() -> Result<()> {
         println!("Updated to {tag}. Restart squad to use it.");
         return Ok(());
     }
-    // Claude Code's Stop hook (see ledger::stop_hook); needs no config either.
+    // Claude Code's hooks (see ledger::hook_settings); need no config either.
     if args.first().map(String::as_str) == Some("hook") {
-        if args.get(1).map(String::as_str) != Some("stop") {
-            bail!("Usage: squad hook stop (run by Claude Code, not by hand)");
+        let sub = args.get(1).map(String::as_str);
+        if !matches!(sub, Some("stop" | "notify")) {
+            bail!("Usage: squad hook stop|notify (run by Claude Code, not by hand)");
         }
         let mut input = String::new();
         let _ = io::stdin().read_to_string(&mut input);
-        if let Some(out) = env::current_dir()
+        if sub == Some("notify") {
+            if ledger::notification_asks(&input) {
+                ledger::write_state(ledger::STATE_ASKING);
+            }
+            return Ok(());
+        }
+        match env::current_dir()
             .ok()
             .and_then(|d| ledger::stop_hook(&input, &d))
         {
-            println!("{out}");
+            // Sent back to file a SITREP: the turn goes on.
+            Some(out) => println!("{out}"),
+            None => ledger::write_state(ledger::STATE_DONE),
         }
         return Ok(());
     }

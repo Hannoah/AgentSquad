@@ -603,3 +603,42 @@ fn scrollback_search_finds_ascii_and_hangul_matches_and_jumps() {
     assert_eq!(vis.len(), 1);
     assert_eq!((vis[0].2, vis[0].3), (6, 10));
 }
+
+#[test]
+fn hook_reports_hold_until_the_user_types_or_work_shows() {
+    use crate::session::{hook_verdict, parse_hook_state};
+    use std::time::{Duration, Instant};
+    assert_eq!(
+        parse_hook_state(
+            "done
+"
+        ),
+        Some(AgentPhase::Done)
+    );
+    assert_eq!(
+        parse_hook_state("needs-input"),
+        Some(AgentPhase::NeedsInput)
+    );
+    assert_eq!(parse_hook_state(""), None, "caught mid-write");
+
+    let typed = Instant::now();
+    let later = typed + Duration::from_millis(50);
+    let report = Some((AgentPhase::Done, later));
+    // Reported after the last key: the hook decides.
+    assert_eq!(
+        hook_verdict(report, Some(typed), false),
+        Some(AgentPhase::Done)
+    );
+    assert_eq!(hook_verdict(report, None, false), Some(AgentPhase::Done));
+    let asking = Some((AgentPhase::NeedsInput, later));
+    assert_eq!(
+        hook_verdict(asking, Some(typed), false),
+        Some(AgentPhase::NeedsInput)
+    );
+    // The user typed since (answered, interrupted): back to the screen.
+    let after = later + Duration::from_millis(50);
+    assert_eq!(hook_verdict(asking, Some(after), false), None);
+    // Visible work wins too, and no report means no verdict.
+    assert_eq!(hook_verdict(report, Some(typed), true), None);
+    assert_eq!(hook_verdict(None, Some(typed), false), None);
+}

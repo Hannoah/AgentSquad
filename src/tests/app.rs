@@ -533,12 +533,14 @@ fn crashed_services_restart_up_to_five_times_then_stop() {
     let (cfg, s) = crashed("flaky", Kind::Service, true, &dir);
     let mut app = App::new(cfg, None);
     app.sessions[0] = Some(s);
-    app.auto_restarts
-        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.auto_restarts.insert(
+        "flaky".into(),
+        (0, Instant::now() - Duration::from_secs(30)),
+    );
     app.pane = (24, 80);
     app.pump();
     assert!(app.starting.contains_key("flaky"), "crash restarts");
-    assert_eq!(app.auto_restarts.get(&0).map(|(t, _)| *t), Some(1));
+    assert_eq!(app.auto_restarts.get("flaky").map(|(t, _)| *t), Some(1));
     assert!(
         app.message.0.contains("auto-restart #1"),
         "{}",
@@ -551,7 +553,7 @@ fn crashed_services_restart_up_to_five_times_then_stop() {
     let mut app = App::new(cfg, None);
     app.sessions[0] = Some(s);
     app.auto_restarts.insert(
-        0,
+        "flaky".into(),
         (
             AUTO_RESTART_MAX_TRIES,
             Instant::now() - Duration::from_secs(30),
@@ -574,8 +576,10 @@ fn crashed_services_restart_up_to_five_times_then_stop() {
     let (cfg, s) = crashed("plain", Kind::Service, false, &dir);
     let mut app = App::new(cfg, None);
     app.sessions[0] = Some(s);
-    app.auto_restarts
-        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.auto_restarts.insert(
+        "plain".into(),
+        (0, Instant::now() - Duration::from_secs(30)),
+    );
     app.pane = (24, 80);
     app.pump();
     assert!(!app.starting.contains_key("plain"));
@@ -585,11 +589,27 @@ fn crashed_services_restart_up_to_five_times_then_stop() {
     let (cfg, s) = crashed("helper", Kind::Agent, true, &dir);
     let mut app = App::new(cfg, None);
     app.sessions[0] = Some(s);
-    app.auto_restarts
-        .insert(0, (0, Instant::now() - Duration::from_secs(30)));
+    app.auto_restarts.insert(
+        "helper".into(),
+        (0, Instant::now() - Duration::from_secs(30)),
+    );
     app.pane = (24, 80);
     app.pump();
     assert!(!app.starting.contains_key("helper"));
+    drop(app);
+
+    // A removed project's capped streak goes with it: it never lands on
+    // the project that takes its place in the list.
+    let (cfg, s) = crashed("flaky", Kind::Service, true, &dir);
+    let mut app = App::new(cfg, None);
+    app.sessions[0] = Some(s);
+    app.auto_restarts
+        .insert("removed".into(), (AUTO_RESTART_MAX_TRIES, Instant::now()));
+    app.pane = (24, 80);
+    app.pump();
+    assert!(!app.auto_restarts.contains_key("removed"));
+    assert_eq!(app.auto_restarts.get("flaky").map(|(t, _)| *t), Some(0));
+    assert!(!app.message.0.contains("Gave up"), "{}", app.message.0);
     drop(app);
     let _ = fs::remove_dir_all(&dir);
 }

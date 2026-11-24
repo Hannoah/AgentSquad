@@ -41,3 +41,9 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 - github.com/Hannoah/AgentSquad (공개). CI와 릴리스는 GitHub Actions. 설치는 [build-and-release.md](build-and-release.md) 참고.
 - 지원 범위는 Windows(x86_64)와 macOS(Apple Silicon, Intel)다. CI는 `windows-latest`와 `macos-latest` 매트릭스로 돌고, 릴리스는 두 플랫폼 에셋을 올린다(macOS 지원 추가: c61110e).
 - 현재 버전은 `Cargo.toml`과 [releases.md](releases.md)가 기준이다(여기에 적으면 낡는다).
+
+## 에이전트 상태 판정
+
+- 화면 하단 텍스트(진행 표시, `esc to interrupt`, `[y/n]` 같은 문구), 최근 출력·입력 시각, 프로세스 트리 CPU를 합쳐 `Working / NeedsInput / Done / Idle`을 정한다(`session.rs`). 벨, 창 제목 `(N)`, 작업 이력, `REPORTS.md`가 모두 이 판정을 쓴다.
+- Claude Code 에이전트(ledger가 있고 자체 `--settings`가 없을 때)는 squad가 넣는 `hook.json`의 Stop/Notification 훅이 `AGENTSQUAD_STATE`가 가리키는 세션별 임시 파일에 `done`/`needs-input`을 쓴다. squad는 100ms마다 그 파일을 보고, 훅의 보고가 마지막 키 입력보다 새롭고 화면에 작업 흔적이 없으면 그 값을 쓴다. 사용자가 그 뒤에 입력하면(답변, 중단, 새 요청) 다시 화면 판정으로 돌아간다(v0.15.37).
+- 훅은 턴마다 한 번 오는 이벤트만 쓴다. 도구 호출마다 오는 훅은 Windows에서 PowerShell을 매번 띄워 에이전트가 느려진다. 1분 유휴 알림(`idle_prompt`)은 질문이 아니라서 무시한다.

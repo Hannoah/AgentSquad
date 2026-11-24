@@ -104,7 +104,8 @@ Service 이름을 폴더명이 아닌 실행 프로그램명으로 지정하고 
    - 테스트 95개(93 통과, 2 네트워크 무시) 및 `clippy --all-targets -- -D warnings` 통과.
 
 ## [2026-11-07] 배포 | v0.6.2
-전체 리뷰 후 수정 4건(설치 체크섬 fail-closed, 마이그레이션 1회 실행, Send ``, CLI 저장 재읽기)과 셸 서비스 라이브 이름(`jarvis-cli`) 개선. 테스트 96개 통과, clippy와 fmt 깨끗. → [releases.md](releases.md)
+전체 리뷰 후 수정 4건(설치 체크섬 fail-closed, 마이그레이션 1회 실행, Send `
+`, CLI 저장 재읽기)과 셸 서비스 라이브 이름(`jarvis-cli`) 개선. 테스트 96개 통과, clippy와 fmt 깨끗. → [releases.md](releases.md)
 
 ## [2026-11-10] 기록 | overview.md 최신화
 macOS 지원, 모듈(history, pathpick, select), 설정 경로, 종료 방식, 지휘 관계를 현재 코드(v0.15.1)에 맞춰 고쳤다.
@@ -144,3 +145,12 @@ UI/UX 정밀 리뷰 및 개선 + 한글(두벌식) 단축키 자동 인식: 한/
 
 ## [2026-11-17] 배포 | v0.15.19
 전체 코드 분석 기반 버그/안정성 수정(Stop 훅 `-auto.md` 제외, 업데이트 모달 외부 클릭, 줌 드래그, `persist_add` 충돌, 편집 커스텀 셸 보존, 수동 중지 이력 기록, `input_window` 폭 0 처리, `top_processes` 최적화 등) 및 UI/UX 전면 개선(정지 프로젝트 정보 카드, `ZOOM` 배지, 우클릭 메뉴 확장, `Reports to` Tab 자동완성, 히스토리/메모리 모니터 개선, `App` 단위 테스트 추가). 테스트 187개 통과, `fmt` 및 Windows/macOS `clippy` 통과. → [releases.md](releases.md)
+
+## [2026-11-24] 기록 공백 | v0.15.20 ~ v0.15.34
+이 기간은 이 페이지에 적지 않았다. 버전별 변경은 [releases.md](releases.md)에 있다. 그 사이 v0.15.30~33은 macOS 빌드 실패로 GitHub Release 없이 태그만 남았다.
+
+## [2026-11-24] 리뷰 | v0.15.34 전체 분석
+코드 전체, CI·릴리스 상태를 점검. clippy 깨끗, 테스트 232개 통과. `main` CI의 macOS 잡이 HEAD에서 녹색인 적이 없었음(실패 또는 취소). 찾은 항목과 처리 현황은 [review-findings.md](review-findings.md).
+
+## [2026-11-24] 배포 | v0.15.35, v0.15.36, v0.15.37
+v0.15.35: 릴리스 스크립트 macOS 타깃 clippy, Git 보기 워커 스레드, (임시) 스킬 백업. v0.15.36: 스킬 백업을 확인 방식으로 바꿈(기존 스킬 유지, 같은 이름은 `K`에서 묻고 폼·CLI는 유지, `--force`). v0.15.37: Claude Code 훅 기반 상태 판정, 자동 재시작 이름 키, Windows 종료 전 PID 재확인, 위키 정리. 훅 판정은 실제 Claude Code 세션에서 확인하지 못함 → [open-work.md](open-work.md). → [releases.md](releases.md)

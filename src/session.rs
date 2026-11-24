@@ -160,6 +160,39 @@ impl AgentPhase {
     }
 }
 
+/// A fresh per-session file for the hooks' state reports.
+fn new_state_file() -> std::path::PathBuf {
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    std::env::temp_dir().join(format!(
+        "agentsquad-{}-{}.state",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// What a hook wrote into the state file (`ledger::write_state`).
+pub(crate) fn parse_hook_state(text: &str) -> Option<AgentPhase> {
+    match text.trim() {
+        ledger::STATE_DONE => Some(AgentPhase::Done),
+        ledger::STATE_ASKING => Some(AgentPhase::NeedsInput),
+        _ => None,
+    }
+}
+
+/// The phase Claude Code's own hooks report, while it still holds: they say
+/// when a turn ended (Stop) or a question is up (Notification), which no
+/// screen scan can be sure of. Typing after the report means the user moved
+/// on (answered, interrupted, new prompt), and visible work (`busy`) means
+/// the agent did; either way the screen decides again.
+pub(crate) fn hook_verdict(
+    hook: Option<(AgentPhase, Instant)>,
+    last_input: Option<Instant>,
+    busy: bool,
+) -> Option<AgentPhase> {
+    let (phase, at) = hook?;
+    (!busy && last_input.is_none_or(|t| t < at)).then_some(phase)
+}
+
 /// Non-empty trailing lines of `text`, newest first, trimmed and lowercased.
 fn tail_lines(text: &str, n: usize) -> Vec<String> {
     text.lines()
@@ -523,6 +556,13 @@ pub struct Session {
     /// Set once the whole tree was killed in bulk, so `Drop` need not walk
     /// the process table again.
     tree_killed: bool,
+    /// File this session's Claude Code hooks report to (`ledger::STATE_ENV`).
+    hook_file: Option<std::path::PathBuf>,
+    /// Modification time of `hook_file` last read, and when it was checked.
+    hook_seen: Option<std::time::SystemTime>,
+    hook_checked: Instant,
+    /// The latest state the hooks reported, and when they wrote it.
+    hook_phase: Option<(AgentPhase, Instant)>,
     render: RefCell<Option<RenderCache>>,
 }
 impl Session {
@@ -574,6 +614,13 @@ impl Session {
         if let Some(file) = &hook {
             cmd.arg("--settings");
             cmd.arg(file);
+        }
+        // The hooks run inside the agent and inherit its environment: this
+        // names the file they tell this session's state through.
+        let hook_file = hook.is_some().then(new_state_file);
+        if let Some(f) = &hook_file {
+            let _ = std::fs::remove_file(f);
+            cmd.env(ledger::STATE_ENV, f);
         }
         cmd.args(&p.command[1..]);
         cmd.cwd(&p.path);
@@ -641,6 +688,10 @@ impl Session {
             flags_stale: false,
             last_flags: Instant::now(),
             tree_killed: false,
+            hook_file,
+            hook_seen: None,
+            hook_checked: Instant::now(),
+            hook_phase: None,
             render: RefCell::new(None),
         })
     }
@@ -797,6 +848,10 @@ impl Session {
             self.refresh_screen_flags();
             changed |= before != (self.cached_needs_input, self.cached_working_text);
         }
+        if self.hook_file.is_some() && self.hook_checked.elapsed() >= FLAGS_EVERY {
+            self.hook_checked = Instant::now();
+            changed |= self.read_hook_state();
+        }
         if self.status.is_running() {
             match self.child.try_wait() {
                 Ok(Some(exit)) => {
@@ -813,6 +868,30 @@ impl Session {
             }
         }
         changed
+    }
+    /// Pick up a state the hooks wrote since the last look. True when one was.
+    fn read_hook_state(&mut self) -> bool {
+        let Some(file) = &self.hook_file else {
+            return false;
+        };
+        let Ok(mtime) = std::fs::metadata(file).and_then(|m| m.modified()) else {
+            return false;
+        };
+        if self.hook_seen == Some(mtime) {
+            return false;
+        }
+        // Caught between truncate and write: unrecognized, look again next pass.
+        let Some(phase) = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| parse_hook_state(&t))
+        else {
+            return false;
+        };
+        self.hook_seen = Some(mtime);
+        let age = mtime.elapsed().unwrap_or_default();
+        let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+        self.hook_phase = Some((phase, at));
+        true
     }
     /// Record a fact in the project's ledger, when it has one.
     pub fn log_event(&self, text: &str) {
@@ -849,6 +928,13 @@ impl Session {
         let output_streaming = self
             .last_output
             .is_some_and(|t| t.elapsed() < NEEDS_INPUT_QUIET);
+        if let Some(p) = hook_verdict(
+            self.hook_phase,
+            self.last_input,
+            self.cached_working_text && output_streaming,
+        ) {
+            return p;
+        }
         // Screen evidence beats a prompt match so an agent never flashes `?` mid-run.
         if self.cached_working_text || output_streaming {
             return AgentPhase::Working;
@@ -1069,14 +1155,18 @@ pub fn shutdown_all(sessions: &mut [Option<Session>]) {
 impl Session {
     /// True when the root process has exited on a platform that recycles
     /// pids (unix): its pid may now belong to a stranger, so only the process
-    /// group may be swept. Windows keeps walking the tree: its pids are not
-    /// reused while the exited root's children still reference it.
+    /// group may be swept. Windows keeps walking the tree: the pty child
+    /// holds an open handle to the root, so its pid is not reused while this
+    /// session lives (and `kill_trees` re-checks each descendant's identity).
     fn root_reaped(&mut self) -> bool {
         cfg!(unix) && self.child.try_wait().ok().flatten().is_some()
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        if let Some(f) = &self.hook_file {
+            let _ = std::fs::remove_file(f);
+        }
         if self.status.is_running() {
             self.log_event("stop");
         }

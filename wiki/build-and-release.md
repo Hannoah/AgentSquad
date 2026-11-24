@@ -2,20 +2,25 @@
 
 ## 빌드와 테스트
 
-- Windows에서 테스트와 빌드는 MinGW 링커가 필요하다. 헬퍼 `tools\cargo-windows.ps1`이 휴대용 툴체인을 받아 와서(처음 한 번 약 200MB) cargo에 인자를 넘긴다.
+- 2026-11-24 기준 이 PC는 일반 `cargo test --locked`, `cargo build`가 된다. MinGW 링커가 없는 Windows 환경에서만 아래 헬퍼가 필요하다.
+- 헬퍼 `tools\cargo-windows.ps1`이 휴대용 툴체인을 받아 와서(처음 한 번 약 200MB) cargo에 인자를 넘긴다.
   - `powershell -ExecutionPolicy Bypass -File tools\cargo-windows.ps1 test --locked`
-- 일반 `cargo test`는 `dlltool.exe: program not found`로 실패한다(`windows-sys` 빌드 단계). 반면 `cargo check`, `cargo clippy`는 일반 `cargo`로 된다.
+- 링커가 없는 환경에서는 일반 `cargo test`가 `dlltool.exe: program not found`로 실패한다(`windows-sys` 빌드 단계). `cargo check`, `cargo clippy`는 그래도 된다.
 - 헬퍼 스크립트는 `-D warnings`나 `--`를 `-File` 인자로 넘기면 `Missing an argument for parameter 'CargoArgs'`로 실패한다. clippy는 일반 `cargo clippy --all-targets -- -D warnings`로 돌린다.
-- 테스트 77개(v0.5.3). 일부는 실제 프로세스를 띄워 트리 종료와 측정을 검증한다. 전체가 약 4~7초.
+- 테스트 약 240개(v0.15.37). 일부는 실제 프로세스를 띄워 트리 종료와 측정을 검증한다. 전체가 약 15~20초. 네트워크와 e2e 테스트는 `#[ignore]`.
 - 저장소 파일은 LF이고, 작업 트리에서 `LF will be replaced by CRLF` 경고가 나오지만 무해하다(autocrlf).
 
 ## CI
 
-`ci.yml`(push to main, PR): `windows-latest`에서 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --locked`.
+`ci.yml`(push to main, PR): `windows-latest`와 `macos-latest`에서 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --locked`. 그 밖에 `cargo audit`(RustSec 권고), README 인코딩 검사(`??`, U+FFFD).
 
 ## 릴리스 절차
 
-`v*` 태그를 푸시하면 `release.yml`이 테스트, release 빌드, `squad-windows-x86_64.zip` 생성, GitHub Release 생성과 업로드를 한다.
+보통은 `tools\release.ps1` 한 번으로 끝낸다([CLAUDE.md](../CLAUDE.md)): 버전 올림, fmt·clippy(Windows와 `aarch64-apple-darwin` 타깃)·테스트·release 빌드, 로컬 설치, 커밋·태그·push. 아래는 그 내용과 수동 절차다.
+
+- macOS 타깃 clippy는 v0.15.35에 추가했다. 태그가 `main`과 함께 나가서 macOS 전용 컴파일 오류가 release 워크플로에서야 드러났고, publish 잡이 모든 플랫폼 성공을 요구해 v0.15.30~33은 에셋 없이 남았다. clippy는 링크를 안 해서 Windows에서도 돈다(`rustup target add aarch64-apple-darwin` 필요, 스크립트가 한다).
+
+`v*` 태그를 푸시하면 `release.yml`이 Windows와 macOS(aarch64, x86_64) 빌드, 체크섬, GitHub Release 생성과 업로드, 빌드 출처 증명을 한다.
 
 0. **버전 규칙**: 기본은 패치(`0.0.1`) 단위로 올린다(v0.13.0 → v0.13.1). 간단한 변경(UI 다듬기, 버그 수정, 문서)은 모두 여기에 해당한다. 마이너(`0.1.0`)는 사용자가 쓰는 새 기능이나 동작 변화가 클 때만, 사용자가 정할 때 올린다.
 1. `Cargo.toml`의 `version`을 올린다. `Cargo.lock`은 cargo가 갱신한다(워크플로가 `--locked`라서 lock 파일도 반드시 같이 커밋).

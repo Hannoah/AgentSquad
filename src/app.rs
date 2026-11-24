@@ -691,10 +691,12 @@ pub(crate) struct App {
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
     pub(crate) starting: HashMap<String, Vec<u8>>,
-    /// Crash-loop tracking for service auto-restart: project index to
-    /// (consecutive auto-restarts, last schedule). Entries vanish once a
-    /// session runs healthy long enough, stops cleanly, or is stopped.
-    pub(crate) auto_restarts: HashMap<usize, (u8, Instant)>,
+    /// Crash-loop tracking for service auto-restart: project name to
+    /// (consecutive auto-restarts, last schedule). Keyed by name like
+    /// `starting`, so removing a project cannot shift a streak onto another.
+    /// Entries vanish once a session runs healthy long enough, stops cleanly,
+    /// is stopped, or its project is gone.
+    pub(crate) auto_restarts: HashMap<String, (u8, Instant)>,
     pub(crate) start_tx: mpsc::Sender<Started>,
     pub(crate) start_rx: mpsc::Receiver<Started>,
     /// Rows and columns the sessions were last sized to.
@@ -1613,6 +1615,9 @@ impl App {
     fn auto_restart_crashed(&mut self) {
         let mut start: Vec<(usize, u8)> = Vec::new();
         let mut give_up: Vec<usize> = Vec::new();
+        let projects = &self.cfg.projects;
+        self.auto_restarts
+            .retain(|name, _| projects.iter().any(|p| p.name == *name));
         for (pi, p) in self.cfg.projects.iter().enumerate() {
             let crashed = self
                 .sessions
@@ -1622,12 +1627,13 @@ impl App {
             let wanted =
                 p.kind == Kind::Service && p.restart_on_crash && crashed && !self.is_starting(pi);
             if wanted {
-                match self.auto_restarts.get(&pi).copied() {
+                match self.auto_restarts.get(&p.name).copied() {
                     Some((tries, _)) if tries >= AUTO_RESTART_MAX_TRIES => {
                         if tries == AUTO_RESTART_MAX_TRIES {
                             // Complain once, then leave the dead session alone.
                             give_up.push(pi);
-                            self.auto_restarts.insert(pi, (tries + 1, Instant::now()));
+                            self.auto_restarts
+                                .insert(p.name.clone(), (tries + 1, Instant::now()));
                         }
                     }
                     Some((tries, last)) if auto_restart_due(tries, last.elapsed()) => {
@@ -1635,7 +1641,8 @@ impl App {
                     }
                     None => {
                         // Arm the cooldown; the restart fires on a later pass.
-                        self.auto_restarts.insert(pi, (0, Instant::now()));
+                        self.auto_restarts
+                            .insert(p.name.clone(), (0, Instant::now()));
                     }
                     _ => {}
                 }
@@ -1650,14 +1657,15 @@ impl App {
                     Some(_) => true,
                 };
                 if settled {
-                    self.auto_restarts.remove(&pi);
+                    self.auto_restarts.remove(&p.name);
                 }
             }
         }
         let (rows, cols) = self.pane;
         let changed = !start.is_empty() || !give_up.is_empty();
         for (pi, tries) in start {
-            self.auto_restarts.insert(pi, (tries, Instant::now()));
+            let name = self.cfg.projects[pi].name.clone();
+            self.auto_restarts.insert(name, (tries, Instant::now()));
             self.begin_start(pi, rows, cols, Vec::new());
             self.message = (
                 format!(

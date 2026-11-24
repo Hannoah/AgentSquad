@@ -30,10 +30,10 @@
 
 | 항목 | 상태 |
 |---|---|
-| `main.rs` 한 파일, `run()` 하나가 약 1000줄. 테스트는 렌더링 보조 함수에 치우치고 키 처리 상태 머신은 미검증 | 보류 |
-| 상태를 `String`(`"Running"`, `"Exited (0)"`)으로 들고 `starts_with`로 판별 → `enum Status` 권장 | 보류 |
-| `focus`, `sending`, `filtering`, `adding`, `show_help`와 `confirm_*` 불리언 여러 개로 모드를 표현 → `Mode` enum 권장 | 보류 |
-| CI, 테스트가 Windows 전용인데 `cfg!(windows)` 분기가 있음 | README에 "Windows only" 명시로 정리 |
+| `main.rs` 한 파일, `run()` 하나가 약 1000줄. 테스트는 렌더링 보조 함수에 치우치고 키 처리 상태 머신은 미검증 | 고침(모듈 분리와 `App` 단위 테스트, [open-work.md](open-work.md)) |
+| 상태를 `String`(`"Running"`, `"Exited (0)"`)으로 들고 `starts_with`로 판별 → `enum Status` 권장 | 고침(`SessionStatus`) |
+| `focus`, `sending`, `filtering`, `adding`, `show_help`와 `confirm_*` 불리언 여러 개로 모드를 표현 → `Mode` enum 권장 | 고침(`Mode`; 오버레이 상태는 아직 `Option` 여러 개) |
+| CI, 테스트가 Windows 전용인데 `cfg!(windows)` 분기가 있음 | 고침(macOS 지원, CI가 Windows·macOS 매트릭스) |
 
 ## 사소한 것
 
@@ -41,4 +41,18 @@
 |---|---|
 | README 설치 예시 경로(`.\install.ps1`)와 버전 예시가 오래됨 | 고침 v0.5.1 |
 | 엉뚱한 함수 위에 붙은 doc 주석 | 고침 v0.5.1 |
-| 릴리스에 SHA256 체크섬을 올리고 설치 스크립트에서 검증 | 보류 |
+| 릴리스에 SHA256 체크섬을 올리고 설치 스크립트에서 검증 | 고침(설치 스크립트와 `squad update` 모두 검증, 없으면 설치 안 함) |
+
+## 2026-11-24 v0.15.34 전체 분석
+
+| 항목 | 상태 | 비고 |
+|---|---|---|
+| 릴리스 스크립트가 Windows만 검사하고 태그를 push해 macOS 전용 오류가 태그 뒤에 드러남(v0.15.30~33 에셋 없음) | 고침 v0.15.35 | `release.ps1`이 `aarch64-apple-darwin` clippy를 돌린다(링커 불필요) |
+| Git 보기(`g`)가 UI 스레드에서 `git status -uall`/`git diff` 실행, 큰 저장소에서 멈춤 | 고침 v0.15.35 | 창마다 워커 하나, 밀린 요청은 최신 것만 처리. 브랜치 확인(`rev-parse`)은 여전히 동기 |
+| 스킬 동기화가 같은 이름의 프로젝트 자체 스킬이나 수정본을 `remove_dir_all`로 덮어씀 | 고침 v0.15.36 | 기존 스킬은 두고 추가만. 같은 이름이 다르면 `K`에서 묻고, 폼과 CLI는 유지(`--force`) |
+| 에이전트 상태를 화면 문구로만 추측 | 고침 v0.15.37 | Claude Code는 Stop/Notification 훅이 상태 파일로 알림. 실제 Claude Code에서 확인 못 함([open-work.md](open-work.md)) |
+| 자동 재시작 횟수가 프로젝트 인덱스 키라 삭제 뒤 다른 프로젝트로 밀림 | 고침 v0.15.37 | 이름 키, 사라진 프로젝트 항목 정리 |
+| Windows 트리 종료가 스냅샷과 `TerminateProcess` 사이 PID 재사용에 무방비 | 고침 v0.15.37 | 종료 직전 핸들로 생성 시각 재확인 |
+| 업데이트 체크섬이 바이너리와 같은 릴리스에서 옴(릴리스 계정 탈취는 못 막음), 출처 증명은 업데이터가 검증 안 함 | 보류 | 개인 도구 수준에선 허용. 근본 해결은 SignPath 서명(사용자 설정 필요, [build-and-release.md](build-and-release.md)) |
+| 볼트 4종(env/skills/tools/refs) 모달·에디터·그리기 코드가 거의 복사본 | 보류 | [open-work.md](open-work.md) 결정 기록 참고 |
+| 자체 JSON 파서(약 400줄)와 SHA-256 | 안 함 | 의존성 없이 유지한다는 기존 결정. 테스트 벡터로 검증됨 |

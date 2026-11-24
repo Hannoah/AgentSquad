@@ -305,6 +305,10 @@ fn hook_settings_file_runs_squad_hook_stop() {
     let shell = if cfg!(windows) { "powershell" } else { "bash" };
     assert!(text.contains(r#""Stop""#) && text.contains(&format!(r#""shell":"{shell}""#)));
     assert!(text.contains("' hook stop"), "{text}");
+    assert!(
+        text.contains(r#""Notification""#) && text.contains("' hook notify"),
+        "{text}"
+    );
     assert!(!text.contains(r"\U"), "forward slashes only: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -387,4 +391,27 @@ fn exclude_reaches_the_shared_exclude_file_from_a_worktree() {
     fs::write(wt.join(".env"), "K=v\n").unwrap();
     assert!(ledger::git(&wt, &["check-ignore", "-q", ".env"]).is_some());
     let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn only_permission_and_question_notifications_mean_waiting() {
+    use crate::ledger::notification_asks;
+    assert!(notification_asks(
+        r#"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}"#
+    ));
+    assert!(notification_asks(
+        r#"{"notification_type":"elicitation_dialog","message":"MCP server asks"}"#
+    ));
+    // The idle reminder a minute after a finished turn is not a question.
+    assert!(!notification_asks(
+        r#"{"notification_type":"idle_prompt","message":"Claude is waiting for your input"}"#
+    ));
+    // Older Claude Code: the message alone decides.
+    assert!(notification_asks(
+        r#"{"message":"Claude needs your permission to use Write"}"#
+    ));
+    assert!(!notification_asks(
+        r#"{"message":"Claude is waiting for your input"}"#
+    ));
+    assert!(!notification_asks("not json"));
 }

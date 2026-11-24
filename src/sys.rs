@@ -221,14 +221,9 @@ pub(crate) fn snapshot_table() -> ProcTable {
 #[cfg(windows)]
 fn born(pid: u32) -> Option<u64> {
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, FALSE, FILETIME},
-        System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        Foundation::{CloseHandle, FALSE},
+        System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
     };
-    let zero = FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
-    };
-    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
     // SAFETY: read-only query on a handle opened and closed here; a null
     // handle only means the process is gone or out of reach.
     unsafe {
@@ -236,10 +231,24 @@ fn born(pid: u32) -> Option<u64> {
         if handle.is_null() {
             return None;
         }
-        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
+        let t = created_at(handle);
         CloseHandle(handle);
-        ok.then_some(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
+        t
     }
+}
+/// Creation time of the process behind `handle` (opened with at least
+/// PROCESS_QUERY_LIMITED_INFORMATION).
+#[cfg(windows)]
+unsafe fn created_at(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<u64> {
+    use windows_sys::Win32::{Foundation::FILETIME, System::Threading::GetProcessTimes};
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the caller passes a live handle; the out-pointers are locals.
+    let ok = unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    (ok != 0).then_some(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
 }
 /// The unix table comes from `ps`, which reports live parents only.
 #[cfg(not(windows))]
@@ -472,24 +481,40 @@ pub fn kill_tree_by_pid(root: u32) {
 pub fn kill_trees(roots: &[u32]) {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, FALSE},
-        System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE},
+        System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        },
     };
     if roots.is_empty() {
         return;
     }
     let table = snapshot_table();
     for &root in roots {
-        let mut pids = descendant_pids_from_map(root, &table.children);
+        // Creation times the walk saw, to recognise each pid again below.
+        let mut seen: HashMap<u32, Option<u64>> = HashMap::new();
+        let mut pids = walk_tree(root, &table.children, |pid| {
+            *seen.entry(pid).or_insert_with(|| born(pid))
+        });
         pids.reverse();
         for pid in pids {
+            let walked = seen.get(&pid).copied().flatten();
+            let access = if walked.is_some() {
+                PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+            } else {
+                PROCESS_TERMINATE
+            };
             // SAFETY: terminating processes inside our own session tree; a null
             // handle only means the PID is already gone or out of reach.
             unsafe {
-                let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+                let handle = OpenProcess(access, FALSE, pid);
                 if handle.is_null() {
                     continue;
                 }
-                TerminateProcess(handle, 1);
+                // Between the walk and now the process may have exited and its
+                // pid gone to a stranger: kill only the one the walk saw.
+                if walked.is_none() || created_at(handle) == walked {
+                    TerminateProcess(handle, 1);
+                }
                 CloseHandle(handle);
             }
         }

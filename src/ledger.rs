@@ -381,24 +381,65 @@ pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
 }
 
 /// Claude Code settings that run `squad hook stop` when the agent finishes a
-/// turn. Pinned to PowerShell on Windows: Claude Code otherwise picks the
-/// shell itself, and a quoted path alone is a syntax error in PowerShell.
-/// Elsewhere the hook runs under bash.
+/// turn and `squad hook notify` when it asks for something. Pinned to
+/// PowerShell on Windows: Claude Code otherwise picks the shell itself, and a
+/// quoted path alone is a syntax error in PowerShell. Elsewhere the hooks run
+/// under bash. Only once-per-turn events: a per-tool hook would start a shell
+/// on every tool call.
 fn hook_settings(exe: &Path) -> String {
     let exe = exe.display().to_string();
-    let (shell, command) = if cfg!(windows) {
-        let exe = exe.replace('\\', "/").replace('\'', "''");
-        ("powershell", format!("& '{exe}' hook stop"))
-    } else {
+    let (shell, exe) = if cfg!(windows) {
         (
-            "bash",
-            format!("'{}' hook stop", exe.replace('\'', "'\\''")),
+            "powershell",
+            format!("& '{}'", exe.replace('\\', "/").replace('\'', "''")),
         )
+    } else {
+        ("bash", format!("'{}'", exe.replace('\'', "'\\''")))
     };
-    let command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    let hook = |sub: &str| {
+        let command = format!("{exe} hook {sub}")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        format!(r#"[{{"hooks":[{{"type":"command","shell":"{shell}","command":"{command}"}}]}}]"#)
+    };
     format!(
-        r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","shell":"{shell}","command":"{command}"}}]}}]}}}}"#
+        r#"{{"hooks":{{"Stop":{},"Notification":{}}}}}"#,
+        hook("stop"),
+        hook("notify")
     )
+}
+
+/// Environment variable naming the file a session's hooks report its state
+/// to (set by squad when it starts a Claude Code agent with hooks).
+pub const STATE_ENV: &str = "AGENTSQUAD_STATE";
+/// What the hooks write into that file.
+pub const STATE_DONE: &str = "done";
+pub const STATE_ASKING: &str = "needs-input";
+
+/// Record `state` for the squad session this hook runs in. Silent and best
+/// effort: outside squad (no variable) nothing happens.
+pub fn write_state(state: &str) {
+    if let Some(file) = std::env::var_os(STATE_ENV).filter(|v| !v.is_empty()) {
+        let _ = fs::write(file, state);
+    }
+}
+
+/// Does a Claude Code `Notification` hook input mean the agent waits for the
+/// user (a permission or MCP question)? The idle reminder sent a minute after
+/// a finished turn does not: that turn already counts as done.
+pub fn notification_asks(input: &str) -> bool {
+    let Ok(v) = crate::json::parse(input) else {
+        return false;
+    };
+    let text = |key: &str| match v.get(key) {
+        Some(crate::json::JsonValue::String(s)) => Some(s.to_ascii_lowercase()),
+        _ => None,
+    };
+    match text("notification_type") {
+        Some(kind) => kind.contains("permission") || kind.contains("elicitation"),
+        // Older Claude Code sends only the message.
+        None => text("message").is_some_and(|m| m.contains("permission")),
+    }
 }
 
 /// Write the hook settings into the ledger and return their path, for
