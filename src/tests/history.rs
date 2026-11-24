@@ -1,5 +1,8 @@
 use super::*;
-use crate::history::{is_auto, prune, render, write_entry, Task};
+use crate::history::{
+    append_entry, daily_header, daily_name, encode_claude_project_dir, extract_claude_turns,
+    is_auto, render_section, Task,
+};
 use crate::ledger::list_entries;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,31 +15,55 @@ fn task() -> Task {
         started: UNIX_EPOCH + Duration::from_secs(1_000_000_000),
         took: Duration::from_secs(125),
         outcome: "task complete".into(),
-        tail: "done: added login\n\n".into(),
+        prompts: vec!["add login".into()],
+        output: "done: added login\n\n".into(),
     }
 }
 
 #[test]
 fn entry_says_what_happened_without_the_agent() {
-    let text = render(
-        &task(),
+    let t = task();
+    let header = daily_header(&t.project, t.started + t.took, 0);
+    assert_eq!(header, "# my-app - 2001-09-09\n");
+    let text = render_section(
+        &t,
         &["src/auth.rs".to_string()],
         &["abc1234 add login".to_string()],
+        None,
+        0,
     );
-    assert!(text.starts_with("# my-app - task complete"));
-    assert!(text.contains("- Ended: 2001-09-09T01:48:45Z"), "{text}");
-    assert!(text.contains("- Took: 2m"));
+    assert!(
+        text.contains("## 2001-09-09 01:48:45 · my-app (`claude`) · task complete (2m)"),
+        "{text}"
+    );
+    assert!(text.contains("- Date: 2001-09-09"), "{text}");
+    assert!(text.contains("- Time: 01:48:45 (took 2m)"), "{text}");
+    assert!(text.contains("- Agent: my-app (`claude`)"), "{text}");
     assert!(text.contains("- src/auth.rs") && text.contains("- abc1234 add login"));
-    assert!(text.contains("done: added login\n```"), "tail is trimmed");
-    let empty = render(&task(), &[], &[]);
-    assert_eq!(empty.matches("(none seen)").count(), 2);
-    let fenced = render(
+    assert!(text.contains("### User\n\nadd login"), "{text}");
+    assert!(text.contains("done: added login\n```"), "output is trimmed");
+
+    let quiet = render_section(
+        &t,
+        &[],
+        &[],
+        Some("### User\n\nhi\n\n### Assistant\n\nhello"),
+        0,
+    );
+    assert!(!quiet.contains("### Files changed"));
+    assert!(!quiet.contains("### Commits"));
+    assert!(quiet.contains("### User\n\nhi\n\n### Assistant\n\nhello"));
+    assert!(!quiet.contains("### Output"));
+
+    let fenced = render_section(
         &Task {
-            tail: "```rust\nlet a = 1;\n```".into(),
+            output: "```rust\nlet a = 1;\n```".into(),
             ..task()
         },
         &[],
         &[],
+        None,
+        0,
     );
     assert!(
         fenced.contains("````\n```rust\nlet a = 1;\n```\n````"),
@@ -45,24 +72,41 @@ fn entry_says_what_happened_without_the_agent() {
 }
 
 #[test]
-fn entries_never_overwrite_and_list_newest_first() {
+fn same_day_entries_accumulate_into_one_file_and_list_newest_first() {
     let dir = scratch_dir("history");
-    let t = task();
-    let a = write_entry(&dir, &t, &[], &[]).unwrap();
-    let b = write_entry(&dir, &t, &[], &[]).unwrap();
-    assert_ne!(a, b, "same second, second file");
-    assert!(a
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .ends_with("-auto.md"));
+    let t1 = task();
+    let t2 = Task {
+        took: Duration::from_secs(300),
+        prompts: vec!["second prompt".into()],
+        output: "second output".into(),
+        ..task()
+    };
+    let a = append_entry(&dir, &t1, &[], &[], None, 0).unwrap();
+    let b = append_entry(&dir, &t2, &[], &[], None, 0).unwrap();
+    assert_eq!(a, b, "same UTC day appends to the same daily file");
+    assert_eq!(a.file_name().unwrap().to_string_lossy(), "20010909-auto.md");
+    let body = std::fs::read_to_string(&a).unwrap();
+    assert_eq!(
+        body.matches("# my-app - 2001-09-09").count(),
+        1,
+        "daily header written once:\n{body}"
+    );
+    assert!(body.contains("done: added login"), "{body}");
+    assert!(body.contains("second prompt"), "{body}");
+    assert!(body.contains("second output"), "{body}");
+
     let later = Task {
         started: SystemTime::now(),
         ..task()
     };
-    write_entry(&dir, &later, &[], &[]).unwrap();
+    let c = append_entry(&dir, &later, &[], &[], None, 0).unwrap();
+    assert_ne!(c, a);
+    assert_eq!(
+        c.file_name().unwrap().to_string_lossy(),
+        daily_name(later.started + later.took, 0)
+    );
     let names: Vec<String> = list_entries(&dir).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names.len(), 3);
+    assert_eq!(names.len(), 2);
     assert!(names[0] > names[1], "newest first: {names:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -162,35 +206,86 @@ fn flush_waits_for_entries_still_being_written() {
 }
 
 #[test]
-fn old_auto_entries_are_pruned_and_sitreps_kept() {
+fn auto_log_names_distinguish_daily_legacy_and_sitreps() {
+    assert!(is_auto("20261125-auto.md"));
     assert!(is_auto("20261108T061200Z-auto.md"));
     assert!(is_auto("20261108T061200Z-auto-2.md"));
     assert!(
         !is_auto("20261108T061200Z-auto-login.md"),
         "an agent's slug"
     );
+    assert!(!is_auto("20261125-my-sitrep.md"));
     assert!(!is_auto("20261108T061200Z-add-auth.md"));
     assert!(!is_auto("auto.md"));
-    let dir = scratch_dir("prune");
-    std::fs::create_dir_all(&dir).unwrap();
-    for name in [
-        "20261101T000000Z-auto.md",
-        "20261102T000000Z-auto.md",
-        "20261103T000000Z-auto.md",
-        "20261101T000000Z-add-auth.md",
-    ] {
-        std::fs::write(dir.join(name), "x").unwrap();
-    }
-    prune(&dir, 2);
-    let left: Vec<String> = list_entries(&dir).into_iter().map(|(n, _)| n).collect();
+}
+
+#[test]
+fn claude_transcript_delta_tracks_offset_without_duplicates() {
     assert_eq!(
-        left,
-        [
-            "20261103T000000Z-auto.md",
-            "20261102T000000Z-auto.md",
-            "20261101T000000Z-add-auth.md"
-        ],
-        "the oldest auto entry goes; the agent's SITREP stays"
+        encode_claude_project_dir(Path::new(
+            r"C:\Users\kornah\Work\09_Personal_Project\AgentSquad"
+        )),
+        "C--Users-kornah-Work-09-Personal-Project-AgentSquad"
+    );
+    let dir = scratch_dir("claude-jsonl");
+    let jsonl = dir.join("session.jsonl");
+    let initial = concat!(
+        r#"{"type":"user","timestamp":"2026-11-24T13:00:00.000Z","message":{"role":"user","content":"<system-reminder>secret</system-reminder>Fix login bug"}}"#,
+        "\n",
+        r#"{"type":"assistant","timestamp":"2026-11-24T13:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/auth.rs"}},{"type":"text","text":"Checking auth.rs now."}]}}"#,
+        "\n",
+        r#"{"type":"user","timestamp":"2026-11-24T13:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file body"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-11-24T13:00:07.000Z","message":{"role":"assistant","content":[{"type":"text","text":"sidechain ignored"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","timestamp":"2026-11-24T13:00:08.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Fixed login validation."}]}}"#,
+        "\n",
+    );
+    std::fs::write(&jsonl, initial).unwrap();
+    let (md1, off1) = extract_claude_turns(&jsonl, None, None).unwrap();
+    assert!(md1.contains("### User\n\nFix login bug"), "{md1}");
+    assert!(!md1.contains("system-reminder"), "{md1}");
+    assert!(!md1.contains("hmm"), "{md1}");
+    assert!(!md1.contains("sidechain ignored"), "{md1}");
+    assert!(
+        md1.contains("- [Tool: Read] `src/auth.rs`"),
+        "tool work included:\n{md1}"
+    );
+    assert!(
+        md1.contains("### Assistant\n\n- [Tool: Read] `src/auth.rs`\n\nChecking auth.rs now.\n\nFixed login validation."),
+        "{md1}"
+    );
+
+    // Reading again with no new lines yields empty markdown and identical offset.
+    let (md_empty, off_same) = extract_claude_turns(&jsonl, Some(off1), None).unwrap();
+    assert!(md_empty.is_empty(), "{md_empty}");
+    assert_eq!(off_same, off1);
+
+    // Appending a second turn extracts ONLY the new turn without duplicating the first.
+    let next = concat!(
+        r#"{"type":"user","timestamp":"2026-11-24T13:05:00.000Z","message":{"role":"user","content":"Also add tests"}}"#,
+        "\n",
+        r#"{"type":"assistant","timestamp":"2026-11-24T13:05:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Added 3 unit tests."}]}}"#,
+        "\n",
+    );
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&jsonl)
+        .unwrap();
+    f.write_all(next.as_bytes()).unwrap();
+    drop(f);
+
+    let (md2, off2) = extract_claude_turns(&jsonl, Some(off1), None).unwrap();
+    assert!(off2 > off1);
+    assert!(
+        !md2.contains("Fix login bug"),
+        "no duplicate turn 1:\n{md2}"
+    );
+    assert!(md2.contains("### User\n\nAlso add tests"), "{md2}");
+    assert!(
+        md2.contains("### Assistant\n\nAdded 3 unit tests."),
+        "{md2}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

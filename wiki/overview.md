@@ -11,7 +11,7 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
   - `sys`: 프로세스 트리, CPU/메모리 측정, 프로세스 종료. 플랫폼별 코드는 `cfg`로 나눈다.
   - `ui`: ratatui 렌더링과 `Mode`.
   - `updater`: GitHub Release 자동 업데이트.
-  - `ledger`, `history`: 프로젝트의 `.squad/`(보고서, 작업 이력) 기록과 읽기. `h`로 이력을 본다.
+  - `ledger`, `history`: 프로젝트의 `.squad/`(보고서, 작업 이력) 기록과 읽기. 작업이 끝날 때마다 일별 `<YYYYMMDD>-auto.md`에 전체 대화(Claude Code JSONL 트랜스크립트 증분 또는 PTY 스크롤백·입력 차분, 중복 제거)를 누적 기록하며 `h`로 열람한다.
   - `input`(입력 줄), `pathpick`(추가 폼의 경로 선택과 Tab 완성), `select`(터미널 텍스트 선택).
 - 테스트는 `src/tests.rs`(공용 `use`와 헬퍼)와 `src/tests/`의 모듈별 파일로 나뉜다. 실제 `squad`를 pty에서 돌리는 e2e는 `tests/history_e2e.rs`(`cargo test --test history_e2e -- --ignored --nocapture`). 빌드 설정은 `Cargo.toml`. 모듈 분리 이력은 [log.md](log.md) 참고.
 - 입력 모드는 `mode: Mode` 하나로 표현한다(Manager, Focus, Send, Filter, Add, Help). 확인 팝업은 별도 `confirm_*` 상태. `App`의 메서드는 위 파일들에 `impl App` 블록으로 나뉘어 있고, 파일 사이에서 부르는 메서드는 `pub(super)`다.

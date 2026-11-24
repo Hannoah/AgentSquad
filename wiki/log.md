@@ -162,3 +162,7 @@ v0.15.35~37의 macOS 테스트 잡이 모두 `quick_reply_opens_via_badge_and_cy
 
 ## [2026-11-25] 배포 | v0.15.39
 v0.15.38 GitHub Release 워크플로(4개 잡 전원 성공) 및 에셋 6개 게시를 확인했다. 이어서 남은 두 과제를 처리했다: (1) Claude Code 훅 상태 판정 보완 — `PermissionRequest` 훅(`squad hook permission`)을 추가해 `Notification`(~6초 지연)을 기다리지 않고 권한 프롬프트 즉시 `?`가 뜨게 하고, 훅 `NeedsInput` 보고 시 사이드바 `prompt_hint`를 동기화하며, `AGENTSQUAD_STATE`에 나노초 UNIX 타임스탬프를 함께 써 Windows NTFS `mtime` 틱 오차·동일 틱 덮어쓰기를 방지했다(실제 Claude Code 세션 체감 확인은 사용 한도 해제 후로 보류). (2) 공유 볼트 4종(`EnvModal`, `SkillModal`, `ToolModal`, `RefModal`)을 `VaultModal` + `VaultKindState` 구조로 `src/app/vault.rs`에 단일화해 `app.rs`·`actions.rs`·`draw.rs`·`keys.rs`·`mouse.rs`의 중복 약 1,500줄을 제거했다. → [releases.md](releases.md)
+
+
+## [2026-11-25] 배포 | v0.15.40
+자동 작업 이력(`.squad/log/`)을 재설계했다. 기존에는 질문(`?`) 때마다 200개까지 새 `*-auto.md` 파일이 쌓이고 하단 20줄만 잘려 들어갔으나, 이제는 작업이 끝날 때마다 일별 단일 파일(`<YYYYMMDD>-auto.md`)에 날짜·시간(로컬)·에이전트(`fg_name` 포함)·대화 전문(사용자 질문 + 에이전트 도구 작업/오류 + 답변 전체)을 중복 없이 영구 누적 보관한다(자동 삭제 제거 및 `MIN_TASK` 2초로 완화, 추후 용량이 커지면 LLMWiki 등으로 일괄 압축하는 방향으로 전환 예정): (1) Claude Code 세션은 `~/.claude/projects/.../*.jsonl`에서 `.squad/.history-cursor` 바이트 오프셋 이후의 새 `User`/`Assistant` 턴(질문·도구 작업·오류·답변)만 증분 추출, (2) 그 외 에이전트·셸은 직전 스냅샷 앵커 이후의 새 PTY 스크롤백 전체와 사용자가 입력한 프롬프트를 차분 기록, (3) `NeedsInput` 중간 질문에서는 작업을 끊어 기록하지 않고 완료/종료 시 한 번에 기록, (4) `History` 팝업 읽기 상한을 200,000자로 확대하고, `session.rs` 테스트들이 저장소 루트 `.squad/events.log`를 건드리지 않도록 임시 폴더로 격리했다. → [releases.md](releases.md)

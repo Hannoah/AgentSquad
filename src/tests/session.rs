@@ -61,9 +61,10 @@ fn stop_kills_process_tree_unix() {
         // SAFETY: signal 0 only probes for existence.
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
+    let dir = scratch_dir("treekill-unix");
     let p = Project {
         name: "treekill".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: vec!["sh".into(), "-c".into(), "sleep 300 & wait".into()],
         kind: Kind::Agent,
         autostart: false,
@@ -87,9 +88,11 @@ fn stop_kills_process_tree_unix() {
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(100));
         if tree.iter().all(|p| !alive(*p)) {
+            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
     panic!("process tree survived stop: {tree:?}");
 }
 #[test]
@@ -164,9 +167,10 @@ fn stop_spares_a_stranger_that_reused_the_root_pid() {
 #[test]
 #[cfg(windows)]
 fn stop_kills_process_tree() {
+    let dir = scratch_dir("treekill-win");
     let p = Project {
         name: "treekill".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: vec![
             "cmd.exe".into(),
             "/d".into(),
@@ -198,9 +202,11 @@ fn stop_kills_process_tree() {
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(100));
         if !pid_alive(pid) && grandkids.iter().all(|g| !pid_alive(*g)) {
+            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
     panic!(
         "process tree survived stop: parent alive={} kids={:?}",
         pid_alive(pid),
@@ -215,9 +221,10 @@ fn stop_kills_process_tree() {
 fn stop_kills_orphaned_grandchildren() {
     // A `start`ed grandchild outlives its wrapper: the direct child is
     // already dead when the session drops, yet the orphan must still die.
+    let dir = scratch_dir("orphankill-win");
     let p = Project {
         name: "orphankill".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: vec![
             "cmd.exe".into(),
             "/d".into(),
@@ -258,9 +265,11 @@ fn stop_kills_orphaned_grandchildren() {
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(100));
         if orphans.iter().all(|g| !pid_alive(*g)) {
+            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
     panic!(
         "orphaned grandchild survived stop: {:?}",
         orphans
@@ -272,9 +281,10 @@ fn stop_kills_orphaned_grandchildren() {
 #[test]
 #[cfg(windows)]
 fn session_sampling_tracks_a_live_tree() {
+    let dir = scratch_dir("usage-win");
     let p = Project {
         name: "usage".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: vec![
             "cmd.exe".into(),
             "/d".into(),
@@ -312,6 +322,8 @@ fn session_sampling_tracks_a_live_tree() {
     s.status = SessionStatus::Exited(0);
     s.clear_usage();
     assert!(s.usage.is_none());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
 fn terminal_parser() {
@@ -321,9 +333,10 @@ fn terminal_parser() {
 }
 #[test]
 fn pty_smoke() {
+    let dir = scratch_dir("pty-smoke");
     let p = Project {
         name: "smoke".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: if cfg!(windows) {
             vec![
                 "cmd.exe".into(),
@@ -345,21 +358,22 @@ fn pty_smoke() {
     for _ in 0..100 {
         s.update();
         if s.parser.screen().contents().contains("AGENTSQUAD_OK") {
+            drop(s);
+            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!(
-        "PTY output not received; status={} screen={:?}",
-        s.status,
-        s.parser.screen().contents()
-    );
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+    panic!("PTY output not received");
 }
 #[test]
 fn tree_cpu_does_not_hide_a_waiting_prompt() {
+    let dir = scratch_dir("tree-cpu");
     let p = Project {
         name: "cpu".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: shell(),
         kind: Kind::Agent,
         autostart: false,
@@ -377,6 +391,8 @@ fn tree_cpu_does_not_hide_a_waiting_prompt() {
         AgentPhase::NeedsInput,
         "quiet prompt wins over tree CPU"
     );
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
 fn stop_selects_live_session() {
@@ -658,7 +674,7 @@ fn hook_needs_input_syncs_and_clears_prompt_hint() {
     let state_file = dir.join("state");
     let p = Project {
         name: "hook-hint".into(),
-        path: env::current_dir().unwrap(),
+        path: dir.clone(),
         command: shell(),
         kind: Kind::Agent,
         autostart: false,
@@ -700,6 +716,50 @@ fn hook_needs_input_syncs_and_clears_prompt_hint() {
     assert!(s.read_hook_state());
     assert_eq!(s.phase(), AgentPhase::Done);
     assert!(s.prompt_hint.is_none());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pty_capture_deduplicates_output_and_records_prompts() {
+    use crate::session::diff_new_lines;
+    let lines: Vec<String> = ["a", "b", "c", "d", "e"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let anchor: Vec<String> = ["b", "c"].into_iter().map(String::from).collect();
+    assert_eq!(diff_new_lines(&lines, &anchor), vec!["d", "e"]);
+    assert!(diff_new_lines(&lines[..3], &anchor).is_empty());
+
+    let dir = scratch_dir("capture-dedup");
+    let p = Project {
+        name: "capture".into(),
+        path: dir.clone(),
+        command: shell(),
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+        restart_on_crash: false,
+    };
+    let mut s = Session::spawn(&p, 8, 60).unwrap();
+    s.input(b"\x1b[A").unwrap();
+    s.input(b"fix the bug\r").unwrap();
+    assert_eq!(s.take_task_prompts(), vec!["fix the bug"]);
+    assert!(s.take_task_prompts().is_empty());
+
+    s.parser.process(b"turn 1 line A\r\nturn 1 line B\r\n");
+    let out1 = s.capture_new_output();
+    assert!(
+        out1.contains("turn 1 line A") && out1.contains("turn 1 line B"),
+        "{out1}"
+    );
+    assert_eq!(s.capture_new_output(), "");
+
+    s.parser.process(b"turn 2 line C\r\n");
+    let out2 = s.capture_new_output();
+    assert_eq!(out2, "turn 2 line C");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -251,6 +251,7 @@ fn manual_stop_records_work_history_and_timer_phase_change_marks_dirty() {
     // Stop mid-task writes a history entry.
     let mut s2 = Session::spawn(&app.cfg.projects[0], 24, 80).unwrap();
     s2.work_started = Some(std::time::SystemTime::now() - Duration::from_secs(10));
+    s2.parser.process(b"working on task\r\n");
     app.sessions[0] = Some(s2);
     app.stop_slot(0, "stopped by user");
     crate::history::flush(Duration::from_secs(10));

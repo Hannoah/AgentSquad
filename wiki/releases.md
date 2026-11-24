@@ -8,6 +8,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.15.40 | 자동 작업 이력(.squad/log/) 전면 개편: 작업 종료마다 일별 단일 파일(<YYYYMMDD>-auto.md)에 날짜·시간(로컬)·에이전트·대화 전문(사용자 질문 + 에이전트 도구 작업/오류 + 답변 전체)을 중복 없이 영구 누적 보관(자동 삭제 제거·추후 LLMWiki 압축 전환 대비, MIN_TASK 2초), Claude Code JSONL 증분 커서(.squad/.history-cursor) 및 기타 에이전트 PTY 스크롤백·프롬프트 차분 기록, NeedsInput 중간 질문에서 작업 분할 중단, 히스토리 팝업 20만 자 확장, 세션 테스트가 저장소 .squad/events.log를 오염시키던 문제 격리 | 태그 `v0.15.40` 참고 |
 | v0.15.39 | Claude Code 훅 기반 상태 판정 보완(PermissionRequest 훅으로 권한 프롬프트 즉시 ? 표시, 훅 NeedsInput 시 사이드바 prompt_hint 동기화, 상태 파일에 나노초 시각 포함해 Windows NTFS mtime 틱 오차·동일 틱 덮어쓰기 방지) 및 공유 볼트 4종(env·skills·tools·refs) 모달을 src/app/vault.rs(VaultModal + VaultKindState)로 통합 | 태그 `v0.15.39` 참고 |
 | v0.15.38 | v0.15.35~37 릴리스를 막은 macOS 테스트 멈춤 수정: 빠른 답장 테스트가 실제 셸에 yes를 보내 출력이 폭주하던 것을 ok로 바꿈, pty 읽기 스레드가 채널이 닫혀도 끝까지 비우고 수신 채널을 쓰기 핸들보다 먼저 정리(출력이 많은 세션 종료 때 squad가 멈출 수 있던 경로), CI·릴리스 잡에 시간 제한 | 태그 `v0.15.38` 참고 |
 | v0.15.37 | Claude Code 에이전트 상태를 훅으로 판정(Stop 훅=완료, Notification 권한·질문=입력 대기; 세션별 상태 파일 AGENTSQUAD_STATE, 사용자가 그 뒤 입력하면 화면 판정으로 복귀, 1분 유휴 알림은 무시), 자동 재시작 횟수를 프로젝트 이름 키로(삭제 뒤 다른 프로젝트로 밀리던 문제), Windows 트리 종료 직전 생성 시각으로 PID 재확인, 위키 문서 불일치 정리 | 태그 `v0.15.37` 참고 |

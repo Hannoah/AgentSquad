@@ -339,6 +339,7 @@ fn sitreps_list_newest_first_with_readable_labels() {
         sitrep_label("20261108T061200Z-add-auth.md", 0),
         "11-08 06:12 add-auth"
     );
+    assert_eq!(sitrep_label("20261125-auto.md", 9 * 3600), "11-25 auto");
     // Shown in local time: nine hours ahead, and over midnight into the next day.
     assert_eq!(
         sitrep_label("20261108T061200Z-add-auth.md", 9 * 3600),

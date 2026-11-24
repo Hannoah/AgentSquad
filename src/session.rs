@@ -199,6 +199,47 @@ pub(crate) fn parse_hook_report(text: &str) -> Option<(AgentPhase, Option<std::t
     Some((phase, ts))
 }
 
+/// Return lines added strictly after the previous snapshot's trailing anchor.
+/// Uses the rightmost suffix match of `prev_anchor` (down to 3 lines when longer)
+/// so duplicate output is never appended even as scrollback advances.
+pub(crate) fn diff_new_lines(lines: &[String], prev_anchor: &[String]) -> Vec<String> {
+    let trim_bounds = |slice: &[String]| -> Vec<String> {
+        let start = slice
+            .iter()
+            .position(|l| !l.trim().is_empty())
+            .unwrap_or(slice.len());
+        let end = slice
+            .iter()
+            .rposition(|l| !l.trim().is_empty())
+            .map_or(start, |i| i + 1);
+        slice[start..end].to_vec()
+    };
+    if prev_anchor.is_empty() {
+        return trim_bounds(lines);
+    }
+    let non_empty: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(i, _)| i)
+        .collect();
+    let min_len = prev_anchor.len().min(3);
+    for suffix_len in (min_len..=prev_anchor.len()).rev() {
+        let target = &prev_anchor[prev_anchor.len() - suffix_len..];
+        if non_empty.len() < suffix_len {
+            continue;
+        }
+        for k in (0..=non_empty.len() - suffix_len).rev() {
+            let matches = (0..suffix_len).all(|j| lines[non_empty[k + j]] == target[j]);
+            if matches {
+                let after = non_empty[k + suffix_len - 1] + 1;
+                return trim_bounds(&lines[after..]);
+            }
+        }
+    }
+    trim_bounds(lines)
+}
+
 /// The phase Claude Code's own hooks report, while it still holds: they say
 /// when a turn ended (Stop) or a question is up (Notification), which no
 /// screen scan can be sure of. Typing after the report means the user moved
@@ -588,6 +629,12 @@ pub struct Session {
     hook_checked: Instant,
     /// The latest state the hooks reported, and when they wrote it.
     hook_phase: Option<(AgentPhase, Instant)>,
+    /// Trailing non-empty lines from the last captured history snapshot (dedup anchor).
+    history_anchor: Vec<String>,
+    /// Partial line typed by the user into the PTY before pressing Enter.
+    input_line_buf: String,
+    /// Prompt lines sent to the PTY during the current task.
+    task_prompts: Vec<String>,
     render: RefCell<Option<RenderCache>>,
 }
 impl Session {
@@ -719,6 +766,9 @@ impl Session {
             hook_seen_raw: None,
             hook_checked: Instant::now(),
             hook_phase: None,
+            history_anchor: Vec::new(),
+            input_line_buf: String::new(),
+            task_prompts: Vec::new(),
             render: RefCell::new(None),
         })
     }
@@ -965,9 +1015,111 @@ impl Session {
     pub fn input(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes)?;
         self.writer.flush()?;
+        self.record_input_for_history(bytes);
         self.last_input = Some(Instant::now());
         self.had_activity = true;
         Ok(())
+    }
+    fn record_input_for_history(&mut self, bytes: &[u8]) {
+        // Strip bracketed paste wrappers if present; drop pure control/escape sequences.
+        let inner = if let Some(rest) = bytes.strip_prefix(b"\x1b[200~") {
+            rest.strip_suffix(b"\x1b[201~").unwrap_or(rest)
+        } else if bytes.starts_with(b"\x1b") {
+            return;
+        } else {
+            bytes
+        };
+        let Ok(text) = std::str::from_utf8(inner) else {
+            return;
+        };
+        for c in text.chars() {
+            match c {
+                '\r' => {
+                    let line = std::mem::take(&mut self.input_line_buf);
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() && self.task_prompts.len() < 20 {
+                        self.task_prompts.push(trimmed.to_string());
+                    }
+                }
+                '\n' => {
+                    if !self.input_line_buf.is_empty() && self.input_line_buf.len() < 4000 {
+                        self.input_line_buf.push(' ');
+                    }
+                }
+                '\x08' | '\x7f' => {
+                    self.input_line_buf.pop();
+                }
+                '\x03' | '\x15' => {
+                    self.input_line_buf.clear();
+                }
+                _ if !c.is_control() && self.input_line_buf.len() < 4000 => {
+                    self.input_line_buf.push(c);
+                }
+                _ => {}
+            }
+        }
+    }
+    /// Take all user prompt lines recorded since the previous task.
+    pub fn take_task_prompts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.task_prompts)
+    }
+    /// Capture all new PTY scrollback/screen lines added since the previous snapshot.
+    pub fn capture_new_output(&mut self) -> String {
+        let saved = self.parser.screen().scrollback();
+        let total_sb = self.parser.screen().scrollback_len();
+        let (rows_nz, cols_nz) = self.parser.screen().size();
+        let (rows, cols) = (usize::from(rows_nz.get()), cols_nz.get());
+        let total_lines = total_sb + rows;
+        let mut all_lines = Vec::with_capacity(total_lines);
+        let mut start = 0usize;
+        while start < total_lines {
+            let sb = total_sb.saturating_sub(start);
+            self.parser.screen_mut().set_scrollback(sb);
+            let base = total_sb - self.parser.screen().scrollback();
+            for r in 0..rows {
+                let line = base + r;
+                if line < start {
+                    continue;
+                }
+                let text = self
+                    .parser
+                    .screen()
+                    .contents_between(r as u16, 0, r as u16, cols);
+                all_lines.push(text.trim_end().to_string());
+            }
+            start = base + rows;
+        }
+        self.parser.screen_mut().set_scrollback(saved);
+        while all_lines.last().is_some_and(|l| l.is_empty()) {
+            all_lines.pop();
+        }
+        let mut new_lines = diff_new_lines(&all_lines, &self.history_anchor);
+        let anchor: Vec<String> = all_lines
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .rev()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !anchor.is_empty() {
+            self.history_anchor = anchor;
+        }
+        if new_lines.len() > 2000 {
+            new_lines.drain(..new_lines.len() - 2000);
+        }
+        let mut out = new_lines.join("\n");
+        const MAX_BYTES: usize = 200 * 1024;
+        if out.len() > MAX_BYTES {
+            let mut cut = out.len() - MAX_BYTES;
+            while !out.is_char_boundary(cut) {
+                cut += 1;
+            }
+            out.drain(..cut);
+        }
+        out
     }
     pub fn phase(&self) -> AgentPhase {
         if !self.status.is_running() {

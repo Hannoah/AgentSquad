@@ -1269,19 +1269,13 @@ impl App {
                             );
                         }
                     }
-                    // The work history: squad files it, whatever the agent does.
+                    // The work history: squad files it once a task completes (not on intermediate questions).
                     if phase_now == AgentPhase::Working {
                         s.work_started.get_or_insert_with(SystemTime::now);
-                    } else if matches!(phase_now, AgentPhase::Done | AgentPhase::NeedsInput)
+                    } else if phase_now == AgentPhase::Done
                         || (phase_now == AgentPhase::Idle && s.last_phase == AgentPhase::Working)
                     {
-                        // A task ends when the agent finishes, stops to ask, or returns to idle.
-                        let how = match phase_now {
-                            AgentPhase::Done => "task complete",
-                            AgentPhase::NeedsInput => "waiting for your input",
-                            _ => "task complete",
-                        };
-                        file_history(s, &self.cfg.projects[pi], how.into());
+                        file_history(s, &self.cfg.projects[pi], "task complete".into());
                     }
                     s.last_phase = phase_now;
                 }
@@ -1633,14 +1627,19 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
     if took < history::MIN_TASK {
         return;
     }
+    let command = match &s.fg_name {
+        Some(fg) if is_bare_shell(&p.command) => fg.clone(),
+        _ => join_command(&p.command),
+    };
     history::record(history::Task {
         project: p.name.clone(),
         path: p.path.clone(),
-        command: join_command(&p.command),
+        command,
         started,
         took,
         outcome,
-        tail: s.tail_text(20),
+        prompts: s.take_task_prompts(),
+        output: s.capture_new_output(),
     });
 }
 
@@ -1707,7 +1706,7 @@ impl History {
             let t = std::fs::read_to_string(p).unwrap_or_else(|e| format!("Cannot read: {e}"));
             // Agent-written files are untrusted terminal input: strip control
             // characters so escape sequences cannot reach the outer terminal.
-            sanitize_chrome_text(&t).chars().take(20_000).collect()
+            sanitize_chrome_text(&t).chars().take(200_000).collect()
         });
     }
     fn select(&mut self, i: usize) {

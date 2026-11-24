@@ -526,6 +526,10 @@ pub fn list_entries(dir: &Path) -> Vec<(String, PathBuf)> {
 /// it is.
 pub fn sitrep_label(name: &str, offset_secs: i64) -> String {
     let stem = name.strip_suffix(".md").unwrap_or(name);
+    if stem.len() == 13 && stem.ends_with("-auto") && stem[..8].bytes().all(|b| b.is_ascii_digit())
+    {
+        return sanitize_chrome_line(&format!("{}-{} auto", &stem[4..6], &stem[6..8]));
+    }
     let b = stem.as_bytes();
     if b.len() >= 16 && b[8] == b'T' && b[15] == b'Z' && stem.is_char_boundary(16) {
         let (d, t, slug) = (&stem[..8], &stem[9..15], stem[16..].trim_start_matches('-'));
