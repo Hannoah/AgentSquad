@@ -606,8 +606,8 @@ fn scrollback_search_finds_ascii_and_hangul_matches_and_jumps() {
 
 #[test]
 fn hook_reports_hold_until_the_user_types_or_work_shows() {
-    use crate::session::{hook_verdict, parse_hook_state};
-    use std::time::{Duration, Instant};
+    use crate::session::{hook_verdict, parse_hook_report, parse_hook_state};
+    use std::time::{Duration, Instant, UNIX_EPOCH};
     assert_eq!(
         parse_hook_state(
             "done
@@ -620,6 +620,15 @@ fn hook_reports_hold_until_the_user_types_or_work_shows() {
         Some(AgentPhase::NeedsInput)
     );
     assert_eq!(parse_hook_state(""), None, "caught mid-write");
+    assert_eq!(parse_hook_report("done\n"), Some((AgentPhase::Done, None)));
+    assert_eq!(
+        parse_hook_report("needs-input 1700000000123456789\n"),
+        Some((
+            AgentPhase::NeedsInput,
+            Some(UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789))
+        ))
+    );
+    assert_eq!(parse_hook_report("needs-input badts\n"), None);
 
     let typed = Instant::now();
     let later = typed + Duration::from_millis(50);
@@ -641,4 +650,56 @@ fn hook_reports_hold_until_the_user_types_or_work_shows() {
     // Visible work wins too, and no report means no verdict.
     assert_eq!(hook_verdict(report, Some(typed), true), None);
     assert_eq!(hook_verdict(None, Some(typed), false), None);
+}
+
+#[test]
+fn hook_needs_input_syncs_and_clears_prompt_hint() {
+    let dir = scratch_dir("hook-prompt-hint");
+    let state_file = dir.join("state");
+    let p = Project {
+        name: "hook-hint".into(),
+        path: env::current_dir().unwrap(),
+        command: shell(),
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: false,
+        reports_to: None,
+        pinned: false,
+        restart_on_crash: false,
+    };
+    let mut s = Session::spawn(&p, 24, 80).unwrap();
+    s.hook_file = Some(state_file.clone());
+    s.parser
+        .process(b"\x1b[20;1HAllow Read tool on C:\\secret.txt?\r\n");
+
+    let body = crate::ledger::format_state_report(
+        crate::ledger::STATE_ASKING,
+        std::time::SystemTime::now(),
+    );
+    std::fs::write(&state_file, body).unwrap();
+    assert!(s.read_hook_state());
+    assert_eq!(s.phase(), AgentPhase::NeedsInput);
+    assert_eq!(
+        s.prompt_hint.as_deref(),
+        Some("Allow Read tool on C:\\secret.txt?")
+    );
+
+    // Subsequent refresh_screen_flags keeps prompt_hint while hook says NeedsInput.
+    s.refresh_screen_flags();
+    assert_eq!(
+        s.prompt_hint.as_deref(),
+        Some("Allow Read tool on C:\\secret.txt?")
+    );
+
+    // Same-tick overwrite to Done is still detected and clears prompt_hint.
+    let done_body = crate::ledger::format_state_report(
+        crate::ledger::STATE_DONE,
+        std::time::SystemTime::now() + Duration::from_millis(1),
+    );
+    std::fs::write(&state_file, done_body).unwrap();
+    assert!(s.read_hook_state());
+    assert_eq!(s.phase(), AgentPhase::Done);
+    assert!(s.prompt_hint.is_none());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
 }

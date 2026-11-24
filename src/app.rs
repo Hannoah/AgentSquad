@@ -45,6 +45,8 @@ pub(crate) mod actions;
 pub(crate) mod draw;
 pub(crate) mod keys;
 pub(crate) mod mouse;
+pub(crate) mod vault;
+pub(crate) use vault::*;
 
 /// The memory monitor: biggest processes, the picked row, and the process
 /// waiting for a yes/no before it is killed.
@@ -171,175 +173,6 @@ pub(crate) enum SendTo {
     All,
     /// A new commander name for the selected agent.
     Under,
-}
-
-/// Target for shared vault modals (`Env`, `Skills`, `Tools`, or the Add/Edit project form).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VaultTarget {
-    /// Opened from the Add/Edit project modal; `Enter` confirms selection back to `add_*`.
-    AddForm,
-    /// Opened from Manager on project `pi`; `Enter` writes checked items to `<project>`.
-    Project(usize),
-    /// Opened from Manager with no projects registered; manages the shared vault only.
-    VaultOnly,
-}
-
-pub(crate) type EnvTarget = VaultTarget;
-
-/// Inline form inside `EnvModal` for registering or editing a shared env variable.
-pub(crate) struct EnvEditor {
-    pub(crate) key: LineInput,
-    pub(crate) value: LineInput,
-    /// Active input field: `0` = key, `1` = value.
-    pub(crate) field: usize,
-    /// Original key when editing an existing entry; `None` when creating a new one.
-    pub(crate) editing_key: Option<String>,
-    pub(crate) err: String,
-}
-
-impl EnvEditor {
-    /// An empty form for a new variable.
-    pub(crate) fn blank() -> Self {
-        EnvEditor {
-            key: LineInput::new(),
-            value: LineInput::new(),
-            field: 0,
-            editing_key: None,
-            err: String::new(),
-        }
-    }
-}
-
-/// Shared Environment Variable Vault & `.env` assignment popup.
-/// `sel` runs one past the last variable: that row is "+ New variable".
-pub(crate) struct EnvModal {
-    pub(crate) target: VaultTarget,
-    pub(crate) sel: usize,
-    pub(crate) top: std::cell::Cell<usize>,
-    pub(crate) picked: BTreeSet<String>,
-    /// Existing keys/values parsed from the target project's `.env` file.
-    pub(crate) project_dotenv: BTreeMap<String, String>,
-    pub(crate) reveal: bool,
-    pub(crate) confirm_delete: Option<String>,
-    pub(crate) editor: Option<EnvEditor>,
-}
-
-/// Inline form inside `SkillModal` for registering or editing a shared skill.
-pub(crate) struct SkillEditor {
-    pub(crate) name: LineInput,
-    pub(crate) desc: LineInput,
-    pub(crate) body: LineInput,
-    /// Active input field: `0` = name, `1` = description, `2` = source path or instructions.
-    pub(crate) field: usize,
-    pub(crate) editing_name: Option<String>,
-    /// Preserves multi-line TOML instructions when the body line wasn't modified in TUI.
-    pub(crate) initial_body_preview: String,
-    pub(crate) preserved_multiline: Option<String>,
-    pub(crate) err: String,
-}
-
-impl SkillEditor {
-    pub(crate) fn blank() -> Self {
-        SkillEditor {
-            name: LineInput::new(),
-            desc: LineInput::new(),
-            body: LineInput::new(),
-            field: 0,
-            editing_name: None,
-            initial_body_preview: String::new(),
-            preserved_multiline: None,
-            err: String::new(),
-        }
-    }
-}
-
-/// Shared Skills Vault & project `.agents/skills` + `.claude/skills` sync popup.
-pub(crate) struct SkillModal {
-    pub(crate) target: VaultTarget,
-    pub(crate) sel: usize,
-    pub(crate) top: std::cell::Cell<usize>,
-    pub(crate) picked: BTreeSet<String>,
-    pub(crate) project_state: ProjectSkills,
-    pub(crate) confirm_delete: Option<String>,
-    /// Skills whose same-named folders in the project differ from the vault
-    /// version: the sync waits for y (overwrite), n (keep them) or Esc.
-    pub(crate) confirm_overwrite: Option<Vec<String>>,
-    pub(crate) editor: Option<SkillEditor>,
-}
-
-/// Inline form inside `ToolModal` for registering or editing a shared MCP or CLI tool.
-pub(crate) struct ToolEditor {
-    pub(crate) kind: ToolKind,
-    pub(crate) name: LineInput,
-    pub(crate) command: LineInput,
-    pub(crate) desc: LineInput,
-    /// Active input field: `0` = kind toggle, `1` = name, `2` = cmd/url, `3` = description.
-    pub(crate) field: usize,
-    pub(crate) editing_name: Option<String>,
-    pub(crate) preserved_env: BTreeMap<String, String>,
-    pub(crate) err: String,
-}
-
-impl ToolEditor {
-    pub(crate) fn blank() -> Self {
-        ToolEditor {
-            kind: ToolKind::Mcp,
-            name: LineInput::new(),
-            command: LineInput::new(),
-            desc: LineInput::new(),
-            field: 0,
-            editing_name: None,
-            preserved_env: BTreeMap::new(),
-            err: String::new(),
-        }
-    }
-}
-
-/// Shared Tools Vault & project MCP (`.mcp.json`, `.agents/mcp_config.json`,
-/// `.codex/config.toml`) + `.squad/TOOLS.md` sync popup.
-pub(crate) struct ToolModal {
-    pub(crate) target: VaultTarget,
-    pub(crate) sel: usize,
-    pub(crate) top: std::cell::Cell<usize>,
-    pub(crate) picked: BTreeSet<String>,
-    pub(crate) project_state: ProjectTools,
-    pub(crate) confirm_delete: Option<String>,
-    pub(crate) editor: Option<ToolEditor>,
-}
-
-/// Inline form inside `RefModal` for registering or editing a shared reference link.
-pub(crate) struct RefEditor {
-    pub(crate) name: LineInput,
-    pub(crate) url: LineInput,
-    pub(crate) desc: LineInput,
-    /// Active input field: `0` = name (optional; derived from URL if blank), `1` = url, `2` = desc.
-    pub(crate) field: usize,
-    pub(crate) editing_name: Option<String>,
-    pub(crate) err: String,
-}
-
-impl RefEditor {
-    pub(crate) fn blank() -> Self {
-        RefEditor {
-            name: LineInput::new(),
-            url: LineInput::new(),
-            desc: LineInput::new(),
-            field: 1, // start on URL so user can paste a GitHub link immediately; Name auto-fills if empty
-            editing_name: None,
-            err: String::new(),
-        }
-    }
-}
-
-/// Shared Reference Links Vault & `CLAUDE.md` / `AGENTS.md` sync popup.
-pub(crate) struct RefModal {
-    pub(crate) target: VaultTarget,
-    pub(crate) sel: usize,
-    pub(crate) top: std::cell::Cell<usize>,
-    pub(crate) picked: BTreeSet<String>,
-    pub(crate) project_state: ProjectReferences,
-    pub(crate) confirm_delete: Option<String>,
-    pub(crate) editor: Option<RefEditor>,
 }
 
 /// What the read-only environment popup shows: project `pi`'s `.env`, read
@@ -676,18 +509,12 @@ pub(crate) struct App {
     pub(crate) gsearch: Option<GSearch>,
     /// The memory monitor (`M`), open over the manager.
     pub(crate) procs: Option<ProcList>,
-    /// Shared environment variable vault & `.env` assignment modal (`E` or Add form).
+    /// Shared vaults & active unified vault modal (`E`/`K`/`T`/`R` or Add form).
     pub(crate) env_vault: EnvVault,
-    pub(crate) env_modal: Option<EnvModal>,
-    /// Shared skills vault & project sync modal (`K` or Add form).
     pub(crate) skills_vault: SkillVault,
-    pub(crate) skill_modal: Option<SkillModal>,
-    /// Shared tools vault & project MCP/CLI sync modal (`T` or Add form).
     pub(crate) tools_vault: ToolVault,
-    pub(crate) tool_modal: Option<ToolModal>,
-    /// Shared references vault & `CLAUDE.md`/`AGENTS.md` sync modal (`R` or Add form).
     pub(crate) refs_vault: ReferenceVault,
-    pub(crate) ref_modal: Option<RefModal>,
+    pub(crate) vault_modal: Option<VaultModal>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
     pub(crate) starting: HashMap<String, Vec<u8>>,
@@ -847,13 +674,10 @@ impl App {
             gsearch: None,
             procs: None,
             env_vault,
-            env_modal: None,
             skills_vault,
-            skill_modal: None,
             tools_vault,
-            tool_modal: None,
             refs_vault,
-            ref_modal: None,
+            vault_modal: None,
             starting: HashMap::new(),
             auto_restarts: HashMap::new(),
             start_tx,
@@ -881,10 +705,7 @@ impl App {
 
     /// True when any overlay popup (other than `Mode::Help` / `Mode::Add`) is open.
     pub(crate) fn has_overlay(&self) -> bool {
-        self.env_modal.is_some()
-            || self.skill_modal.is_some()
-            || self.tool_modal.is_some()
-            || self.ref_modal.is_some()
+        self.vault_modal.is_some()
             || self.history.is_some()
             || self.git_view.is_some()
             || self.gsearch.is_some()
@@ -909,16 +730,10 @@ impl App {
     /// (no Korean prose composition needed), so the OS IME can temporarily
     /// switch to English to avoid holding consonants in a preedit box.
     pub(crate) fn wants_ascii_ime(&self) -> bool {
-        if self.env_modal.as_ref().is_some_and(|m| m.editor.is_some())
-            || self
-                .skill_modal
-                .as_ref()
-                .is_some_and(|m| m.editor.is_some())
-            || self
-                .tool_modal
-                .as_ref()
-                .is_some_and(|m| m.editor.as_ref().is_some_and(|e| e.field != 0))
-            || self.ref_modal.as_ref().is_some_and(|m| m.editor.is_some())
+        if self
+            .vault_modal
+            .as_ref()
+            .is_some_and(VaultModal::wants_text_input)
             || self.quick_reply.as_ref().is_some_and(|q| q.typing)
         {
             return false;
@@ -1231,7 +1046,7 @@ impl App {
         }
     }
 
-    fn target_dir(&self, target: VaultTarget) -> Option<std::path::PathBuf> {
+    pub(super) fn target_dir(&self, target: VaultTarget) -> Option<std::path::PathBuf> {
         match target {
             VaultTarget::AddForm => self
                 .add_edit
@@ -1244,114 +1059,6 @@ impl App {
             VaultTarget::Project(pi) => self.cfg.projects.get(pi).map(|p| p.path.clone()),
             VaultTarget::VaultOnly => None,
         }
-    }
-
-    pub(crate) fn open_env_modal(&mut self, target: VaultTarget) {
-        if let Ok(fresh) = envvault::load_env() {
-            self.env_vault = fresh;
-        }
-        let project_dotenv = self
-            .target_dir(target)
-            .map(|dir| envvault::read_dotenv(&dir))
-            .unwrap_or_default();
-        let picked = match target {
-            VaultTarget::AddForm => self.add_env.clone(),
-            VaultTarget::Project(_) => self
-                .env_vault
-                .vars
-                .iter()
-                .filter(|e| project_dotenv.contains_key(&e.key))
-                .map(|e| e.key.clone())
-                .collect(),
-            VaultTarget::VaultOnly => BTreeSet::new(),
-        };
-        let editor = self.env_vault.vars.is_empty().then(EnvEditor::blank);
-        self.env_modal = Some(EnvModal {
-            target,
-            sel: 0,
-            top: Default::default(),
-            picked,
-            project_dotenv,
-            reveal: false,
-            confirm_delete: None,
-            editor,
-        });
-    }
-
-    pub(crate) fn open_skill_modal(&mut self, target: VaultTarget) {
-        if let Ok(fresh) = skills::load_skills() {
-            self.skills_vault = fresh;
-        }
-        let project_state = self
-            .target_dir(target)
-            .map(|dir| skills::read_project_skills(&dir, &self.skills_vault))
-            .unwrap_or_default();
-        let picked = match target {
-            VaultTarget::AddForm => self.add_skills.clone(),
-            VaultTarget::Project(_) => project_state.vault_state.keys().cloned().collect(),
-            VaultTarget::VaultOnly => BTreeSet::new(),
-        };
-        let editor = self.skills_vault.skills.is_empty().then(SkillEditor::blank);
-        self.skill_modal = Some(SkillModal {
-            target,
-            sel: 0,
-            top: Default::default(),
-            picked,
-            project_state,
-            confirm_delete: None,
-            confirm_overwrite: None,
-            editor,
-        });
-    }
-
-    pub(crate) fn open_tool_modal(&mut self, target: VaultTarget) {
-        if let Ok(fresh) = tools::load_tools() {
-            self.tools_vault = fresh;
-        }
-        let project_state = self
-            .target_dir(target)
-            .map(|dir| tools::read_project_tools(&dir, &self.tools_vault))
-            .unwrap_or_default();
-        let picked = match target {
-            VaultTarget::AddForm => self.add_tools.clone(),
-            VaultTarget::Project(_) => project_state.vault_state.keys().cloned().collect(),
-            VaultTarget::VaultOnly => BTreeSet::new(),
-        };
-        let editor = self.tools_vault.tools.is_empty().then(ToolEditor::blank);
-        self.tool_modal = Some(ToolModal {
-            target,
-            sel: 0,
-            top: Default::default(),
-            picked,
-            project_state,
-            confirm_delete: None,
-            editor,
-        });
-    }
-
-    pub(crate) fn open_ref_modal(&mut self, target: VaultTarget) {
-        if let Ok(fresh) = refs::load_refs() {
-            self.refs_vault = fresh;
-        }
-        let project_state = self
-            .target_dir(target)
-            .map(|dir| refs::read_project_refs(&dir, &self.refs_vault))
-            .unwrap_or_default();
-        let picked = match target {
-            VaultTarget::AddForm => self.add_refs.clone(),
-            VaultTarget::Project(_) => project_state.vault_state.keys().cloned().collect(),
-            VaultTarget::VaultOnly => BTreeSet::new(),
-        };
-        let editor = self.refs_vault.references.is_empty().then(RefEditor::blank);
-        self.ref_modal = Some(RefModal {
-            target,
-            sel: 0,
-            top: Default::default(),
-            picked,
-            project_state,
-            confirm_delete: None,
-            editor,
-        });
     }
 
     /// Jump to the next project needing attention (`?`, failed/errored, or

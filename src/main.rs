@@ -77,11 +77,15 @@ fn main() -> Result<()> {
     // Claude Code's hooks (see ledger::hook_settings); need no config either.
     if args.first().map(String::as_str) == Some("hook") {
         let sub = args.get(1).map(String::as_str);
-        if !matches!(sub, Some("stop" | "notify")) {
-            bail!("Usage: squad hook stop|notify (run by Claude Code, not by hand)");
+        if !matches!(sub, Some("stop" | "notify" | "permission")) {
+            bail!("Usage: squad hook stop|notify|permission (run by Claude Code, not by hand)");
         }
         let mut input = String::new();
         let _ = io::stdin().read_to_string(&mut input);
+        if sub == Some("permission") {
+            ledger::write_state(ledger::STATE_ASKING);
+            return Ok(());
+        }
         if sub == Some("notify") {
             if ledger::notification_asks(&input) {
                 ledger::write_state(ledger::STATE_ASKING);

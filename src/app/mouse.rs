@@ -3,7 +3,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn on_paste(&mut self, data: String) {
+    pub(crate) fn on_paste(&mut self, data: String) {
         self.dirty = true;
         if self.mode == Mode::Focus {
             if let Some(&pi) = self.order.get(self.selected) {
@@ -37,44 +37,7 @@ impl App {
                 self.search_buf.insert(ch);
             }
             self.sync_search(true);
-        } else if let Some(ed) = self.env_modal.as_mut().and_then(|m| m.editor.as_mut()) {
-            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                if ed.field == 0 {
-                    ed.key.insert(ch);
-                } else {
-                    ed.value.insert(ch);
-                }
-            }
-            ed.err.clear();
-        } else if let Some(ed) = self.skill_modal.as_mut().and_then(|m| m.editor.as_mut()) {
-            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                match ed.field {
-                    0 => ed.name.insert(ch),
-                    1 => ed.desc.insert(ch),
-                    _ => ed.body.insert(ch),
-                }
-            }
-            ed.err.clear();
-        } else if let Some(ed) = self.tool_modal.as_mut().and_then(|m| m.editor.as_mut()) {
-            if ed.field != 0 {
-                for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                    match ed.field {
-                        1 => ed.name.insert(ch),
-                        2 => ed.command.insert(ch),
-                        _ => ed.desc.insert(ch),
-                    }
-                }
-                ed.err.clear();
-            }
-        } else if let Some(ed) = self.ref_modal.as_mut().and_then(|m| m.editor.as_mut()) {
-            for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                match ed.field {
-                    0 => ed.name.insert(ch),
-                    1 => ed.url.insert(ch),
-                    _ => ed.desc.insert(ch),
-                }
-            }
-            ed.err.clear();
+        } else if self.paste_vault_modal(&data) {
         } else if self.mode == Mode::Add {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
                 if let Some(input) = self.add_input() {
@@ -98,26 +61,8 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) || wheel_lines(m.kind).is_some() {
             self.sel = None; // the cells would no longer match the text
         }
-        if let (Some(lines), Some(m_env)) = (wheel_lines(m.kind), self.env_modal.as_mut()) {
-            // Down to the "+ New variable" row at index `len`.
-            let len = self.env_vault.vars.len();
-            m_env.confirm_delete = None;
-            m_env.sel = step_modal_sel(m_env.sel, len, lines > 0);
-            self.dirty = true;
-        } else if let (Some(lines), Some(m_sk)) = (wheel_lines(m.kind), self.skill_modal.as_mut()) {
-            let len = self.skills_vault.skills.len();
-            m_sk.confirm_delete = None;
-            m_sk.sel = step_modal_sel(m_sk.sel, len, lines > 0);
-            self.dirty = true;
-        } else if let (Some(lines), Some(m_tl)) = (wheel_lines(m.kind), self.tool_modal.as_mut()) {
-            let len = self.tools_vault.tools.len();
-            m_tl.confirm_delete = None;
-            m_tl.sel = step_modal_sel(m_tl.sel, len, lines > 0);
-            self.dirty = true;
-        } else if let (Some(lines), Some(m_rf)) = (wheel_lines(m.kind), self.ref_modal.as_mut()) {
-            let len = self.refs_vault.references.len();
-            m_rf.confirm_delete = None;
-            m_rf.sel = step_modal_sel(m_rf.sel, len, lines > 0);
+        if let Some(lines) = wheel_lines(m.kind).filter(|_| self.vault_modal.is_some()) {
+            self.wheel_vault_modal(lines > 0);
             self.dirty = true;
         } else if let (Some(lines), Some(p)) = (wheel_lines(m.kind), self.procs.as_mut()) {
             // The memory monitor is modal: the wheel moves its pick.
@@ -242,84 +187,8 @@ impl App {
             let answer = self.confirm_modals().last().and_then(|(_, _, lines)| {
                 confirm_click(lines, modal_rect(lines, area.into()), m.column, m.row)
             });
-            if let Some(m_env) = self.env_modal.as_mut() {
-                let vars = &self.env_vault.vars;
-                if !handle_vault_click(
-                    area,
-                    m,
-                    5,
-                    m_env.target,
-                    m_env.top.get(),
-                    &mut m_env.sel,
-                    &mut m_env.confirm_delete,
-                    &mut m_env.picked,
-                    &mut m_env.editor,
-                    vars.len(),
-                    |i| vars[i].key.clone(),
-                    EnvEditor::blank,
-                ) {
-                    self.env_modal = None;
-                }
-                self.dirty = true;
-            } else if let Some(m_sk) = self.skill_modal.as_mut() {
-                let list = &self.skills_vault.skills;
-                // A click while the overwrite question waits only dismisses it.
-                if m_sk.confirm_overwrite.take().is_none()
-                    && !handle_vault_click(
-                        area,
-                        m,
-                        6,
-                        m_sk.target,
-                        m_sk.top.get(),
-                        &mut m_sk.sel,
-                        &mut m_sk.confirm_delete,
-                        &mut m_sk.picked,
-                        &mut m_sk.editor,
-                        list.len(),
-                        |i| list[i].name.clone(),
-                        SkillEditor::blank,
-                    )
-                {
-                    self.skill_modal = None;
-                }
-                self.dirty = true;
-            } else if let Some(m_tl) = self.tool_modal.as_mut() {
-                let list = &self.tools_vault.tools;
-                if !handle_vault_click(
-                    area,
-                    m,
-                    7,
-                    m_tl.target,
-                    m_tl.top.get(),
-                    &mut m_tl.sel,
-                    &mut m_tl.confirm_delete,
-                    &mut m_tl.picked,
-                    &mut m_tl.editor,
-                    list.len(),
-                    |i| list[i].name.clone(),
-                    ToolEditor::blank,
-                ) {
-                    self.tool_modal = None;
-                }
-                self.dirty = true;
-            } else if let Some(m_rf) = self.ref_modal.as_mut() {
-                let list = &self.refs_vault.references;
-                if !handle_vault_click(
-                    area,
-                    m,
-                    6,
-                    m_rf.target,
-                    m_rf.top.get(),
-                    &mut m_rf.sel,
-                    &mut m_rf.confirm_delete,
-                    &mut m_rf.picked,
-                    &mut m_rf.editor,
-                    list.len(),
-                    |i| list[i].name.clone(),
-                    RefEditor::blank,
-                ) {
-                    self.ref_modal = None;
-                }
+            if self.vault_modal.is_some() {
+                self.click_vault_modal(area, m);
                 self.dirty = true;
             } else if let Some(qr) = self.quick_reply.as_mut() {
                 let popup = quick_reply_popup(area.into(), qr.tail.len());
@@ -736,53 +605,4 @@ impl App {
             }
         }
     }
-}
-
-fn step_modal_sel(cur: usize, len: usize, up: bool) -> usize {
-    if up {
-        cur.saturating_sub(1)
-    } else {
-        (cur + 1).min(len)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn handle_vault_click<E>(
-    area: Size,
-    m: MouseEvent,
-    editor_h: u16,
-    target: VaultTarget,
-    top: usize,
-    sel: &mut usize,
-    confirm_delete: &mut Option<String>,
-    picked: &mut BTreeSet<String>,
-    editor: &mut Option<E>,
-    names_len: usize,
-    name_at: impl FnOnce(usize) -> String,
-    blank: impl FnOnce() -> E,
-) -> bool {
-    let popup = vault_popup(area.into());
-    let at = ratatui::layout::Position::new(m.column, m.row);
-    let list = vault_list_rect(popup, if editor.is_some() { editor_h } else { 0 });
-    if !popup.contains(at) {
-        return false;
-    }
-    if list.contains(at) {
-        let i = top + usize::from(m.row - list.y);
-        if i == names_len && editor.is_none() {
-            *confirm_delete = None;
-            *sel = i;
-            *editor = Some(blank());
-        } else if i < names_len {
-            *confirm_delete = None;
-            *sel = i;
-            if target != VaultTarget::VaultOnly && editor.is_none() {
-                let name = name_at(i);
-                if !picked.remove(&name) {
-                    picked.insert(name);
-                }
-            }
-        }
-    }
-    true
 }

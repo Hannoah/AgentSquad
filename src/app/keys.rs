@@ -23,20 +23,8 @@ impl App {
             return;
         }
         self.sel = None;
-        if self.env_modal.is_some() {
-            self.key_env_modal(k);
-            return;
-        }
-        if self.skill_modal.is_some() {
-            self.key_skill_modal(k);
-            return;
-        }
-        if self.tool_modal.is_some() {
-            self.key_tool_modal(k);
-            return;
-        }
-        if self.ref_modal.is_some() {
-            self.key_ref_modal(k);
+        if self.vault_modal.is_some() {
+            self.key_vault_modal(k);
             return;
         }
         if self.quick_reply.is_some() {

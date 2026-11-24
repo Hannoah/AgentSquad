@@ -50,9 +50,9 @@
 | 릴리스 스크립트가 Windows만 검사하고 태그를 push해 macOS 전용 오류가 태그 뒤에 드러남(v0.15.30~33 에셋 없음) | 고침 v0.15.35 | `release.ps1`이 `aarch64-apple-darwin` clippy를 돌린다(링커 불필요) |
 | Git 보기(`g`)가 UI 스레드에서 `git status -uall`/`git diff` 실행, 큰 저장소에서 멈춤 | 고침 v0.15.35 | 창마다 워커 하나, 밀린 요청은 최신 것만 처리. 브랜치 확인(`rev-parse`)은 여전히 동기 |
 | 스킬 동기화가 같은 이름의 프로젝트 자체 스킬이나 수정본을 `remove_dir_all`로 덮어씀 | 고침 v0.15.36 | 기존 스킬은 두고 추가만. 같은 이름이 다르면 `K`에서 묻고, 폼과 CLI는 유지(`--force`) |
-| 에이전트 상태를 화면 문구로만 추측 | 고침 v0.15.37 | Claude Code는 Stop/Notification 훅이 상태 파일로 알림. 실제 Claude Code에서 확인 못 함([open-work.md](open-work.md)) |
+| 에이전트 상태를 화면 문구로만 추측 | 고침 v0.15.37 | Claude Code는 Stop/Notification/PermissionRequest 훅이 상태 파일로 알림(v0.15.39에서 PermissionRequest 즉시 `?`, `prompt_hint` 동기화, 나노초 타임스탬프 보완). 실제 Claude Code에서 확인 못 함([open-work.md](open-work.md)) |
 | 자동 재시작 횟수가 프로젝트 인덱스 키라 삭제 뒤 다른 프로젝트로 밀림 | 고침 v0.15.37 | 이름 키, 사라진 프로젝트 항목 정리 |
 | Windows 트리 종료가 스냅샷과 `TerminateProcess` 사이 PID 재사용에 무방비 | 고침 v0.15.37 | 종료 직전 핸들로 생성 시각 재확인 |
 | 업데이트 체크섬이 바이너리와 같은 릴리스에서 옴(릴리스 계정 탈취는 못 막음), 출처 증명은 업데이터가 검증 안 함 | 보류 | 개인 도구 수준에선 허용. 근본 해결은 SignPath 서명(사용자 설정 필요, [build-and-release.md](build-and-release.md)) |
-| 볼트 4종(env/skills/tools/refs) 모달·에디터·그리기 코드가 거의 복사본 | 보류 | [open-work.md](open-work.md) 결정 기록 참고 |
+| 볼트 4종(env/skills/tools/refs) 모달·에디터·그리기 코드가 거의 복사본 | 고침 v0.15.39 | `VaultModal` + `VaultKindState`로 `src/app/vault.rs`에 통합 |
 | 자체 JSON 파서(약 400줄)와 SHA-256 | 안 함 | 의존성 없이 유지한다는 기존 결정. 테스트 벡터로 검증됨 |

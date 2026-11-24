@@ -158,3 +158,7 @@ v0.15.35: 릴리스 스크립트 macOS 타깃 clippy, Git 보기 워커 스레�
 ## [2026-11-24] 배포 | v0.15.38
 v0.15.35~37의 macOS 테스트 잡이 모두 `quick_reply_opens_via_badge_and_cycles_waiting_agents`에서 멈춤(취소한 잡 로그의 `running for over 60 seconds`로 확인). v0.15.34 CI 취소도 같은 테스트였다. 테스트가 실제 셸에 빠른 답장 `yes`를 보내 macOS에서 `yes` 명령이 출력을 쏟고, 테스트는 출력을 읽지 않아 채널(32)이 차서 읽기 스레드가 멈춘 상태에서 세션 정리가 portable-pty 쓰기 핸들의 `
 `+EOF 쓰기(에코가 출력 큐 자리를 기다림)로 막힌 것으로 추정. 고침: 테스트 답장을 `ok`로, 읽기 스레드는 채널이 닫혀도 pty를 끝까지 비움, `rx`를 `writer`보다 먼저 정리(필드 순서), CI·릴리스 잡에 `timeout-minutes`. 실제 앱에서도 출력이 쏟아지는 세션을 정리할 때 같은 막힘이 날 수 있었다. macOS에서 직접 재현은 못 함. v0.15.35~37 태그는 릴리스 없이 남음.
+
+
+## [2026-11-25] 배포 | v0.15.39
+v0.15.38 GitHub Release 워크플로(4개 잡 전원 성공) 및 에셋 6개 게시를 확인했다. 이어서 남은 두 과제를 처리했다: (1) Claude Code 훅 상태 판정 보완 — `PermissionRequest` 훅(`squad hook permission`)을 추가해 `Notification`(~6초 지연)을 기다리지 않고 권한 프롬프트 즉시 `?`가 뜨게 하고, 훅 `NeedsInput` 보고 시 사이드바 `prompt_hint`를 동기화하며, `AGENTSQUAD_STATE`에 나노초 UNIX 타임스탬프를 함께 써 Windows NTFS `mtime` 틱 오차·동일 틱 덮어쓰기를 방지했다(실제 Claude Code 세션 체감 확인은 사용 한도 해제 후로 보류). (2) 공유 볼트 4종(`EnvModal`, `SkillModal`, `ToolModal`, `RefModal`)을 `VaultModal` + `VaultKindState` 구조로 `src/app/vault.rs`에 단일화해 `app.rs`·`actions.rs`·`draw.rs`·`keys.rs`·`mouse.rs`의 중복 약 1,500줄을 제거했다. → [releases.md](releases.md)

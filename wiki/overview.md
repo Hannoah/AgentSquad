@@ -5,7 +5,7 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 ## 구조
 
 - 바이너리 `squad`의 진입점은 `src/main.rs`(CLI 명령 처리)이고, 나머지는 모듈로 나뉜다.
-  - `app`: 이벤트 루프. `app.rs`(상태, 틱 처리, `run`), `app/draw.rs`(그리기), `app/keys.rs`(키 입력), `app/mouse.rs`(마우스, 붙여넣기, 크기 변경), `app/actions.rs`(확인창, 우클릭 메뉴, 명령 하달, 브리핑).
+  - `app`: 이벤트 루프. `app.rs`(상태, 틱 처리, `run`), `app/draw.rs`(그리기), `app/keys.rs`(키 입력), `app/mouse.rs`(마우스, 붙여넣기, 크기 변경), `app/actions.rs`(확인창, 우클릭 메뉴, 명령 하달, 브리핑), `app/vault.rs`(공유 볼트 4종 통합 모달).
   - `config`: 설정 파일과 프로젝트 모델(종류, 지휘 관계, 고정).
   - `session`: PTY 세션과 `SessionStatus`.
   - `sys`: 프로세스 트리, CPU/메모리 측정, 프로세스 종료. 플랫폼별 코드는 `cfg`로 나눈다.
@@ -45,5 +45,5 @@ AgentSquad(`squad`)는 프로젝트마다 터미널 세션 하나를 한 화면�
 ## 에이전트 상태 판정
 
 - 화면 하단 텍스트(진행 표시, `esc to interrupt`, `[y/n]` 같은 문구), 최근 출력·입력 시각, 프로세스 트리 CPU를 합쳐 `Working / NeedsInput / Done / Idle`을 정한다(`session.rs`). 벨, 창 제목 `(N)`, 작업 이력, `REPORTS.md`가 모두 이 판정을 쓴다.
-- Claude Code 에이전트(ledger가 있고 자체 `--settings`가 없을 때)는 squad가 넣는 `hook.json`의 Stop/Notification 훅이 `AGENTSQUAD_STATE`가 가리키는 세션별 임시 파일에 `done`/`needs-input`을 쓴다. squad는 100ms마다 그 파일을 보고, 훅의 보고가 마지막 키 입력보다 새롭고 화면에 작업 흔적이 없으면 그 값을 쓴다. 사용자가 그 뒤에 입력하면(답변, 중단, 새 요청) 다시 화면 판정으로 돌아간다(v0.15.37).
-- 훅은 턴마다 한 번 오는 이벤트만 쓴다. 도구 호출마다 오는 훅은 Windows에서 PowerShell을 매번 띄워 에이전트가 느려진다. 1분 유휴 알림(`idle_prompt`)은 질문이 아니라서 무시한다.
+- Claude Code 에이전트(ledger가 있고 자체 `--settings`가 없을 때)는 squad가 넣는 `hook.json`의 Stop/Notification/`PermissionRequest` 훅이 `AGENTSQUAD_STATE`가 가리키는 세션별 임시 파일에 `done`/`needs-input`과 나노초 UNIX 시각을 쓴다. `PermissionRequest`는 권한 창이 뜨자마자 즉시 `?`를 띄우고(`Notification`의 `permission_prompt`는 ~6초 지연), `Notification`은 `elicitation_dialog` 및 구버전 호환을 맡는다. squad는 100ms마다 그 파일을 보고, 훅의 보고가 마지막 키 입력보다 새롭고 화면에 작업 흔적이 없으면 그 값을 쓰며 `NeedsInput` 때는 사이드바 `prompt_hint`도 맞춘다. 사용자가 그 뒤에 입력하면(답변, 중단, 새 요청) 다시 화면 판정으로 돌아간다(v0.15.37, v0.15.39 보완).
+- 훅은 턴 단위/권한 요청 이벤트만 쓰며 이미 허용된 일반 도구 호출에는 뜨지 않는다. 1분 유휴 알림(`idle_prompt`)은 질문이 아니라서 무시한다.

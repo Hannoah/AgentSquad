@@ -381,11 +381,14 @@ pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
 }
 
 /// Claude Code settings that run `squad hook stop` when the agent finishes a
-/// turn and `squad hook notify` when it asks for something. Pinned to
+/// turn, `squad hook notify` on notifications (`elicitation_dialog` or older
+/// versions), and `squad hook permission` on `PermissionRequest`.
+/// `PermissionRequest` fires as soon as a tool permission dialog opens
+/// (whereas `Notification`'s `permission_prompt` is delayed ~6s by Claude Code),
+/// and neither fires for routine already-allowed tool calls. Pinned to
 /// PowerShell on Windows: Claude Code otherwise picks the shell itself, and a
 /// quoted path alone is a syntax error in PowerShell. Elsewhere the hooks run
-/// under bash. Only once-per-turn events: a per-tool hook would start a shell
-/// on every tool call.
+/// under bash.
 fn hook_settings(exe: &Path) -> String {
     let exe = exe.display().to_string();
     let (shell, exe) = if cfg!(windows) {
@@ -403,9 +406,10 @@ fn hook_settings(exe: &Path) -> String {
         format!(r#"[{{"hooks":[{{"type":"command","shell":"{shell}","command":"{command}"}}]}}]"#)
     };
     format!(
-        r#"{{"hooks":{{"Stop":{},"Notification":{}}}}}"#,
+        r#"{{"hooks":{{"Stop":{},"Notification":{},"PermissionRequest":{}}}}}"#,
         hook("stop"),
-        hook("notify")
+        hook("notify"),
+        hook("permission"),
     )
 }
 
@@ -416,11 +420,23 @@ pub const STATE_ENV: &str = "AGENTSQUAD_STATE";
 pub const STATE_DONE: &str = "done";
 pub const STATE_ASKING: &str = "needs-input";
 
+/// Format a hook state report with a nanosecond UNIX timestamp so sub-tick
+/// writes on coarse filesystem clocks (such as Windows NTFS) remain distinct
+/// and orderable against recent user input.
+pub(crate) fn format_state_report(state: &str, now: std::time::SystemTime) -> String {
+    let ns = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{state} {ns}\n")
+}
+
 /// Record `state` for the squad session this hook runs in. Silent and best
 /// effort: outside squad (no variable) nothing happens.
 pub fn write_state(state: &str) {
     if let Some(file) = std::env::var_os(STATE_ENV).filter(|v| !v.is_empty()) {
-        let _ = fs::write(file, state);
+        let body = format_state_report(state, std::time::SystemTime::now());
+        let _ = fs::write(file, body);
     }
 }
 

@@ -309,8 +309,27 @@ fn hook_settings_file_runs_squad_hook_stop() {
         text.contains(r#""Notification""#) && text.contains("' hook notify"),
         "{text}"
     );
+    assert!(
+        text.contains(r#""PermissionRequest""#) && text.contains("' hook permission"),
+        "{text}"
+    );
     assert!(!text.contains(r"\U"), "forward slashes only: {text}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn format_state_report_embeds_subsecond_unix_timestamp() {
+    use crate::ledger::{format_state_report, STATE_ASKING, STATE_DONE};
+    use std::time::{Duration, UNIX_EPOCH};
+    let ts = UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_700);
+    assert_eq!(
+        format_state_report(STATE_DONE, ts),
+        "done 1700000000123456700\n"
+    );
+    assert_eq!(
+        format_state_report(STATE_ASKING, ts),
+        "needs-input 1700000000123456700\n"
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{
-    auto_restart_due, crash_log_needs_rotation, App, GHit, GSearch, SkillModal, VaultTarget,
-    AUTO_RESTART_MAX_TRIES, CRASH_LOG_MAX_BYTES,
+    auto_restart_due, crash_log_needs_rotation, App, GHit, GSearch, VaultKindState, VaultModal,
+    VaultTarget, AUTO_RESTART_MAX_TRIES, CRASH_LOG_MAX_BYTES,
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, layout::Size};
@@ -793,7 +793,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     // Open Shared Env Vault via `E` on agent-a.
     app.selected = 0;
     app.on_key(key(KeyCode::Char('E')), 27, 70);
-    assert!(app.env_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
     // Vault is empty, so inline editor opens on Key automatically.
     for ch in "SHARED_API_KEY".chars() {
         app.on_key(key(KeyCode::Char(ch)), 27, 70);
@@ -808,7 +808,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     // Newly created entry is persisted & auto-checked; Enter writes agent-a/.env.
     term.draw(|f| app.draw(f)).unwrap();
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.env_modal.is_none());
+    assert!(app.vault_modal.is_none());
     let dotenv_a = fs::read_to_string(proj_a.join(".env")).unwrap();
     assert!(
         dotenv_a.contains("SHARED_API_KEY=secret-12345"),
@@ -818,7 +818,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     // Switch to agent-b, open `E`, verify shared entry is reusable without retyping, pick with Space, apply.
     app.selected = 1;
     app.on_key(key(KeyCode::Char('E')), 27, 70);
-    assert!(app.env_modal.as_ref().unwrap().editor.is_none());
+    assert!(!app.vault_modal.as_ref().unwrap().has_editor());
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     let dotenv_b = fs::read_to_string(proj_b.join(".env")).unwrap();
@@ -832,7 +832,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     fs::write(proj_b.join(".env"), format!("{dotenv_b}LOCAL_ONLY=1\n")).unwrap();
     app.on_key(key(KeyCode::Char('E')), 27, 70);
     assert!(app
-        .env_modal
+        .vault_modal
         .as_ref()
         .unwrap()
         .picked
@@ -840,7 +840,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     term.draw(|f| app.draw(f)).unwrap();
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.env_modal.is_none());
+    assert!(app.vault_modal.is_none());
     let unassigned = fs::read_to_string(proj_b.join(".env")).unwrap();
     assert_eq!(unassigned, "LOCAL_ONLY=1\n");
     assert!(app.message.0.contains("-1 removed"), "{}", app.message.0);
@@ -857,10 +857,10 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     assert_eq!(app.mode, Mode::Add);
     app.add_field = 5;
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
-    assert!(app.env_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.env_modal.is_none());
+    assert!(app.vault_modal.is_none());
     assert!(app.add_env.contains("SHARED_API_KEY"));
     term.draw(|f| app.draw(f)).unwrap();
     let proj_c = dir.join("agent-c");
@@ -896,7 +896,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.on_key(key(KeyCode::Char('E')), 27, 70);
     let before = app.env_vault.vars.len();
-    assert!(before > 0 && app.env_modal.as_ref().unwrap().editor.is_none());
+    assert!(before > 0 && !app.vault_modal.as_ref().unwrap().has_editor());
     term.draw(|f| app.draw(f)).unwrap();
     let screen: String = term
         .backend()
@@ -909,7 +909,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Up), 27, 70); // wraps from the top onto the row
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(
-        app.env_modal.as_ref().unwrap().editor.is_some(),
+        app.vault_modal.as_ref().unwrap().has_editor(),
         "Enter on the row opens a blank form instead of writing .env"
     );
     for c in "EXTRA_KEY".chars() {
@@ -920,7 +920,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert_eq!(app.env_vault.vars.len(), before + 1);
 
-    // `a` inside EnvModal opens the Add variable editor (`A` toggles all);
+    // `a` inside VaultModal (Env) opens the Add variable editor (`A` toggles all);
     // local-only `.env` keys also render in the modal list.
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.selected = 1; // agent-b has LOCAL_ONLY=1 in .env
@@ -938,11 +938,11 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
         "local-only .env entry shows in EnvModal"
     );
     app.on_key(key(KeyCode::Char('a')), 27, 70);
-    assert!(app.env_modal.as_ref().unwrap().editor.is_some());
+    assert!(app.vault_modal.as_ref().unwrap().has_editor());
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.on_key(key(KeyCode::Char('A')), 27, 70);
     assert_eq!(
-        app.env_modal.as_ref().unwrap().picked.len(),
+        app.vault_modal.as_ref().unwrap().picked.len(),
         app.env_vault.vars.len()
     );
     app.on_key(key(KeyCode::Esc), 27, 70);
@@ -954,12 +954,13 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     assert!(app.add_env.contains("SHARED_API_KEY"));
     app.add_field = 5;
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.env_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
     assert!(app
-        .env_modal
+        .vault_modal
         .as_ref()
         .unwrap()
-        .project_dotenv
+        .project_dotenv()
+        .unwrap()
         .contains_key("SHARED_API_KEY"));
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.on_key(key(KeyCode::Esc), 27, 70);
@@ -1073,8 +1074,11 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     // Pressing `a` inside Environment variables jumps straight to adding an env var.
     app.on_key(key(KeyCode::Char('a')), 24, 54);
     assert!(app.env_info.is_none());
-    assert!(app.env_modal.as_ref().is_some_and(|m| m.editor.is_some()));
-    app.env_modal = None;
+    assert!(app
+        .vault_modal
+        .as_ref()
+        .is_some_and(|m| m.is_env() && m.has_editor()));
+    app.vault_modal = None;
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1425,16 +1429,18 @@ fn skills_modal_asks_before_replacing_a_projects_own_skill() {
     // other tests point elsewhere at the same time.
     let open = |app: &mut App| {
         let state = crate::skills::read_project_skills(&proj_a, &app.skills_vault);
-        app.skill_modal = Some(SkillModal {
+        app.vault_modal = Some(VaultModal {
             target: VaultTarget::Project(0),
             sel: 0,
             top: Default::default(),
             // Opened from the project, its own `review` reads as picked.
             picked: state.vault_state.keys().cloned().collect(),
-            project_state: state,
             confirm_delete: None,
-            confirm_overwrite: None,
-            editor: None,
+            kind: VaultKindState::Skill {
+                project_state: state,
+                confirm_overwrite: None,
+                editor: None,
+            },
         });
     };
     let mine = || fs::read_to_string(own.join("SKILL.md")).unwrap();
@@ -1442,8 +1448,8 @@ fn skills_modal_asks_before_replacing_a_projects_own_skill() {
     // Enter asks first; Esc goes back without touching anything.
     open(&mut app);
     app.on_key(key(KeyCode::Enter), 27, 70);
-    let m = app.skill_modal.as_ref().expect("still open, asking");
-    assert_eq!(m.confirm_overwrite, Some(vec!["review".to_string()]));
+    let m = app.vault_modal.as_ref().expect("still open, asking");
+    assert_eq!(m.skill_overwrite(), Some(&vec!["review".to_string()]));
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     term.draw(|f| app.draw(f)).unwrap();
     let screen: String = term
@@ -1456,17 +1462,17 @@ fn skills_modal_asks_before_replacing_a_projects_own_skill() {
     assert!(screen.contains("differ from the vault"), "{screen}");
     app.on_key(key(KeyCode::Esc), 27, 70);
     assert!(app
-        .skill_modal
+        .vault_modal
         .as_ref()
         .unwrap()
-        .confirm_overwrite
+        .skill_overwrite()
         .is_none());
     assert!(mine().contains("Mine."));
 
     // n keeps the project's own skill.
     app.on_key(key(KeyCode::Enter), 27, 70);
     app.on_key(key(KeyCode::Char('n')), 27, 70);
-    assert!(app.skill_modal.is_none());
+    assert!(app.vault_modal.is_none());
     assert!(mine().contains("Mine."));
     assert!(!proj_a.join(".agents/skills/review").exists());
 
@@ -1474,7 +1480,7 @@ fn skills_modal_asks_before_replacing_a_projects_own_skill() {
     open(&mut app);
     app.on_key(key(KeyCode::Enter), 27, 70);
     app.on_key(key(KeyCode::Char('y')), 27, 70);
-    assert!(app.skill_modal.is_none());
+    assert!(app.vault_modal.is_none());
     assert!(mine().contains("Vault version."));
     assert!(proj_a.join(".agents/skills/review/SKILL.md").is_file());
     let _ = fs::remove_dir_all(&dir);
@@ -1508,8 +1514,8 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     // `K` opens Skills modal; empty vault opens inline editor automatically.
     app.selected = 0;
     app.on_key(key(KeyCode::Char('K')), 27, 70);
-    assert!(app.skill_modal.is_some());
-    assert!(app.skill_modal.as_ref().unwrap().editor.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_skill));
+    assert!(app.vault_modal.as_ref().unwrap().has_editor());
     assert!(!app.wants_ascii_ime());
 
     for ch in "code-review".chars() {
@@ -1542,7 +1548,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
 
     // Enter syncs to both .agents/skills and .claude/skills on agent-a.
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.skill_modal.is_none());
+    assert!(app.vault_modal.is_none());
     assert!(proj_a.join(".agents/skills/code-review/SKILL.md").is_file());
     assert!(proj_a.join(".claude/skills/code-review/SKILL.md").is_file());
 
@@ -1551,7 +1557,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     assert!(app.add_skills.contains("code-review"));
     app.add_field = 6;
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.skill_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_skill));
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(!app.add_skills.contains("code-review"));
@@ -1562,7 +1568,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
     app.context_menu = Some(1);
     app.on_key(key(KeyCode::Char('K')), 27, 70);
     assert!(app.context_menu.is_none());
-    assert!(app.skill_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_skill));
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(proj_b.join(".agents/skills/code-review/SKILL.md").is_file());
@@ -1608,8 +1614,8 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
     // `T` opens Tools modal; empty vault opens inline ToolEditor on Kind (field 0).
     app.selected = 0;
     app.on_key(key(KeyCode::Char('T')), 27, 70);
-    assert!(app.tool_modal.is_some());
-    assert!(app.tool_modal.as_ref().unwrap().editor.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_tool));
+    assert!(app.vault_modal.as_ref().unwrap().has_editor());
     assert!(
         app.wants_ascii_ime(),
         "field 0 Kind toggle accepts ASCII Space"
@@ -1637,14 +1643,8 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
     app.on_key(key(KeyCode::Char('a')), 27, 70);
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     assert_eq!(
-        app.tool_modal
-            .as_ref()
-            .unwrap()
-            .editor
-            .as_ref()
-            .unwrap()
-            .kind,
-        crate::tools::ToolKind::Cli
+        app.vault_modal.as_ref().unwrap().tool_kind(),
+        Some(crate::tools::ToolKind::Cli)
     );
     app.on_key(key(KeyCode::Tab), 27, 70);
     for ch in "ripgrep".chars() {
@@ -1675,7 +1675,7 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
 
     // Enter syncs both tools to agent-a: .mcp.json + .agents/mcp_config.json + .codex/config.toml + .squad/TOOLS.md.
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.tool_modal.is_none());
+    assert!(app.vault_modal.is_none());
     assert!(proj_a.join(".mcp.json").is_file());
     assert!(proj_a.join(".agents/mcp_config.json").is_file());
     assert!(proj_a.join(".codex/config.toml").is_file());
@@ -1687,7 +1687,7 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
     app.context_menu = Some(1);
     app.on_key(key(KeyCode::Char('T')), 27, 70);
     assert!(app.context_menu.is_none());
-    assert!(app.tool_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_tool));
     app.on_key(key(KeyCode::Char('A')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(proj_b.join(".mcp.json").is_file());
@@ -1741,17 +1741,8 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
     // `R` opens References modal; empty vault opens inline RefEditor on URL (field 1).
     app.selected = 0;
     app.on_key(key(KeyCode::Char('R')), 27, 70);
-    assert!(app.ref_modal.is_some());
-    assert_eq!(
-        app.ref_modal
-            .as_ref()
-            .unwrap()
-            .editor
-            .as_ref()
-            .unwrap()
-            .field,
-        1
-    );
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_ref));
+    assert_eq!(app.vault_modal.as_ref().unwrap().ref_field(), Some(1));
     assert!(!app.wants_ascii_ime());
     term.draw(|f| app.draw(f)).unwrap();
 
@@ -1788,7 +1779,7 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
 
     // Enter commits picked refs into CLAUDE.md (appended) and AGENTS.md.
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(app.ref_modal.is_none());
+    assert!(app.vault_modal.is_none());
     let claude_a = fs::read_to_string(proj_a.join("CLAUDE.md")).unwrap();
     assert!(claude_a.starts_with("# Agent A Notes\n\nExisting project rules stay intact."));
     assert!(claude_a.contains("<!-- agentsquad:references:start -->"));
@@ -1798,7 +1789,7 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
 
     // Editing an already-assigned reference inside `R` modal marks it Differs and updates on Enter.
     app.on_key(key(KeyCode::Char('R')), 27, 70);
-    app.ref_modal.as_mut().unwrap().sel = 0;
+    app.vault_modal.as_mut().unwrap().sel = 0;
     app.on_key(key(KeyCode::Char('e')), 27, 70);
     app.on_key(key(KeyCode::Tab), 27, 70);
     for ch in " v2".chars() {
@@ -1806,10 +1797,11 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
     }
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert_eq!(
-        app.ref_modal
+        app.vault_modal
             .as_ref()
             .unwrap()
-            .project_state
+            .ref_state()
+            .unwrap()
             .vault_state
             .get("react"),
         Some(&crate::config::SyncState::Differs)
@@ -1844,7 +1836,7 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
     app.context_menu = Some(1);
     app.on_key(key(KeyCode::Char('R')), 27, 70);
     assert!(app.context_menu.is_none());
-    assert!(app.ref_modal.is_some());
+    assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_ref));
     app.on_key(key(KeyCode::Char('A')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(fs::read_to_string(proj_b.join("CLAUDE.md"))
@@ -1866,5 +1858,68 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
 
     drop(app);
     env::remove_var("AGENTSQUAD_REFS");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn unified_vault_modal_mouse_wheel_paste_and_outside_click() {
+    let dir = scratch_dir("vault-mouse-paste");
+    let proj_a = dir.join("agent-a");
+    fs::create_dir_all(&proj_a).unwrap();
+    let cfg = Config {
+        projects: vec![proj("agent-a", proj_a.to_str().unwrap(), &["claude"])],
+        ..Default::default()
+    };
+    let mut app = App::new(cfg, None);
+    app.tools_vault.tools.push(crate::tools::ToolEntry {
+        name: "gh".into(),
+        kind: crate::tools::ToolKind::Cli,
+        command: "gh status".into(),
+        description: String::new(),
+        env: Default::default(),
+    });
+    app.vault_modal = Some(VaultModal {
+        target: VaultTarget::Project(0),
+        sel: 0,
+        top: Default::default(),
+        picked: Default::default(),
+        confirm_delete: None,
+        kind: VaultKindState::Tool {
+            project_state: Default::default(),
+            editor: None,
+        },
+    });
+    let area = Size::new(100, 30);
+
+    // Wheel moves down to "+ New tool" row (index 1), then back up to 0.
+    app.on_mouse(mouse(MouseEventKind::ScrollDown, 50, 15), area, 27, 70);
+    assert_eq!(app.vault_modal.as_ref().unwrap().sel, 1);
+    app.on_mouse(mouse(MouseEventKind::ScrollUp, 50, 15), area, 27, 70);
+    assert_eq!(app.vault_modal.as_ref().unwrap().sel, 0);
+
+    // Paste into Tool editor skips field 0 (Kind toggle) and inserts into field 1 (Name).
+    app.on_key(key(KeyCode::Char('a')), 27, 70);
+    assert!(app.vault_modal.as_ref().unwrap().has_editor());
+    app.on_paste("ignored-on-kind".into());
+    app.on_key(key(KeyCode::Tab), 27, 70);
+    app.on_paste("pasted-tool\n".into());
+    let modal = app.vault_modal.as_ref().unwrap();
+    match &modal.kind {
+        VaultKindState::Tool {
+            editor: Some(ed), ..
+        } => {
+            assert_eq!(ed.name.as_str(), "pasted-tool");
+        }
+        _ => panic!("expected tool editor"),
+    }
+
+    // Left click outside the popup closes the vault modal.
+    app.on_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
+        area,
+        27,
+        70,
+    );
+    assert!(app.vault_modal.is_none());
     let _ = fs::remove_dir_all(&dir);
 }

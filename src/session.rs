@@ -171,12 +171,32 @@ fn new_state_file() -> std::path::PathBuf {
 }
 
 /// What a hook wrote into the state file (`ledger::write_state`).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_hook_state(text: &str) -> Option<AgentPhase> {
-    match text.trim() {
-        ledger::STATE_DONE => Some(AgentPhase::Done),
-        ledger::STATE_ASKING => Some(AgentPhase::NeedsInput),
-        _ => None,
+    parse_hook_report(text).map(|(phase, _)| phase)
+}
+
+/// Parse a state file report: `<state>` or `<state> <unix_nanos>`.
+pub(crate) fn parse_hook_report(text: &str) -> Option<(AgentPhase, Option<std::time::SystemTime>)> {
+    let mut parts = text.split_whitespace();
+    let phase = match parts.next()? {
+        ledger::STATE_DONE => AgentPhase::Done,
+        ledger::STATE_ASKING => AgentPhase::NeedsInput,
+        _ => return None,
+    };
+    let ts = match parts.next() {
+        Some(ns_str) => {
+            let ns: u128 = ns_str.parse().ok()?;
+            let secs = u64::try_from(ns / 1_000_000_000).ok()?;
+            let subsec = (ns % 1_000_000_000) as u32;
+            Some(std::time::UNIX_EPOCH + Duration::new(secs, subsec))
+        }
+        None => None,
+    };
+    if parts.next().is_some() {
+        return None;
     }
+    Some((phase, ts))
 }
 
 /// The phase Claude Code's own hooks report, while it still holds: they say
@@ -561,9 +581,10 @@ pub struct Session {
     /// the process table again.
     tree_killed: bool,
     /// File this session's Claude Code hooks report to (`ledger::STATE_ENV`).
-    hook_file: Option<std::path::PathBuf>,
-    /// Modification time of `hook_file` last read, and when it was checked.
+    pub(crate) hook_file: Option<std::path::PathBuf>,
+    /// Modification time and raw text of `hook_file` last read, and when checked.
     hook_seen: Option<std::time::SystemTime>,
+    hook_seen_raw: Option<String>,
     hook_checked: Instant,
     /// The latest state the hooks reported, and when they wrote it.
     hook_phase: Option<(AgentPhase, Instant)>,
@@ -695,6 +716,7 @@ impl Session {
             tree_killed: false,
             hook_file,
             hook_seen: None,
+            hook_seen_raw: None,
             hook_checked: Instant::now(),
             hook_phase: None,
             render: RefCell::new(None),
@@ -809,7 +831,11 @@ impl Session {
         let working = is_working_lines(&lines);
         self.cached_working_text = working;
         self.cached_needs_input = !working && has_prompt_lines(&lines);
-        self.prompt_hint = if self.cached_needs_input {
+        let hook_asking = matches!(
+            hook_verdict(self.hook_phase, self.last_input, false),
+            Some(AgentPhase::NeedsInput)
+        );
+        self.prompt_hint = if self.cached_needs_input || (!working && hook_asking) {
             prompt_summary(&tail)
         } else {
             None
@@ -875,27 +901,48 @@ impl Session {
         changed
     }
     /// Pick up a state the hooks wrote since the last look. True when one was.
-    fn read_hook_state(&mut self) -> bool {
+    pub(crate) fn read_hook_state(&mut self) -> bool {
         let Some(file) = &self.hook_file else {
             return false;
         };
         let Ok(mtime) = std::fs::metadata(file).and_then(|m| m.modified()) else {
             return false;
         };
-        if self.hook_seen == Some(mtime) {
+        // Only skip reading when the mtime is both unchanged and safely older
+        // than coarse filesystem timestamp ticks (e.g. 15.6 ms on NTFS).
+        if self.hook_seen == Some(mtime)
+            && mtime
+                .elapsed()
+                .is_ok_and(|d| d >= Duration::from_millis(50))
+        {
+            return false;
+        }
+        let Ok(raw) = std::fs::read_to_string(file) else {
+            return false;
+        };
+        if self.hook_seen_raw.as_deref() == Some(raw.as_str()) {
+            self.hook_seen = Some(mtime);
             return false;
         }
         // Caught between truncate and write: unrecognized, look again next pass.
-        let Some(phase) = std::fs::read_to_string(file)
-            .ok()
-            .and_then(|t| parse_hook_state(&t))
-        else {
+        let Some((phase, stamped_at)) = parse_hook_report(&raw) else {
             return false;
         };
         self.hook_seen = Some(mtime);
-        let age = mtime.elapsed().unwrap_or_default();
+        self.hook_seen_raw = Some(raw);
+        let ts = stamped_at.unwrap_or(mtime);
+        let age = ts.elapsed().unwrap_or_default();
         let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
         self.hook_phase = Some((phase, at));
+        if phase == AgentPhase::NeedsInput
+            && self.prompt_hint.is_none()
+            && !self.cached_working_text
+        {
+            let tail = self.tail_text(12);
+            self.prompt_hint = prompt_summary(&tail);
+        } else if phase == AgentPhase::Done && !self.cached_needs_input {
+            self.prompt_hint = None;
+        }
         true
     }
     /// Record a fact in the project's ledger, when it has one.
