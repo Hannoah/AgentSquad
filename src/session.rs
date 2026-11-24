@@ -513,8 +513,12 @@ struct RenderCache {
 pub struct Session {
     pub master: Box<dyn MasterPty + Send>,
     pub child: Box<dyn Child + Send + Sync>,
-    pub writer: Box<dyn Write + Send>,
+    // Fields drop in this order: `rx` before `writer`. Closing the channel
+    // lets the reader drain the pty (see `spawn`), and the writer's drop
+    // writes a newline and EOF whose echo needs room in the pty's output
+    // queue; with a full channel and nobody reading, that write never returns.
     pub rx: Receiver<Vec<u8>>,
+    pub writer: Box<dyn Write + Send>,
     pub parser: vt100::Parser,
     pub status: SessionStatus,
     pub scroll: usize,
@@ -641,14 +645,15 @@ impl Session {
         let (tx, rx) = mpsc::sync_channel(32);
         thread::spawn(move || {
             let mut buf = [0u8; 16 * 1024];
+            let mut listening = true;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
+                    // Once the session is gone, keep draining until the pty
+                    // closes: a full output queue would block the writer's
+                    // final EOF (and a flooding program) forever.
+                    Ok(n) if listening => listening = tx.send(buf[..n].to_vec()).is_ok(),
+                    Ok(_) => {}
                 }
             }
         });

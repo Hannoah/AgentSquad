@@ -1244,7 +1244,8 @@ fn quick_reply_opens_via_badge_and_cycles_waiting_agents() {
     // Pressing `t` switches to custom reply input (allowing Hangul IME), Enter sends & closes.
     app.on_key(key(KeyCode::Char('t')), 27, 75);
     assert!(!app.wants_ascii_ime());
-    for c in "yes".chars() {
+    // Not "yes": these are real shells, and `yes` would flood the pty forever.
+    for c in "ok".chars() {
         app.on_key(key(KeyCode::Char(c)), 27, 75);
     }
     app.on_key(key(KeyCode::Enter), 27, 75);

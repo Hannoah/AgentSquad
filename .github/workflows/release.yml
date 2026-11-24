@@ -11,6 +11,8 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    # Fail a hung step fast instead of holding the runner for six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
@@ -67,6 +69,7 @@ jobs:
             squad-windows-x86_64.zip.sha256
 
   build-macos:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
