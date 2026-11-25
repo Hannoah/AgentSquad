@@ -164,7 +164,11 @@ fn tree_walk_drops_children_older_than_their_parent() {
             .map(|b| b.1)
     };
     assert_eq!(crate::sys::walk_tree(1, &children, born), vec![1, 3]);
-    // No times to compare: every edge is kept.
+    // A child whose time cannot be read under a parent whose time can (a
+    // protected stranger that denies the query) is left out.
+    let hidden = |pid| (pid != 3).then_some(100);
+    assert_eq!(crate::sys::walk_tree(1, &children, hidden), vec![1, 2, 4]);
+    // No parent time to compare against: every edge is kept.
     let mut all = crate::sys::walk_tree(1, &children, |_| None);
     all.sort_unstable();
     assert_eq!(all, vec![1, 2, 3, 4]);

@@ -262,8 +262,8 @@ fn descendant_pids_from_map(root: u32, children: &HashMap<u32, Vec<u32>>) -> Vec
 
 /// `root` and everything under it. Windows keeps a dead parent's pid in its
 /// children's records and hands that pid out again, so a child older than
-/// its "parent" belongs to a stranger and is left out: squad kills what
-/// this returns.
+/// its "parent" belongs to a stranger and is left out, as is one whose time
+/// cannot be read: squad kills what this returns.
 pub(crate) fn walk_tree(
     root: u32,
     children: &HashMap<u32, Vec<u32>>,
@@ -282,8 +282,15 @@ pub(crate) fn walk_tree(
             let parent = *born_cache.entry(pid).or_insert_with(|| born(pid));
             stack.extend(kids.iter().copied().filter(|&kid| {
                 let k_born = *born_cache.entry(kid).or_insert_with(|| born(kid));
-                // An unreadable time keeps the edge, as before.
-                !matches!((parent, k_born), (Some(p), Some(k)) if k < p)
+                match (parent, k_born) {
+                    (Some(p), Some(k)) => k >= p,
+                    // A child that denies even the time query, under a parent
+                    // that allows it, is a stranger (or gone): squad could not
+                    // terminate it anyway.
+                    (Some(_), None) => false,
+                    // No parent time to compare against: keep the edge.
+                    (None, _) => true,
+                }
             }));
         }
     }

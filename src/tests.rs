@@ -49,19 +49,57 @@ fn ps_stdout(script: &str) -> String {
         .unwrap_or_default();
     String::from_utf8_lossy(&out).into_owned()
 }
+/// Processes held open by handle so a test can wait for them to die. The
+/// handle pins each pid: once the kill frees a number, a stranger reusing it
+/// cannot pass for a survivor (polling `tasklist` by pid could, under load).
 #[cfg(windows)]
-fn child_pids(parent: u32) -> Vec<u32> {
-    ps_stdout(&format!(
-            "Get-CimInstance Win32_Process -Filter 'ParentProcessId={parent}' | Select-Object -ExpandProperty ProcessId"
-        ))
-        .lines()
-        .filter_map(|l| l.trim().parse::<u32>().ok())
-        .collect()
+struct Watched(Vec<(u32, windows_sys::Win32::Foundation::HANDLE)>);
+#[cfg(windows)]
+impl Watched {
+    /// Open every pid that is still alive; check `len()` against what you asked for.
+    fn new(pids: &[u32]) -> Self {
+        use windows_sys::Win32::{
+            Foundation::FALSE,
+            System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE},
+        };
+        Watched(
+            pids.iter()
+                .filter_map(|&pid| {
+                    // SAFETY: plain call; a null handle means the pid is gone.
+                    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, FALSE, pid) };
+                    (!h.is_null()).then_some((pid, h))
+                })
+                .collect(),
+        )
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    /// The pids still alive once `limit` (shared by all of them) runs out.
+    fn survivors(&self, limit: Duration) -> Vec<u32> {
+        use windows_sys::Win32::{
+            Foundation::WAIT_OBJECT_0, System::Threading::WaitForSingleObject,
+        };
+        let end = Instant::now() + limit;
+        self.0
+            .iter()
+            .filter(|(_, h)| {
+                let left = end.saturating_duration_since(Instant::now()).as_millis() as u32;
+                // SAFETY: the handle stays open until `drop`.
+                unsafe { WaitForSingleObject(*h, left) != WAIT_OBJECT_0 }
+            })
+            .map(|(pid, _)| *pid)
+            .collect()
+    }
 }
 #[cfg(windows)]
-fn pid_alive(pid: u32) -> bool {
-    let out = ps_stdout(&format!("tasklist /FI \"PID eq {pid}\" /FO CSV /NH"));
-    out.contains(&format!("\"{pid}\""))
+impl Drop for Watched {
+    fn drop(&mut self) {
+        for (_, h) in &self.0 {
+            // SAFETY: each handle was opened by `new` and is closed once.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(*h) };
+        }
+    }
 }
 fn scratch_dir(tag: &str) -> PathBuf {
     let d = env::temp_dir().join(format!("squad-test-{tag}-{}", std::process::id()));

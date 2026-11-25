@@ -189,31 +189,26 @@ fn stop_kills_process_tree() {
     };
     let s = Session::spawn(&p, 24, 80).unwrap();
     let pid = s.child.process_id().expect("pty child pid");
-    let mut grandkids = Vec::new();
-    for _ in 0..50 {
-        grandkids = child_pids(pid);
-        if !grandkids.is_empty() {
+    let mut tree = Vec::new();
+    for _ in 0..100 {
+        tree = descendant_pids(pid);
+        if tree.iter().any(|p| *p != pid) {
             break;
         }
         thread::sleep(Duration::from_millis(100));
     }
-    assert!(!grandkids.is_empty(), "grandchild never appeared");
-    drop(s);
-    for _ in 0..50 {
-        thread::sleep(Duration::from_millis(100));
-        if !pid_alive(pid) && grandkids.iter().all(|g| !pid_alive(*g)) {
-            let _ = std::fs::remove_dir_all(&dir);
-            return;
-        }
+    if !tree.contains(&pid) {
+        tree.push(pid);
     }
+    assert!(tree.len() > 1, "grandchild never appeared");
+    let watched = Watched::new(&tree);
+    assert_eq!(watched.len(), tree.len(), "the tree died before the stop");
+    drop(s);
+    let survivors = watched.survivors(Duration::from_secs(10));
     let _ = std::fs::remove_dir_all(&dir);
-    panic!(
-        "process tree survived stop: parent alive={} kids={:?}",
-        pid_alive(pid),
-        grandkids
-            .iter()
-            .map(|g| (*g, pid_alive(*g)))
-            .collect::<Vec<_>>()
+    assert!(
+        survivors.is_empty(),
+        "process tree survived stop: {survivors:?} of {tree:?}"
     );
 }
 #[test]
@@ -232,9 +227,7 @@ fn stop_kills_orphaned_grandchildren() {
             "start".into(),
             "/min".into(),
             "ping".into(),
-            // Long-lived on purpose: the stop poll below stretches over
-            // tens of seconds (one powershell probe per PID per round),
-            // so a short ping would die naturally and fake a pass.
+            // Long-lived on purpose: a ping that ends by itself would fake a pass.
             "-n".into(),
             "300".into(),
             "127.0.0.1".into(),
@@ -261,21 +254,18 @@ fn stop_kills_orphaned_grandchildren() {
         thread::sleep(Duration::from_millis(100));
     }
     assert!(!orphans.is_empty(), "orphan never appeared");
+    let watched = Watched::new(&orphans);
+    assert_eq!(
+        watched.len(),
+        orphans.len(),
+        "the orphan died before the stop"
+    );
     drop(s);
-    for _ in 0..50 {
-        thread::sleep(Duration::from_millis(100));
-        if orphans.iter().all(|g| !pid_alive(*g)) {
-            let _ = std::fs::remove_dir_all(&dir);
-            return;
-        }
-    }
+    let survivors = watched.survivors(Duration::from_secs(10));
     let _ = std::fs::remove_dir_all(&dir);
-    panic!(
-        "orphaned grandchild survived stop: {:?}",
-        orphans
-            .iter()
-            .map(|g| (*g, pid_alive(*g)))
-            .collect::<Vec<_>>()
+    assert!(
+        survivors.is_empty(),
+        "orphaned grandchild survived stop: {survivors:?}"
     );
 }
 #[test]
