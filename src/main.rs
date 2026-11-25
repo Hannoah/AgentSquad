@@ -83,12 +83,12 @@ fn main() -> Result<()> {
         let mut input = String::new();
         let _ = io::stdin().read_to_string(&mut input);
         if sub == Some("permission") {
-            ledger::write_state(ledger::STATE_ASKING);
+            ledger::write_state(ledger::STATE_ASKING, &input);
             return Ok(());
         }
         if sub == Some("notify") {
             if ledger::notification_asks(&input) {
-                ledger::write_state(ledger::STATE_ASKING);
+                ledger::write_state(ledger::STATE_ASKING, &input);
             }
             return Ok(());
         }
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
         {
             // Sent back to file a SITREP: the turn goes on.
             Some(out) => println!("{out}"),
-            None => ledger::write_state(ledger::STATE_DONE),
+            None => ledger::write_state(ledger::STATE_DONE, &input),
         }
         return Ok(());
     }

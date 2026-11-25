@@ -2,12 +2,11 @@
 //! conversation content without duplicates) into a daily markdown file in
 //! `.squad/log/` (`<YYYYMMDD>-auto.md`).
 
-use crate::config::plain_path;
 use crate::json::{self, JsonValue};
 use crate::ledger::{changed_files, git, utc_stamp};
 use crate::ui::uptime_label;
 use std::{
-    env, fs,
+    fs,
     io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
@@ -37,6 +36,22 @@ pub struct Task {
     pub prompts: Vec<String>,
     /// Full new PTY output captured since the previous recorded task (no duplicates).
     pub output: String,
+    /// The Claude Code transcript the session's hooks reported, if any.
+    pub transcript: Option<PathBuf>,
+}
+
+/// The prompts the screen echoed. Typing that never showed up went to a
+/// hidden prompt (a password), so it stays out of the log.
+// ponytail: substring check with whitespace squashed (wrapping, pastes); a
+// short secret that happens to appear in the output would still slip through.
+fn echoed_prompts(t: &Task) -> Vec<&str> {
+    let squash = |s: &str| s.split_whitespace().collect::<String>();
+    let screen = squash(&t.output);
+    t.prompts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| screen.contains(&squash(p)))
+        .collect()
 }
 
 fn secs(t: SystemTime) -> u64 {
@@ -100,9 +115,10 @@ pub fn render_section(
         out.push_str(md);
         out.push('\n');
     } else {
-        if !t.prompts.is_empty() {
+        let prompts = echoed_prompts(t);
+        if !prompts.is_empty() {
             out.push_str("\n### User\n\n");
-            out.push_str(&t.prompts.join("\n"));
+            out.push_str(&prompts.join("\n"));
             out.push('\n');
         }
         let trimmed = t.output.trim();
@@ -173,52 +189,6 @@ pub fn gather(path: &Path, started: SystemTime) -> (Vec<String>, Vec<String>) {
     let commits = git(path, &["log", &since, "-n", "30", "--pretty=format:%h %s"])
         .map_or_else(Vec::new, |s| s.lines().map(String::from).collect());
     (files, commits)
-}
-
-/// Encode a project path the same way Claude Code names folders under `~/.claude/projects/`.
-pub(crate) fn encode_claude_project_dir(path: &Path) -> String {
-    plain_path(path.to_path_buf())
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-fn claude_projects_dir() -> Option<PathBuf> {
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(|h| PathBuf::from(h).join(".claude").join("projects"))
-}
-
-fn find_claude_transcript(project: &Path, started: SystemTime) -> Option<PathBuf> {
-    let base = claude_projects_dir()?;
-    let target = encode_claude_project_dir(project);
-    let proj_dir = fs::read_dir(&base).ok()?.find_map(|e| {
-        let e = e.ok()?;
-        let name = e.file_name().into_string().ok()?;
-        let matches = if cfg!(windows) {
-            name.eq_ignore_ascii_case(&target)
-        } else {
-            name == target
-        };
-        (matches && e.path().is_dir()).then(|| e.path())
-    })?;
-    let min_mtime = started
-        .checked_sub(Duration::from_secs(5))
-        .unwrap_or(UNIX_EPOCH);
-    fs::read_dir(proj_dir)
-        .ok()?
-        .filter_map(|e| {
-            let e = e.ok()?;
-            let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) != Some("jsonl") || !path.is_file() {
-                return None;
-            }
-            let mtime = e.metadata().ok()?.modified().ok()?;
-            (mtime >= min_mtime).then_some((mtime, path))
-        })
-        .max_by_key(|(mtime, _)| *mtime)
-        .map(|(_, path)| path)
 }
 
 fn read_cursor(ledger_dir: &Path) -> Option<(PathBuf, u64)> {
@@ -463,6 +433,10 @@ pub(crate) fn extract_claude_turns(
         if n == 0 {
             break;
         }
+        if !line.ends_with('\n') {
+            // Still being written: leave it, and the cursor, for the next read.
+            break;
+        }
         pos += n as u64;
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -510,8 +484,9 @@ pub(crate) fn extract_claude_turns(
     Some((md, pos))
 }
 
-fn gather_claude_transcript(project: &Path, started: SystemTime) -> Option<String> {
-    let jsonl = find_claude_transcript(project, started)?;
+/// New turns from `jsonl` (the path the session's own hooks reported) since
+/// the project's cursor.
+fn gather_claude_transcript(project: &Path, jsonl: &Path, started: SystemTime) -> Option<String> {
     let ledger_dir = project.join(crate::ledger::DIR);
     let stored = read_cursor(&ledger_dir).and_then(|(p, off)| {
         let same = if cfg!(windows) {
@@ -523,8 +498,8 @@ fn gather_claude_transcript(project: &Path, started: SystemTime) -> Option<Strin
         same.then_some(off)
     });
     let (md, new_offset) =
-        extract_claude_turns(&jsonl, stored, stored.is_none().then_some(started))?;
-    write_cursor(&ledger_dir, &jsonl, new_offset);
+        extract_claude_turns(jsonl, stored, stored.is_none().then_some(started))?;
+    write_cursor(&ledger_dir, jsonl, new_offset);
     (!md.trim().is_empty()).then_some(md)
 }
 
@@ -574,11 +549,15 @@ fn file(t: &Task) {
     if !t.path.is_dir() || crate::ledger::ensure(&t.path).is_err() {
         return;
     }
-    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (files, commits) = gather(&t.path, t.started);
-    let transcript = gather_claude_transcript(&t.path, t.started);
+    // Only the cursor and the append race; git runs before taking the lock.
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let transcript = t
+        .transcript
+        .as_deref()
+        .and_then(|j| gather_claude_transcript(&t.path, j, t.started));
     let has_body = transcript.as_deref().is_some_and(|s| !s.trim().is_empty())
-        || !t.prompts.is_empty()
+        || !echoed_prompts(t).is_empty()
         || !t.output.trim().is_empty();
     if files.is_empty() && commits.is_empty() && !has_body {
         return;

@@ -176,9 +176,10 @@ pub(crate) fn parse_hook_state(text: &str) -> Option<AgentPhase> {
     parse_hook_report(text).map(|(phase, _)| phase)
 }
 
-/// Parse a state file report: `<state>` or `<state> <unix_nanos>`.
+/// Parse a state file report: `<state>` or `<state> <unix_nanos>` on the first
+/// line (a second line, the transcript path, is read by `read_hook_state`).
 pub(crate) fn parse_hook_report(text: &str) -> Option<(AgentPhase, Option<std::time::SystemTime>)> {
-    let mut parts = text.split_whitespace();
+    let mut parts = text.lines().next()?.split_whitespace();
     let phase = match parts.next()? {
         ledger::STATE_DONE => AgentPhase::Done,
         ledger::STATE_ASKING => AgentPhase::NeedsInput,
@@ -629,6 +630,8 @@ pub struct Session {
     hook_checked: Instant,
     /// The latest state the hooks reported, and when they wrote it.
     hook_phase: Option<(AgentPhase, Instant)>,
+    /// The Claude Code transcript this session writes, as its hooks reported it.
+    pub(crate) transcript: Option<std::path::PathBuf>,
     /// Trailing non-empty lines from the last captured history snapshot (dedup anchor).
     history_anchor: Vec<String>,
     /// Partial line typed by the user into the PTY before pressing Enter.
@@ -766,6 +769,7 @@ impl Session {
             hook_seen_raw: None,
             hook_checked: Instant::now(),
             hook_phase: None,
+            transcript: None,
             history_anchor: Vec::new(),
             input_line_buf: String::new(),
             task_prompts: Vec::new(),
@@ -979,6 +983,9 @@ impl Session {
             return false;
         };
         self.hook_seen = Some(mtime);
+        if let Some(p) = raw.lines().nth(1).map(str::trim).filter(|p| !p.is_empty()) {
+            self.transcript = Some(p.into());
+        }
         self.hook_seen_raw = Some(raw);
         let ts = stamped_at.unwrap_or(mtime);
         let age = ts.elapsed().unwrap_or_default();

@@ -433,9 +433,17 @@ pub(crate) fn format_state_report(state: &str, now: std::time::SystemTime) -> St
 
 /// Record `state` for the squad session this hook runs in. Silent and best
 /// effort: outside squad (no variable) nothing happens.
-pub fn write_state(state: &str) {
+/// `input` is the hook's JSON from stdin: its `transcript_path` goes on a
+/// second line, so squad reads the very transcript this session writes.
+pub fn write_state(state: &str, input: &str) {
     if let Some(file) = std::env::var_os(STATE_ENV).filter(|v| !v.is_empty()) {
-        let body = format_state_report(state, std::time::SystemTime::now());
+        let mut body = format_state_report(state, std::time::SystemTime::now());
+        if let Ok(v) = crate::json::parse(input) {
+            if let Some(crate::json::JsonValue::String(p)) = v.get("transcript_path") {
+                body.push_str(p.trim());
+                body.push('\n');
+            }
+        }
         let _ = fs::write(file, body);
     }
 }

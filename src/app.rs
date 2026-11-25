@@ -1639,7 +1639,14 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
         took,
         outcome,
         prompts: s.take_task_prompts(),
-        output: s.capture_new_output(),
+        // A Claude Code agent is logged from its transcript; skip the
+        // scrollback walk on the UI thread.
+        output: if s.transcript.is_some() {
+            String::new()
+        } else {
+            s.capture_new_output()
+        },
+        transcript: s.transcript.clone(),
     });
 }
 
@@ -1706,7 +1713,10 @@ impl History {
             let t = std::fs::read_to_string(p).unwrap_or_else(|e| format!("Cannot read: {e}"));
             // Agent-written files are untrusted terminal input: strip control
             // characters so escape sequences cannot reach the outer terminal.
-            sanitize_chrome_text(&t).chars().take(200_000).collect()
+            let t = sanitize_chrome_text(&t);
+            // Daily logs grow at the end: keep the newest part, not the oldest.
+            let skip = t.chars().count().saturating_sub(200_000);
+            t.chars().skip(skip).collect()
         });
     }
     fn select(&mut self, i: usize) {

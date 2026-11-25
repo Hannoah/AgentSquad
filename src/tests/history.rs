@@ -1,7 +1,6 @@
 use super::*;
 use crate::history::{
-    append_entry, daily_header, daily_name, encode_claude_project_dir, extract_claude_turns,
-    is_auto, render_section, Task,
+    append_entry, daily_header, daily_name, extract_claude_turns, is_auto, render_section, Task,
 };
 use crate::ledger::list_entries;
 use std::path::Path;
@@ -15,8 +14,9 @@ fn task() -> Task {
         started: UNIX_EPOCH + Duration::from_secs(1_000_000_000),
         took: Duration::from_secs(125),
         outcome: "task complete".into(),
-        prompts: vec!["add login".into()],
-        output: "done: added login\n\n".into(),
+        prompts: vec!["add login".into(), "hunter2".into()],
+        output: "> add login\ndone: added login\n\n".into(),
+        transcript: None,
     }
 }
 
@@ -41,6 +41,10 @@ fn entry_says_what_happened_without_the_agent() {
     assert!(text.contains("- Agent: my-app (`claude`)"), "{text}");
     assert!(text.contains("- src/auth.rs") && text.contains("- abc1234 add login"));
     assert!(text.contains("### User\n\nadd login"), "{text}");
+    assert!(
+        !text.contains("hunter2"),
+        "input the screen never echoed (a password) stays out:\n{text}"
+    );
     assert!(text.contains("done: added login\n```"), "output is trimmed");
 
     let quiet = render_section(
@@ -78,7 +82,7 @@ fn same_day_entries_accumulate_into_one_file_and_list_newest_first() {
     let t2 = Task {
         took: Duration::from_secs(300),
         prompts: vec!["second prompt".into()],
-        output: "second output".into(),
+        output: "> second prompt\nsecond output".into(),
         ..task()
     };
     let a = append_entry(&dir, &t1, &[], &[], None, 0).unwrap();
@@ -221,12 +225,6 @@ fn auto_log_names_distinguish_daily_legacy_and_sitreps() {
 
 #[test]
 fn claude_transcript_delta_tracks_offset_without_duplicates() {
-    assert_eq!(
-        encode_claude_project_dir(Path::new(
-            r"C:\Users\kornah\Work\09_Personal_Project\AgentSquad"
-        )),
-        "C--Users-kornah-Work-09-Personal-Project-AgentSquad"
-    );
     let dir = scratch_dir("claude-jsonl");
     let jsonl = dir.join("session.jsonl");
     let initial = concat!(
@@ -276,8 +274,25 @@ fn claude_transcript_delta_tracks_offset_without_duplicates() {
     f.write_all(next.as_bytes()).unwrap();
     drop(f);
 
+    // A line still being written is left for the next read, cursor included.
+    let partial = r#"{"type":"user","timestamp":"2026-11-24T13:06:00.000Z","message":{"role":"user","content":"Half"#;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&jsonl)
+        .unwrap();
+    f.write_all(partial.as_bytes()).unwrap();
+    drop(f);
     let (md2, off2) = extract_claude_turns(&jsonl, Some(off1), None).unwrap();
     assert!(off2 > off1);
+    assert!(!md2.contains("Half"), "{md2}");
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&jsonl)
+        .unwrap();
+    f.write_all(b" written\"}}\n").unwrap();
+    drop(f);
+    let (md3, _) = extract_claude_turns(&jsonl, Some(off2), None).unwrap();
+    assert!(md3.contains("### User\n\nHalf written"), "{md3}");
     assert!(
         !md2.contains("Fix login bug"),
         "no duplicate turn 1:\n{md2}"

@@ -708,14 +708,21 @@ fn hook_needs_input_syncs_and_clears_prompt_hint() {
     );
 
     // Same-tick overwrite to Done is still detected and clears prompt_hint.
+    // The second line carries the transcript path the hook was given.
     let done_body = crate::ledger::format_state_report(
         crate::ledger::STATE_DONE,
         std::time::SystemTime::now() + Duration::from_millis(1),
-    );
+    ) + "C:\\Users\\me\\.claude\\projects\\x\\s 1.jsonl\n";
     std::fs::write(&state_file, done_body).unwrap();
     assert!(s.read_hook_state());
     assert_eq!(s.phase(), AgentPhase::Done);
     assert!(s.prompt_hint.is_none());
+    assert_eq!(
+        s.transcript.as_deref(),
+        Some(std::path::Path::new(
+            "C:\\Users\\me\\.claude\\projects\\x\\s 1.jsonl"
+        ))
+    );
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
