@@ -127,8 +127,17 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           ls -l dist
-          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 \
-            || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
+          tag="${{ github.ref_name }}"
+          # Only the highest version takes "Latest": re-running an old tag's
+          # release must not point the updater and install scripts back at it.
+          cur=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          latest=false
+          if [ -z "$cur" ] || [ "$(printf '%s\n%s\n' "$cur" "$tag" | sort -V | tail -n1)" = "$tag" ]; then
+            latest=true
+          fi
+          echo "current latest: ${cur:-none}, $tag latest=$latest"
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --title "$tag" --generate-notes --latest=$latest
           gh release upload "${{ github.ref_name }}" dist/* --clobber
       # Signed build provenance for every release asset, so anyone can check
       # what CI built it: `gh attestation verify dist/<asset> --repo $GH_REPO`.
