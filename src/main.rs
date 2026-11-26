@@ -395,6 +395,23 @@ fn find_project<'a>(c: &'a config::Config, name: &str) -> Result<&'a config::Pro
         .with_context(|| format!("Unknown project: {name}"))
 }
 
+/// Carry a vault change of `key` into every project `.env` holding it.
+fn report_env_propagation(
+    c: &config::Config,
+    key: &str,
+    new: Option<&envvault::EnvEntry>,
+) -> Result<()> {
+    let dirs = c.projects.iter().map(|p| p.path.as_path());
+    let (changed, errors) = envvault::propagate_env(dirs, key, new);
+    if changed > 0 {
+        println!("Updated {key} in {changed} project .env file(s)");
+    }
+    if !errors.is_empty() {
+        bail!(".env update failed: {}", errors.join("; "));
+    }
+    Ok(())
+}
+
 fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
     const USAGE: &str =
         "Usage: squad env <list | set KEY VALUE | remove KEY | apply <project> [KEY...] | unapply <project> KEY...>";
@@ -420,6 +437,10 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
             envvault::save_env(&vault)?;
             let action = if inserted { "Registered" } else { "Updated" };
             println!("{action} shared env var {}", key.trim());
+            if !inserted {
+                let entry = vault.vars.iter().find(|e| e.key == key.trim());
+                report_env_propagation(c, key.trim(), entry)?;
+            }
             Ok(())
         }
         Some("remove" | "rm") => {
@@ -430,7 +451,7 @@ fn run_env_cli(c: &config::Config, args: &[String]) -> Result<()> {
             }
             envvault::save_env(&vault)?;
             println!("Removed shared env var {}", key.trim());
-            Ok(())
+            report_env_propagation(c, key.trim(), None)
         }
         Some("apply") => {
             let name = args.get(1).context(USAGE)?;

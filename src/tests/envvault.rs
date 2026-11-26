@@ -99,3 +99,38 @@ fn apply_dotenv_keeps_env_out_of_git_once() {
     apply_dotenv(&plain, std::slice::from_ref(&entry)).unwrap();
     assert!(!plain.join(".git").exists());
 }
+
+#[test]
+fn propagate_env_updates_renames_and_deletes_only_holders() {
+    let a = scratch_dir("envvault-prop-a");
+    let b = scratch_dir("envvault-prop-b");
+    fs::write(a.join(".env"), "KEEP=1\nAPI_KEY=old\n").unwrap();
+    fs::write(b.join(".env"), "KEEP=2\n").unwrap();
+    let dirs = [a.as_path(), b.as_path()];
+    let entry = |k: &str, v: &str| EnvEntry {
+        key: k.into(),
+        value: v.into(),
+    };
+
+    // Value change touches only the holder; a repeat is a no-op.
+    let new = entry("API_KEY", "new");
+    assert_eq!(propagate_env(dirs, "API_KEY", Some(&new)), (1, vec![]));
+    assert_eq!(propagate_env(dirs, "API_KEY", Some(&new)), (0, vec![]));
+    assert_eq!(read_dotenv(&a).get("API_KEY").unwrap(), "new");
+    assert!(!read_dotenv(&b).contains_key("API_KEY"));
+
+    // Rename drops the old key and writes the new one.
+    let renamed = entry("TOKEN", "new");
+    assert_eq!(propagate_env(dirs, "API_KEY", Some(&renamed)), (1, vec![]));
+    let env_a = read_dotenv(&a);
+    assert!(!env_a.contains_key("API_KEY"));
+    assert_eq!(env_a.get("TOKEN").unwrap(), "new");
+
+    // Delete removes it and keeps unrelated lines.
+    assert_eq!(propagate_env(dirs, "TOKEN", None), (1, vec![]));
+    let env_a = read_dotenv(&a);
+    assert!(!env_a.contains_key("TOKEN"));
+    assert_eq!(env_a.get("KEEP").unwrap(), "1");
+    let _ = fs::remove_dir_all(&a);
+    let _ = fs::remove_dir_all(&b);
+}

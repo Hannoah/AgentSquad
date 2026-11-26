@@ -315,3 +315,31 @@ pub fn apply_dotenv_keys(dir: &Path, vault: &EnvVault, keys: &[String]) -> Resul
     }
     apply_dotenv(dir, &selected)
 }
+
+/// Carry a vault change of `old` into every `<dir>/.env` that holds it:
+/// `Some(entry)` rewrites the value (renaming when the key differs), `None`
+/// deletes it. Returns how many `.env` files changed and `dir: error` lines.
+pub fn propagate_env<'a>(
+    dirs: impl IntoIterator<Item = &'a Path>,
+    old: &str,
+    new: Option<&EnvEntry>,
+) -> (usize, Vec<String>) {
+    let (mut changed, mut errors) = (0, Vec::new());
+    for dir in dirs {
+        let Some(cur) = read_dotenv(dir).remove(old) else {
+            continue;
+        };
+        let res = match new {
+            Some(e) if e.key == old && e.value == cur => continue,
+            Some(e) if e.key == old => apply_dotenv(dir, std::slice::from_ref(e)).map(drop),
+            Some(e) => remove_dotenv(dir, &[old.to_string()])
+                .and_then(|_| apply_dotenv(dir, std::slice::from_ref(e)).map(drop)),
+            None => remove_dotenv(dir, &[old.to_string()]).map(drop),
+        };
+        match res {
+            Ok(()) => changed += 1,
+            Err(e) => errors.push(format!("{}: {e:#}", dir.display())),
+        }
+    }
+    (changed, errors)
+}

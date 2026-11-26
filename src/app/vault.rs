@@ -747,6 +747,7 @@ impl App {
                         modal.picked.remove(target_name);
                         self.add_env.remove(target_name);
                         modal.sel = modal.sel.min(self.env_vault.vars.len().saturating_sub(1));
+                        self.propagate_env_change(modal, target_name, None);
                     }
                     Err(e) => self.message = (format!("Save failed: {e:#}"), Notice::Error),
                 }
@@ -997,6 +998,9 @@ impl App {
                 return;
             }
         };
+        // A new entry whose key already exists updates it, so it propagates too.
+        let old_key = ed.editing_key.clone().unwrap_or_else(|| valid_key.clone());
+        let existed = self.env_vault.vars.iter().any(|v| v.key == old_key);
         let mut next_vault = self.env_vault.clone();
         if let Some(old) = ed.editing_key.as_deref() {
             if old != valid_key {
@@ -1028,10 +1032,48 @@ impl App {
         if let Some(pos) = self.env_vault.vars.iter().position(|v| v.key == valid_key) {
             modal.sel = pos;
         }
+        let entry = self
+            .env_vault
+            .vars
+            .iter()
+            .find(|v| v.key == valid_key)
+            .cloned();
+        if existed {
+            self.propagate_env_change(modal, &old_key, entry.as_ref());
+        }
         if modal.target != VaultTarget::VaultOnly {
             modal.picked.insert(valid_key);
         }
         modal.close_editor();
+    }
+
+    /// Push a vault edit (or delete, `new = None`) of `old` into every
+    /// project `.env` holding it, then refresh the modal's `.env` snapshot.
+    fn propagate_env_change(
+        &mut self,
+        modal: &mut VaultModal,
+        old: &str,
+        new: Option<&envvault::EnvEntry>,
+    ) {
+        let dirs = self.cfg.projects.iter().map(|p| p.path.as_path());
+        let (changed, errors) = envvault::propagate_env(dirs, old, new);
+        if let VaultKindState::Env { project_dotenv, .. } = &mut modal.kind {
+            *project_dotenv = self
+                .target_dir(modal.target)
+                .map(|d| envvault::read_dotenv(&d))
+                .unwrap_or_default();
+        }
+        if !errors.is_empty() {
+            self.message = (
+                format!(".env update failed: {}", errors.join("; ")),
+                Notice::Error,
+            );
+        } else if changed > 0 {
+            self.message = (
+                format!("Updated {old} in {changed} project .env file(s)"),
+                Notice::Info,
+            );
+        }
     }
 
     fn save_skill_editor(&mut self, modal: &mut VaultModal) {
