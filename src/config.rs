@@ -770,6 +770,14 @@ pub fn preview_name(
     base.map(|b| unique_name(&b, existing))
 }
 /// File name of a program without directory or `.exe`/`.cmd`/`.bat`/`.com`.
+/// Coding agent CLIs that take a typed line as a prompt (`claude`, `codex`,
+/// `agy`, `gemini`, `muse`), however they were started.
+pub fn is_agent_cli(prog: &str) -> bool {
+    matches!(
+        program_stem(prog).to_ascii_lowercase().as_str(),
+        "claude" | "codex" | "agy" | "gemini" | "muse"
+    )
+}
 pub(crate) fn program_stem(prog: &str) -> String {
     let base = std::path::Path::new(prog)
         .file_name()

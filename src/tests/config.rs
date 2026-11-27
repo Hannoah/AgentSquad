@@ -1061,3 +1061,19 @@ fn lessons_index_lists_titles_and_searches_bodies() {
     };
     assert!(ctx.contains("크기 변경"), "{ctx}");
 }
+
+#[test]
+fn agent_clis_are_told_from_other_programs() {
+    for p in [
+        "claude",
+        "Claude.exe",
+        r"C:\tools\codex.cmd",
+        "agy",
+        "gemini",
+    ] {
+        assert!(crate::config::is_agent_cli(p), "{p}");
+    }
+    for p in ["powershell.exe", "vim", "node", "npm", ""] {
+        assert!(!crate::config::is_agent_cli(p), "{p}");
+    }
+}

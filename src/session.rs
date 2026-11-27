@@ -201,8 +201,12 @@ pub(crate) fn parse_hook_report(text: &str) -> Option<(AgentPhase, Option<std::t
 }
 
 /// Return lines added strictly after the previous snapshot's trailing anchor.
-/// Uses the rightmost suffix match of `prev_anchor` (down to 3 lines when longer)
-/// so duplicate output is never appended even as scrollback advances.
+/// Matches the longest run of `prev_anchor` (down to 3 lines when longer),
+/// rightmost first, so duplicate output is never appended even as scrollback
+/// advances. Any run counts, not only the anchor's tail: an agent's footer
+/// (input box, token counter) is redrawn between tasks, so the tail often no
+/// longer exists while the reply lines above it do. Matching only the tail
+/// fell through to dumping the whole scrollback into every entry.
 pub(crate) fn diff_new_lines(lines: &[String], prev_anchor: &[String]) -> Vec<String> {
     let trim_bounds = |slice: &[String]| -> Vec<String> {
         let start = slice
@@ -225,16 +229,24 @@ pub(crate) fn diff_new_lines(lines: &[String], prev_anchor: &[String]) -> Vec<St
         .map(|(i, _)| i)
         .collect();
     let min_len = prev_anchor.len().min(3);
-    for suffix_len in (min_len..=prev_anchor.len()).rev() {
-        let target = &prev_anchor[prev_anchor.len() - suffix_len..];
-        if non_empty.len() < suffix_len {
+    // ponytail: O(anchor² × lines) string compares; the anchor is 8 lines.
+    for len in (min_len..=prev_anchor.len()).rev() {
+        if non_empty.len() < len {
             continue;
         }
-        for k in (0..=non_empty.len() - suffix_len).rev() {
-            let matches = (0..suffix_len).all(|j| lines[non_empty[k + j]] == target[j]);
-            if matches {
-                let after = non_empty[k + suffix_len - 1] + 1;
-                return trim_bounds(&lines[after..]);
+        // Later runs first: the closer to the anchor's end, the less it re-logs.
+        for from in (0..=prev_anchor.len() - len).rev() {
+            let target = &prev_anchor[from..from + len];
+            // Rules and prompt marks alone repeat in every footer: a run
+            // must hold some text to pin a position.
+            if !target.iter().any(|l| l.chars().any(char::is_alphanumeric)) {
+                continue;
+            }
+            for k in (0..=non_empty.len() - len).rev() {
+                if (0..len).all(|j| lines[non_empty[k + j]] == target[j]) {
+                    let after = non_empty[k + len - 1] + 1;
+                    return trim_bounds(&lines[after..]);
+                }
             }
         }
     }

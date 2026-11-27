@@ -727,6 +727,43 @@ fn pty_capture_deduplicates_output_and_records_prompts() {
     let anchor: Vec<String> = ["b", "c"].into_iter().map(String::from).collect();
     assert_eq!(diff_new_lines(&lines, &anchor), vec!["d", "e"]);
     assert!(diff_new_lines(&lines[..3], &anchor).is_empty());
+    // An agent's footer is redrawn between tasks (typed input, token count):
+    // the reply above it still pins the position, so only new lines come
+    // back instead of the whole scrollback.
+    let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let anchor = v(&[
+        "reply one",
+        "reply two",
+        "Cooked for 2m",
+        "────",
+        "❯",
+        "────",
+        "tokens 10k",
+    ]);
+    let lines = v(&[
+        "old",
+        "reply one",
+        "reply two",
+        "Cooked for 2m",
+        "────",
+        "❯ next question",
+        "────",
+        "tokens 12k",
+        "● new answer",
+    ]);
+    let got = diff_new_lines(&lines, &anchor);
+    assert!(
+        !got.contains(&"old".to_string()) && !got.contains(&"reply one".to_string()),
+        "{got:?}"
+    );
+    assert!(
+        got.contains(&"❯ next question".to_string()) && got.contains(&"● new answer".to_string()),
+        "{got:?}"
+    );
+    // Rules and an empty prompt alone never pin a position.
+    let anchor = v(&["────", "❯", "────"]);
+    let lines = v(&["a", "────", "❯", "────", "b"]);
+    assert_eq!(diff_new_lines(&lines, &anchor), lines);
 
     let dir = scratch_dir("capture-dedup");
     let p = Project {

@@ -19,6 +19,9 @@ use std::{
 
 /// Shortest task worth an entry; anything quicker is typing, not work.
 pub const MIN_TASK: Duration = Duration::from_secs(2);
+/// A "task" shorter than this with no prompt sent is the person typing the
+/// next question (keystrokes and echo look like work), not work: not filed.
+pub const TYPING_ONLY: Duration = Duration::from_secs(10);
 
 /// Serializes daily log appends and cursor updates across background workers.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());

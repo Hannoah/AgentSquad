@@ -1260,8 +1260,10 @@ impl App {
                     // A finished task is reported to the commander's REPORTS.md.
                     if phase_now == AgentPhase::Done && s.last_phase == AgentPhase::Working {
                         // Agents without hooks get the Stop hook's reminder typed in.
-                        // A bare shell would run the text as a command: never there.
-                        if !is_bare_shell(&self.cfg.projects[pi].command) {
+                        // A bare shell would run the text as a command, unless an
+                        // agent CLI started at its prompt holds the foreground.
+                        let cmd = &self.cfg.projects[pi].command;
+                        if !is_bare_shell(cmd) || s.fg_name.as_deref().is_some_and(is_agent_cli) {
                             let lessons = crate::knowledge::dir().ok();
                             s.nudge_unrecorded(lessons.as_deref());
                         }
@@ -1633,6 +1635,13 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
     if took < history::MIN_TASK {
         return;
     }
+    let prompts = s.take_task_prompts();
+    // Typing the next question reads as work (keys, echo) but is none: no
+    // prompt was sent and it lasted seconds. Its screen lines are not
+    // captured here, so the next real entry still carries them.
+    if prompts.is_empty() && took < history::TYPING_ONLY && outcome == "task complete" {
+        return;
+    }
     let command = match &s.fg_name {
         Some(fg) if is_bare_shell(&p.command) => fg.clone(),
         _ => join_command(&p.command),
@@ -1644,7 +1653,7 @@ fn file_history(s: &mut Session, p: &Project, outcome: String) {
         started,
         took,
         outcome,
-        prompts: s.take_task_prompts(),
+        prompts,
         // A Claude Code agent is logged from its transcript; skip the
         // scrollback walk on the UI thread.
         output: if s.transcript.is_some() {
