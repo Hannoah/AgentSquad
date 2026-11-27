@@ -95,7 +95,7 @@ fn main() -> Result<()> {
         }
         match env::current_dir()
             .ok()
-            .and_then(|d| ledger::stop_hook(&input, &d))
+            .and_then(|d| ledger::stop_hook(&input, &d, crate::knowledge::ensure().ok().as_deref()))
         {
             // Sent back to file a SITREP: the turn goes on.
             Some(out) => println!("{out}"),

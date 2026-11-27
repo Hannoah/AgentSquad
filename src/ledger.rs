@@ -353,13 +353,14 @@ pub fn unrecorded(project: &Path) -> bool {
     })
 }
 
+/// With `lessons`, the block also asks for a `Promote:` verdict on the work.
 /// What the Claude Code Stop hook prints: a block that sends the agent back to
 /// file a SITREP, or None to let it stop. `input` is the hook's JSON from
 /// stdin; `stop_hook_active` means we already sent it back once, so never loop.
 /// The flag is read with a real JSON parse so that a transcript merely
 /// *quoting* `"stop_hook_active":true` cannot disable the enforcement; the
 /// old substring check survives only for input that is not JSON at all.
-pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
+pub fn stop_hook(input: &str, cwd: &Path, lessons: Option<&Path>) -> Option<String> {
     let already_sent = match crate::json::parse(input) {
         Ok(v) => matches!(
             v.get("stop_hook_active"),
@@ -376,7 +377,15 @@ pub fn stop_hook(input: &str, cwd: &Path) -> Option<String> {
     // The agent may have changed into a subfolder of its project.
     let project = cwd.ancestors().find(|a| a.join(DIR).is_dir())?;
     unrecorded(project).then(|| {
-        r#"{"decision":"block","reason":"You changed files since your last SITREP. Before you stop, file ONE SITREP in .squad/log/ as .squad/README.md describes (Situation, Action, Result, Next), then finish."}"#.to_string()
+        let mut reason = String::from("You changed files since your last SITREP. Before you stop, file ONE SITREP in .squad/log/ as .squad/README.md describes (Situation, Action, Result, Next).");
+        // Every finished unit of work is also a chance to promote a lesson.
+        if let Some(dir) = lessons {
+            reason.push_str(&crate::knowledge::promote_note(dir));
+        }
+        reason.push_str(" Then finish.");
+        // The lessons path holds backslashes on Windows: encode, never paste.
+        let reason = crate::json::JsonValue::String(reason).to_pretty();
+        format!(r#"{{"decision":"block","reason":{}}}"#, reason.trim_end())
     })
 }
 

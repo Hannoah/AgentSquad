@@ -101,6 +101,16 @@ pub fn ensure() -> Result<PathBuf> {
     Ok(d)
 }
 
+/// What the Stop hook adds when it sends an agent back to file a SITREP:
+/// the moment to judge whether this work taught something worth promoting.
+/// `none` is the expected answer, so the nudge does not breed filler.
+pub fn promote_note(dir: &Path) -> String {
+    format!(
+        " End it with a line **Promote**: if this work taught something that passes every must rule in {}, file that lesson there as the README describes and name the file; otherwise write none (most work teaches nothing worth promoting).",
+        dir.join("README.md").display()
+    )
+}
+
 /// The sentence the brief appends so an agent reads and feeds the lessons.
 pub fn brief_note(dir: &Path) -> String {
     format!(

@@ -215,14 +215,24 @@ fn stop_hook_sends_the_agent_back_until_it_files() {
     ledger::ensure(&dir).unwrap();
     ledger::event(&dir, "start t");
     assert!(
-        ledger::stop_hook("{}", &dir).is_none(),
+        ledger::stop_hook("{}", &dir, None).is_none(),
         "nothing changed yet"
     );
 
     sleep(Duration::from_millis(50));
     fs::write(dir.join("a.txt"), "work").unwrap();
-    let out = ledger::stop_hook("{}", &dir).expect("changed files are blocked");
+    let out = ledger::stop_hook("{}", &dir, None).expect("changed files are blocked");
     assert!(out.contains(r#""decision":"block""#));
+    // With a lessons folder the block also asks for a Promote verdict, and a
+    // Windows path (backslashes, quotes) still yields valid JSON.
+    let lessons = PathBuf::from(r#"C:\Users\a "b"\memory"#);
+    let out = ledger::stop_hook("{}", &dir, Some(&lessons)).expect("still blocked");
+    let v = crate::json::parse(&out).expect("hook output is JSON");
+    let Some(crate::json::JsonValue::String(reason)) = v.get("reason") else {
+        panic!("no reason: {out}");
+    };
+    assert!(reason.contains("**Promote**") && reason.contains(r#"a "b"\memory"#));
+    assert!(reason.ends_with("Then finish."));
     // Auto history entries written by squad must NOT satisfy the Stop hook.
     sleep(Duration::from_millis(50));
     fs::write(
@@ -233,23 +243,23 @@ fn stop_hook_sends_the_agent_back_until_it_files() {
     )
     .unwrap();
     assert!(
-        ledger::stop_hook("{}", &dir).is_some(),
+        ledger::stop_hook("{}", &dir, None).is_some(),
         "auto history entry must not bypass Stop hook"
     );
     assert!(
-        ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir).is_none(),
+        ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir, None).is_none(),
         "sent back once, never in a loop"
     );
     fs::create_dir(dir.join("sub")).unwrap();
     assert!(
-        ledger::stop_hook("{}", &dir.join("sub")).is_some(),
+        ledger::stop_hook("{}", &dir.join("sub"), None).is_some(),
         "found from a subfolder"
     );
 
     sleep(Duration::from_millis(50));
     fs::write(dir.join(".squad").join("log").join("x.md"), "sitrep").unwrap();
     assert!(
-        ledger::stop_hook("{}", &dir).is_none(),
+        ledger::stop_hook("{}", &dir, None).is_none(),
         "filed, so it may stop"
     );
     assert!(!ledger::unrecorded(&dir));
@@ -260,11 +270,11 @@ fn stop_hook_sends_the_agent_back_until_it_files() {
 fn stop_hook_ignores_folders_without_ledger_or_git() {
     use crate::ledger;
     let dir = scratch_dir("hook-none");
-    assert!(ledger::stop_hook("{}", &dir).is_none(), "no ledger");
+    assert!(ledger::stop_hook("{}", &dir, None).is_none(), "no ledger");
     ledger::ensure(&dir).unwrap();
     std::fs::write(dir.join("a.txt"), "x").unwrap();
     // Not a repository (scratch dir lives in temp): nothing to compare, so no block.
-    assert!(ledger::stop_hook("{}", &dir).is_none(), "no git");
+    assert!(ledger::stop_hook("{}", &dir, None).is_none(), "no git");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -287,11 +297,11 @@ fn stop_hook_quoted_flag_does_not_disable_enforcement() {
     // A transcript merely quoting the flag must not disable enforcement.
     let quoted = r#"{"transcript": "user wrote \"stop_hook_active\": true in chat"}"#;
     assert!(
-        ledger::stop_hook(quoted, &dir).is_some(),
+        ledger::stop_hook(quoted, &dir, None).is_some(),
         "quoted flag must not bypass the block"
     );
     // ...while a real top-level boolean still lets the agent stop.
-    assert!(ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir).is_none());
+    assert!(ledger::stop_hook(r#"{"stop_hook_active": true}"#, &dir, None).is_none());
     let _ = fs::remove_dir_all(&dir);
 }
 
