@@ -377,16 +377,22 @@ pub fn stop_hook(input: &str, cwd: &Path, lessons: Option<&Path>) -> Option<Stri
     // The agent may have changed into a subfolder of its project.
     let project = cwd.ancestors().find(|a| a.join(DIR).is_dir())?;
     unrecorded(project).then(|| {
-        let mut reason = String::from("You changed files since your last SITREP. Before you stop, file ONE SITREP in .squad/log/ as .squad/README.md describes (Situation, Action, Result, Next).");
-        // Every finished unit of work is also a chance to promote a lesson.
-        if let Some(dir) = lessons {
-            reason.push_str(&crate::knowledge::promote_note(dir));
-        }
-        reason.push_str(" Then finish.");
         // The lessons path holds backslashes on Windows: encode, never paste.
-        let reason = crate::json::JsonValue::String(reason).to_pretty();
+        let reason = crate::json::JsonValue::String(sitrep_reason(lessons)).to_pretty();
         format!(r#"{{"decision":"block","reason":{}}}"#, reason.trim_end())
     })
+}
+
+/// Why an agent is sent back after changing files without a SITREP: by the
+/// Claude Code Stop hook, or typed in by squad for agents without hooks.
+pub fn sitrep_reason(lessons: Option<&Path>) -> String {
+    let mut reason = String::from("You changed files since your last SITREP. Before you stop, file ONE SITREP in .squad/log/ as .squad/README.md describes (Situation, Action, Result, Next).");
+    // Every finished unit of work is also a chance to promote a lesson.
+    if let Some(dir) = lessons {
+        reason.push_str(&crate::knowledge::promote_note(dir));
+    }
+    reason.push_str(" Then finish.");
+    reason
 }
 
 /// Claude Code settings that run `squad hook stop` when the agent finishes a

@@ -1259,6 +1259,12 @@ impl App {
                     self.bell |= !watching && rings_bell(phase_now);
                     // A finished task is reported to the commander's REPORTS.md.
                     if phase_now == AgentPhase::Done && s.last_phase == AgentPhase::Working {
+                        // Agents without hooks get the Stop hook's reminder typed in.
+                        // A bare shell would run the text as a command: never there.
+                        if !is_bare_shell(&self.cfg.projects[pi].command) {
+                            let lessons = crate::knowledge::dir().ok();
+                            s.nudge_unrecorded(lessons.as_deref());
+                        }
                         let projects = &self.cfg.projects;
                         if let Some(c) = superior(projects, pi) {
                             ledger::report(

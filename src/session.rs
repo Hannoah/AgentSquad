@@ -638,6 +638,8 @@ pub struct Session {
     input_line_buf: String,
     /// Prompt lines sent to the PTY during the current task.
     task_prompts: Vec<String>,
+    /// squad typed the SITREP reminder after the last task (`nudge_unrecorded`).
+    nudged: bool,
     render: RefCell<Option<RenderCache>>,
 }
 impl Session {
@@ -773,6 +775,7 @@ impl Session {
             history_anchor: Vec::new(),
             input_line_buf: String::new(),
             task_prompts: Vec::new(),
+            nudged: false,
             render: RefCell::new(None),
         })
     }
@@ -1000,6 +1003,33 @@ impl Session {
         } else if phase == AgentPhase::Done && !self.cached_needs_input {
             self.prompt_hint = None;
         }
+        true
+    }
+    /// The Stop hook for agents without Claude Code hooks (codex, agy, ...):
+    /// when a task completes with files changed since the last SITREP, type
+    /// the same reminder (SITREP plus the Promote verdict) once. The next
+    /// completion passes, as `stop_hook_active` does, so it never loops.
+    /// Skipped while the person has a half-typed line in this session.
+    // ponytail: runs git status on the UI thread, once per finished task.
+    pub fn nudge_unrecorded(&mut self, lessons: Option<&std::path::Path>) -> bool {
+        if self.hook_file.is_some() || !self.input_line_buf.is_empty() {
+            return false;
+        }
+        let Some(dir) = self.ledger.clone() else {
+            return false;
+        };
+        if std::mem::take(&mut self.nudged) || !ledger::unrecorded(&dir) {
+            return false;
+        }
+        // Starts with `[`: no menu takes that as an answer by accident.
+        let mut bytes = format!("[squad] {}", ledger::sitrep_reason(lessons)).into_bytes();
+        bytes.push(b'\r');
+        if self.input(&bytes).is_err() {
+            return false;
+        }
+        // No events.log line: `last_filed` falls back to its mtime, so logging
+        // the reminder would count as the SITREP it asks for.
+        self.nudged = true;
         true
     }
     /// Record a fact in the project's ledger, when it has one.

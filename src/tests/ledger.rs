@@ -445,3 +445,47 @@ fn only_permission_and_question_notifications_mean_waiting() {
     ));
     assert!(!notification_asks("not json"));
 }
+
+#[test]
+fn hookless_agents_get_the_sitrep_reminder_typed_once() {
+    use std::{fs, thread::sleep, time::Duration};
+    let dir = scratch_dir("nudge");
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git init");
+    // A stand-in agent that ignores what is typed (not claude: no hooks).
+    let p = Project {
+        name: "codexish".into(),
+        path: dir.clone(),
+        command: if cfg!(windows) {
+            vec![
+                "ping.exe".into(),
+                "-n".into(),
+                "30".into(),
+                "127.0.0.1".into(),
+            ]
+        } else {
+            vec!["sleep".into(), "30".into()]
+        },
+        kind: Kind::Agent,
+        autostart: false,
+        ledger: true,
+        reports_to: None,
+        pinned: false,
+        restart_on_crash: false,
+    };
+    let mut s = Session::spawn(&p, 24, 80).unwrap();
+    assert!(s.hook_file.is_none());
+    assert!(!s.nudge_unrecorded(None), "nothing changed yet");
+    sleep(Duration::from_millis(50));
+    fs::write(dir.join("a.txt"), "work").unwrap();
+    assert!(s.nudge_unrecorded(None), "changed files: reminded");
+    assert!(!s.nudge_unrecorded(None), "the next completion passes");
+    assert!(s.nudge_unrecorded(None), "then it reminds again");
+    drop(s);
+    let _ = fs::remove_dir_all(&dir);
+}
