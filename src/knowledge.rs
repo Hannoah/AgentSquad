@@ -1,5 +1,6 @@
 //! Shared lessons: one `memory/` folder next to `config.toml` that every
-//! agent squad manages reads, and promotes truly reusable knowledge into.
+//! agent squad manages reads, and promotes truly reusable knowledge into
+//! from its project's `.squad/`.
 //!
 //! Plain markdown, one lesson per file (so several writers never conflict).
 //! `README.md` holds the promotion rules; squad writes it once and never
@@ -15,8 +16,9 @@ use std::{
 pub const README: &str = "\
 # Shared lessons
 
-Knowledge every agent squad manages reads, across all projects.
-Sessions end and projects close; what is here keeps helping.
+The central knowledge every agent squad manages reads, across all projects.
+Each project keeps its own knowledge in `.squad/` (`CONTEXT.md` and the
+SITREPs in `log/`); only what passes the rules below is promoted here.
 
 ## Before you start
 
@@ -24,34 +26,38 @@ Scan the file names here and open the lessons that touch your task.
 
 ## Promotion rules
 
-Promote a lesson here only when it passes ALL of these. When in doubt,
-keep it in your project's `.squad/CONTEXT.md` instead.
+Rules 1-5 are MUST: fail one and the lesson stays in the project's
+`.squad/`. Rules 6-8 are SHOULD: they raise the quality.
 
-1. **Universal** - not tied to one project. Someone on a different
-   project, with a different agent, would be helped by it.
-2. **Verified** - it actually happened: reproduced, fixed, or measured.
-   No guesses, no \"should work\".
-3. **Costly to rediscover** - it took real time or a failure to learn.
-   Not something the official docs or a quick search answer.
-4. **Actionable** - it says what to do or avoid, and when it applies.
-5. **Durable** - still true months from now. A version-specific
-   workaround names the version.
-6. **Clean** - no secrets, no customer data, no private project names,
-   paths or people. Write it so it could be shown to anyone.
-7. **New** - check the existing lessons first. If one covers it, do not
-   add a near-copy; a correction is a new lesson that names the old one.
+1. **Generality** (must) - not tied to one project or customer. It helps
+   someone else in a different situation.
+2. **Non-obviousness** (must) - the official docs or a quick search do not
+   give it. Pitfalls found by trial and error, hidden constraints, and how
+   things actually behave belong here.
+3. **Verified** (must) - actually run or checked. Write down the date it
+   was checked and the environment (versions and the like).
+4. **Actionability** (must) - a reader can act on it right away. It has at
+   least one of: a procedure, a checklist, a command, a decision rule.
+5. **Safety** (must) - no secrets, no customer data, no internal project
+   names, paths or people. It could be shown to anyone.
+6. **Durability** (should) - still true months from now. A version-specific
+   note names the version.
+7. **Conciseness** (should) - one lesson per file, read in under a minute.
+8. **No duplicates, with source** (should) - check the existing lessons
+   first. A correction is a new lesson that names the file it supersedes.
+   Record the source project and date.
 
 ## Format
 
 - name: `<UTC date and time>-<short-slug>.md`, e.g. `20261127T061200Z-pty-resize-race.md`
 - content:
   - `# <one-line lesson>`
-  - **Applies when**: the situation (tools, platform, versions)
-  - **Lesson**: what to do or avoid
-  - **Evidence**: what happened that proved it
-  - **Source**: which project and agent learned it, and when
+  - **Applies when**: the situation
+  - **Lesson**: the procedure, checklist, command or decision rule
+  - **Verified**: date and environment (versions)
+  - **Source**: which project and agent learned it
   - **Supersedes**: the file it corrects, if any
-- one lesson per file; never edit or delete someone else's lesson.
+- never edit or delete someone else's lesson.
 - write in the language the user uses with you.
 ";
 
@@ -85,7 +91,7 @@ pub fn ensure() -> Result<PathBuf> {
 /// The sentence the brief appends so an agent reads and feeds the lessons.
 pub fn brief_note(dir: &Path) -> String {
     format!(
-        " Shared lessons from every agent live in {}: read README.md there (the promotion rules), scan the file names, and open those that touch your task. When you learn something that passes every promotion rule, file it there as README.md describes.",
+        " Shared lessons from every agent live in {}: read README.md there (the promotion rules), scan the file names, and open those that touch your task. When something in your .squad/ (CONTEXT.md, SITREPs) passes every must rule, promote it there as README.md describes.",
         dir.display()
     )
 }

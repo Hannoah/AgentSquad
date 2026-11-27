@@ -998,7 +998,7 @@ fn shared_lessons_folder_keeps_an_edited_readme() {
     let readme = dir.join("README.md");
     assert!(fs::read_to_string(&readme)
         .unwrap()
-        .contains("**Universal**"));
+        .contains("**Generality** (must)"));
     // A person's edit to the rules survives the next ensure.
     fs::write(&readme, "my rules").unwrap();
     fs::write(dir.join("20261127T061200Z-pty-race.md"), "# x").unwrap();
