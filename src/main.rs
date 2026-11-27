@@ -78,11 +78,20 @@ fn main() -> Result<()> {
     // Claude Code's hooks (see ledger::hook_settings); need no config either.
     if args.first().map(String::as_str) == Some("hook") {
         let sub = args.get(1).map(String::as_str);
-        if !matches!(sub, Some("stop" | "notify" | "permission")) {
-            bail!("Usage: squad hook stop|notify|permission (run by Claude Code, not by hand)");
+        if !matches!(sub, Some("start" | "stop" | "notify" | "permission")) {
+            bail!(
+                "Usage: squad hook start|stop|notify|permission (run by Claude Code, not by hand)"
+            );
         }
         let mut input = String::new();
         let _ = io::stdin().read_to_string(&mut input);
+        if sub == Some("start") {
+            // The shared lessons' index, never their bodies, joins the context.
+            if let Ok(dir) = knowledge::ensure() {
+                println!("{}", knowledge::session_start_json(&dir));
+            }
+            return Ok(());
+        }
         if sub == Some("permission") {
             ledger::write_state(ledger::STATE_ASKING, &input);
             return Ok(());
@@ -101,6 +110,12 @@ fn main() -> Result<()> {
             Some(out) => println!("{out}"),
             None => ledger::write_state(ledger::STATE_DONE, &input),
         }
+        return Ok(());
+    }
+    // Any agent, any time: the shared lessons' index, or those matching a word.
+    if args.first().map(String::as_str) == Some("lessons") {
+        let dir = knowledge::ensure()?;
+        print!("{}", knowledge::index(&dir, &args[1..].join(" ")));
         return Ok(());
     }
     // Shell completion needs no config: `squad completion powershell|bash`.

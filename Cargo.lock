@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentsquad"
-version = "0.15.50"
+version = "0.15.51"
 dependencies = [
  "anyhow",
  "crossterm",

@@ -16,7 +16,7 @@ pub fn script_for(shell: &str) -> Option<&'static str> {
 pub fn powershell_script() -> &'static str {
     r#"Register-ArgumentCompleter -Native -CommandName squad -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $cmds = @('add', 'completion', 'env', 'list', 'refs', 'remove', 'skills', 'start', 'tools', 'under', 'update')
+    $cmds = @('add', 'completion', 'env', 'lessons', 'list', 'refs', 'remove', 'skills', 'start', 'tools', 'under', 'update')
     $args = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
     if ($args.Count -eq 0 -or ($args.Count -eq 1 -and $wordToComplete -ne '')) {
         $cmds | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -39,7 +39,7 @@ pub fn bash_script() -> &'static str {
     r#"# squad completion for bash — load with: eval "$(squad completion bash)"
 _squad_complete() {
     local cur prev cmds
-    cmds="add completion env list refs remove skills start tools under update"
+    cmds="add completion env lessons list refs remove skills start tools under update"
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
     case "$prev" in

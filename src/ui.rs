@@ -873,6 +873,7 @@ Usage:
                                                      Manage shared tools (MCP across agy/claude/muse/codex + .squad/TOOLS.md)
   squad refs <list|add [NAME] --url URL [--desc D]|remove NAME|apply proj|unapply proj NAME...>
                                                      Manage shared reference links (CLAUDE.md + AGENTS.md)
+  squad lessons [<word>]                             Index of shared lessons (memory/), or those matching
   squad list                                         List registered projects
   squad remove <name>                                Unregister (does not delete files)
   squad under <name> [<commander>]                   Set whom an agent reports to (none clears it)

@@ -1016,3 +1016,48 @@ fn shared_lessons_folder_keeps_an_edited_readme() {
     let note = crate::knowledge::brief_note(&dir);
     assert!(note.contains(&dir.display().to_string()) && !note.contains('\n'));
 }
+
+#[test]
+fn lessons_index_lists_titles_and_searches_bodies() {
+    let dir = scratch_dir("lessons-index").join("memory");
+    crate::knowledge::ensure_at(&dir).unwrap();
+    assert!(crate::knowledge::index(&dir, "").contains("(none)"));
+    fs::write(
+        dir.join("20261128T010000Z-pty.md"),
+        "# ConPTY 크기 변경은 첫 출력 뒤에\n\n**Lesson**: wait for output before resize\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("20261128T020000Z-git.md"),
+        "\u{feff}# git exclude beats gitignore\n",
+    )
+    .unwrap();
+    let all = crate::knowledge::index(&dir, "");
+    assert!(all.contains("- 20261128T010000Z-pty.md: ConPTY 크기 변경은 첫 출력 뒤에"));
+    assert!(all.contains("2 in") && !all.contains("- README"), "{all}");
+    assert!(
+        all.contains("git.md: git exclude beats gitignore"),
+        "a BOM does not hide the title: {all}"
+    );
+    assert!(
+        !all.contains("wait for output"),
+        "bodies stay out of the index"
+    );
+    // A word in the body finds the lesson, case-insensitively.
+    let hit = crate::knowledge::index(&dir, "RESIZE");
+    assert!(
+        hit.contains("1 of 2") && hit.contains("pty.md") && !hit.contains("git.md"),
+        "{hit}"
+    );
+    // The hook output is ASCII-only JSON that still decodes to the Korean title.
+    let json = crate::knowledge::session_start_json(&dir);
+    assert!(json.is_ascii());
+    let v = crate::json::parse(&json).unwrap();
+    let ctx = v
+        .get("hookSpecificOutput")
+        .and_then(|h| h.get("additionalContext"));
+    let Some(crate::json::JsonValue::String(ctx)) = ctx else {
+        panic!("{json}");
+    };
+    assert!(ctx.contains("크기 변경"), "{ctx}");
+}

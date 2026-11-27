@@ -395,7 +395,8 @@ pub fn sitrep_reason(lessons: Option<&Path>) -> String {
     reason
 }
 
-/// Claude Code settings that run `squad hook stop` when the agent finishes a
+/// Claude Code settings that run `squad hook start` when a session starts
+/// (the shared lessons index), `squad hook stop` when the agent finishes a
 /// turn, `squad hook notify` on notifications (`elicitation_dialog` or older
 /// versions), and `squad hook permission` on `PermissionRequest`.
 /// `PermissionRequest` fires as soon as a tool permission dialog opens
@@ -421,7 +422,8 @@ fn hook_settings(exe: &Path) -> String {
         format!(r#"[{{"hooks":[{{"type":"command","shell":"{shell}","command":"{command}"}}]}}]"#)
     };
     format!(
-        r#"{{"hooks":{{"Stop":{},"Notification":{},"PermissionRequest":{}}}}}"#,
+        r#"{{"hooks":{{"SessionStart":{},"Stop":{},"Notification":{},"PermissionRequest":{}}}}}"#,
+        hook("start"),
         hook("stop"),
         hook("notify"),
         hook("permission"),

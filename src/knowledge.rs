@@ -22,7 +22,9 @@ SITREPs in `log/`); only what passes the rules below is promoted here.
 
 ## Before you start
 
-Scan the file names here and open the lessons that touch your task.
+Run `squad lessons` for the index (one line per lesson) and open the
+lessons that touch your task. `squad lessons <word>` searches them; use it
+whenever a problem looks like one someone may have hit before.
 
 ## Promotion rules
 
@@ -101,6 +103,87 @@ pub fn ensure() -> Result<PathBuf> {
     Ok(d)
 }
 
+/// The table of contents an agent gets instead of the lessons themselves:
+/// one line per lesson (file name and its `# ` title) matching `query` in
+/// the file name, title or body (case-insensitive; empty matches all).
+/// Bodies stay on disk, so the context cost grows by a line per lesson.
+pub fn index(dir: &Path, query: &str) -> String {
+    let q = query.trim().to_lowercase();
+    let lessons: Vec<(String, String, String)> = crate::ledger::list_entries(dir)
+        .into_iter()
+        .filter(|(name, _)| name.ends_with(".md") && name != "README.md")
+        .map(|(name, path)| {
+            let body = fs::read_to_string(&path).unwrap_or_default();
+            let title = body
+                .lines()
+                // PowerShell 5.1 and Notepad start UTF-8 files with a BOM.
+                .find_map(|l| l.trim_start_matches('\u{feff}').strip_prefix("# "))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            (name, title, body)
+        })
+        .collect();
+    let total = lessons.len();
+    let hits: Vec<String> = lessons
+        .into_iter()
+        .filter(|(n, _, b)| {
+            q.is_empty() || n.to_lowercase().contains(&q) || b.to_lowercase().contains(&q)
+        })
+        .map(|(n, t, _)| crate::config::sanitize_chrome_line(&format!("- {n}: {t}")))
+        .collect();
+    let mut out = if q.is_empty() {
+        format!(
+            "Shared lessons from every agent: {total} in {}. Open a lesson when its title touches your task; search them any time with `squad lessons <word>`. Promotion rules: README.md there.\n",
+            dir.display()
+        )
+    } else {
+        format!(
+            "{} of {total} shared lessons in {} match \"{}\":\n",
+            hits.len(),
+            dir.display(),
+            query.trim()
+        )
+    };
+    if hits.is_empty() {
+        out.push_str("(none)\n");
+    }
+    for h in hits {
+        out.push_str(&h);
+        out.push('\n');
+    }
+    out
+}
+
+/// What the Claude Code SessionStart hook prints: the index as added
+/// context. Non-ASCII is written as `\u` escapes, so a Korean title survives
+/// PowerShell re-encoding the hook's output with the console code page.
+pub fn session_start_json(dir: &Path) -> String {
+    let mut ctx = crate::json::JsonValue::empty_object();
+    ctx.set(
+        "hookEventName",
+        crate::json::JsonValue::String("SessionStart".into()),
+    );
+    ctx.set(
+        "additionalContext",
+        crate::json::JsonValue::String(index(dir, "")),
+    );
+    let mut out = crate::json::JsonValue::empty_object();
+    out.set("hookSpecificOutput", ctx);
+    let mut ascii = String::new();
+    for c in out.to_pretty().chars() {
+        if c.is_ascii() {
+            ascii.push(c);
+        } else {
+            let mut units = [0u16; 2];
+            for u in c.encode_utf16(&mut units) {
+                ascii.push_str(&format!("\\u{u:04x}"));
+            }
+        }
+    }
+    ascii
+}
+
 /// What the Stop hook adds when it sends an agent back to file a SITREP:
 /// the moment to judge whether this work taught something worth promoting.
 /// `none` is the expected answer, so the nudge does not breed filler.
@@ -114,7 +197,7 @@ pub fn promote_note(dir: &Path) -> String {
 /// The sentence the brief appends so an agent reads and feeds the lessons.
 pub fn brief_note(dir: &Path) -> String {
     format!(
-        " Shared lessons from every agent live in {}: read README.md there (the promotion rules), scan the file names, and open those that touch your task. When something in your .squad/ (CONTEXT.md, SITREPs) passes every must rule, promote it there as README.md describes.",
+        " Shared lessons from every agent live in {}: run `squad lessons` for their index (`squad lessons <word>` searches) and open those that touch your task; README.md there has the promotion rules. When something in your .squad/ (CONTEXT.md, SITREPs) passes every must rule, promote it there as README.md describes.",
         dir.display()
     )
 }
