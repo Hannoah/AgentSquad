@@ -29,6 +29,9 @@ Scan the file names here and open the lessons that touch your task.
 Rules 1-5 are MUST: fail one and the lesson stays in the project's
 `.squad/`. Rules 6-8 are SHOULD: they raise the quality.
 
+Always, before any rule: no secrets, no customer data, no internal project
+names, paths or people. A lesson must be safe to show to anyone.
+
 1. **Generality** (must) - not tied to one project or customer. It helps
    someone else in a different situation.
 2. **Non-obviousness** (must) - the official docs or a quick search do not
@@ -38,8 +41,8 @@ Rules 1-5 are MUST: fail one and the lesson stays in the project's
    was checked and the environment (versions and the like).
 4. **Actionability** (must) - a reader can act on it right away. It has at
    least one of: a procedure, a checklist, a command, a decision rule.
-5. **Safety** (must) - no secrets, no customer data, no internal project
-   names, paths or people. It could be shown to anyone.
+5. **Self-containedness** (must) - understood without the original
+   project's context. It states when it applies and when it must not.
 6. **Durability** (should) - still true months from now. A version-specific
    note names the version.
 7. **Conciseness** (should) - one lesson per file, read in under a minute.
@@ -53,6 +56,7 @@ Rules 1-5 are MUST: fail one and the lesson stays in the project's
 - content:
   - `# <one-line lesson>`
   - **Applies when**: the situation
+  - **Does not apply when**: where it would mislead
   - **Lesson**: the procedure, checklist, command or decision rule
   - **Verified**: date and environment (versions)
   - **Source**: which project and agent learned it
