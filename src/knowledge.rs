@@ -194,6 +194,86 @@ pub fn promote_note(dir: &Path) -> String {
     )
 }
 
+pub const BLOCK_START: &str = "<!-- agentsquad:lessons:start -->";
+pub const BLOCK_END: &str = "<!-- agentsquad:lessons:end -->";
+
+/// The block squad keeps in an agent's global instructions, so agents
+/// without a SessionStart hook (codex, agy) look the lessons up themselves.
+/// It names the command, not the titles: the index stays live.
+pub fn global_block(dir: &Path) -> String {
+    format!(
+        "{BLOCK_START}\n## Shared lessons (AgentSquad)\n\nAt the start of a task, run `squad lessons` for the index of lessons every agent shares, and open those that touch your task. `squad lessons <word>` searches them; use it whenever a problem looks like one someone may have hit before. They live in {}; promote a lesson there only when it passes every must rule in its README.md.\n{BLOCK_END}",
+        dir.display()
+    )
+}
+
+/// `existing` with `block` in place of the old block, or appended after a
+/// blank line when there is none. Line endings follow the file.
+pub fn upsert_block(existing: &str, block: &str) -> String {
+    let eol = if existing.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let block = block.replace('\n', eol);
+    if let (Some(s), Some(e)) = (existing.find(BLOCK_START), existing.find(BLOCK_END)) {
+        if s < e {
+            let end = e + BLOCK_END.len();
+            return format!("{}{block}{}", &existing[..s], &existing[end..]);
+        }
+    }
+    let trimmed = existing.trim_end();
+    if trimmed.is_empty() {
+        format!("{block}{eol}")
+    } else {
+        format!("{trimmed}{eol}{eol}{block}{eol}")
+    }
+}
+
+/// Global instruction files of the agents installed here: codex reads
+/// `$CODEX_HOME/AGENTS.md` (its `AGENTS.override.md` instead, when present)
+/// and agy reads `~/.gemini/AGENTS.md`. An agent whose folder is missing is
+/// not installed and is skipped. (`~/.gemini/GEMINI.md` is left alone: the
+/// Gemini CLI and the Antigravity IDE share and rewrite it.)
+pub fn global_targets() -> Vec<PathBuf> {
+    let home = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from);
+    let codex = env::var_os("CODEX_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".codex")));
+    let codex_file = codex.map(|c| {
+        let o = c.join("AGENTS.override.md");
+        if o.is_file() {
+            o
+        } else {
+            c.join("AGENTS.md")
+        }
+    });
+    let agy_file = home.map(|h| h.join(".gemini").join("AGENTS.md"));
+    [codex_file, agy_file]
+        .into_iter()
+        .flatten()
+        .filter(|f| f.parent().is_some_and(Path::is_dir))
+        .collect()
+}
+
+/// Put (or refresh) the lessons block in each of `targets`; untouched when
+/// already current. Returns the files it changed.
+pub fn install_global_at(targets: &[PathBuf], dir: &Path) -> Vec<PathBuf> {
+    let block = global_block(dir);
+    targets
+        .iter()
+        .filter(|f| {
+            let old = fs::read_to_string(f).unwrap_or_default();
+            let new = upsert_block(&old, &block);
+            new != old && crate::config::atomic_write_bytes(f, new.as_bytes(), false).is_ok()
+        })
+        .cloned()
+        .collect()
+}
+
 /// The sentence the brief appends so an agent reads and feeds the lessons.
 pub fn brief_note(dir: &Path) -> String {
     format!(

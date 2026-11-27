@@ -1077,3 +1077,40 @@ fn agent_clis_are_told_from_other_programs() {
         assert!(!crate::config::is_agent_cli(p), "{p}");
     }
 }
+
+#[test]
+fn lessons_block_goes_into_global_instructions_once() {
+    use crate::knowledge::{install_global_at, upsert_block, BLOCK_START};
+    let root = scratch_dir("lessons-global");
+    let memory = root.join("memory");
+    let codex = root.join("codex").join("AGENTS.md");
+    let agy = root.join("gemini").join("AGENTS.md");
+    fs::create_dir_all(codex.parent().unwrap()).unwrap();
+    fs::create_dir_all(agy.parent().unwrap()).unwrap();
+    fs::write(&codex, "# My rules\r\n\r\nBe terse.\r\n").unwrap();
+    let targets = vec![codex.clone(), agy.clone()];
+    assert_eq!(install_global_at(&targets, &memory).len(), 2);
+    let text = fs::read_to_string(&codex).unwrap();
+    assert!(
+        text.starts_with("# My rules\r\n\r\nBe terse.\r\n\r\n<!-- agentsquad"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("squad lessons") && !text.replace("\r\n", "").contains('\n'),
+        "CRLF kept"
+    );
+    assert!(fs::read_to_string(&agy).unwrap().starts_with(BLOCK_START));
+    // Already current: nothing is rewritten, and the block never doubles.
+    assert!(install_global_at(&targets, &memory).is_empty());
+    let moved = install_global_at(&targets, &root.join("elsewhere"));
+    assert_eq!(moved.len(), 2, "a new path refreshes the block");
+    let text = fs::read_to_string(&codex).unwrap();
+    assert_eq!(text.matches(BLOCK_START).count(), 1);
+    assert!(text.contains("elsewhere") && text.contains("Be terse."));
+    // Text after the block survives a refresh.
+    let s = upsert_block(
+        "a\n<!-- agentsquad:lessons:start -->\nold\n<!-- agentsquad:lessons:end -->\nb\n",
+        "NEW",
+    );
+    assert_eq!(s, "a\nNEW\nb\n");
+}

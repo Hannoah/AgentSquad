@@ -1787,7 +1787,11 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     let _ = install_path(); // remember the path before an update renames the file
                             // Every agent project keeps a `.squad/`; add it where it is missing.
     c.projects.iter().for_each(ledger::ensure_agent);
-    let _ = crate::knowledge::ensure();
+    // The shared lessons folder, and the global instructions that point codex
+    // and agy at it (they have no SessionStart hook).
+    if let Ok(dir) = crate::knowledge::ensure() {
+        crate::knowledge::install_global_at(&crate::knowledge::global_targets(), &dir);
+    }
     if !io::stdin().is_terminal() {
         bail!("squad needs an interactive terminal");
     }
