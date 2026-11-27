@@ -6,6 +6,7 @@ pub mod history;
 pub mod ime;
 pub mod input;
 pub mod json;
+pub mod knowledge;
 pub mod ledger;
 pub mod pathpick;
 pub mod refs;

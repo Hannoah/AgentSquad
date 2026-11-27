@@ -1002,7 +1002,7 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
         ..Default::default()
     };
     let mut app = App::new(cfg, None);
-    // Down past the last project steps onto Management (Memory, Env, Skills, Tools, Refs), then wraps to top.
+    // Down past the last project steps onto Management (Memory, Env, Skills, Tools, Refs, Lessons), then wraps to top.
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (1, None));
     app.on_key(key(KeyCode::Down), 24, 54);
@@ -1015,10 +1015,14 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     assert_eq!(app.mgmt_sel, Some(3));
     app.on_key(key(KeyCode::Down), 24, 54); // References
     assert_eq!(app.mgmt_sel, Some(4));
+    app.on_key(key(KeyCode::Down), 24, 54); // Lessons
+    assert_eq!(app.mgmt_sel, Some(5));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (0, None));
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(4), "Up from the top reaches References");
+    assert_eq!(app.mgmt_sel, Some(5), "Up from the top reaches Lessons");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(4), "Up reaches References");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(3), "Up reaches Tools");
     app.on_key(key(KeyCode::Up), 24, 54);

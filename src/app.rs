@@ -1669,6 +1669,9 @@ pub(crate) struct GSearch {
 }
 
 pub(crate) struct History {
+    /// Popup title word: "History" for SITREPs, "Lessons" for shared lessons.
+    pub(crate) kind: &'static str,
+    /// Project name, or the lessons folder path.
     project: String,
     items: Vec<(String, std::path::PathBuf)>,
     /// Visible rows into `items` when `query` filters the list.
@@ -1686,9 +1689,10 @@ pub(crate) struct History {
     offset: i64,
 }
 impl History {
-    fn open(project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
+    fn open(kind: &'static str, project: &str, items: Vec<(String, std::path::PathBuf)>) -> Self {
         let view: Vec<usize> = (0..items.len()).collect();
         let mut h = Self {
+            kind,
             project: project.to_string(),
             items,
             view,
@@ -1768,6 +1772,7 @@ fn run_ui(c: Config, initial: Option<usize>, resume: Vec<usize>) -> Result<Optio
     let _ = install_path(); // remember the path before an update renames the file
                             // Every agent project keeps a `.squad/`; add it where it is missing.
     c.projects.iter().for_each(ledger::ensure_agent);
+    let _ = crate::knowledge::ensure();
     if !io::stdin().is_terminal() {
         bail!("squad needs an interactive terminal");
     }

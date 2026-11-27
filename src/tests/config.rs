@@ -990,3 +990,29 @@ fn create_missing_dir_makes_nested_folders_and_spares_existing() {
     create_missing_dir(file.to_str().unwrap()).unwrap(); // a file is left alone
     assert!(file.is_file());
 }
+
+#[test]
+fn shared_lessons_folder_keeps_an_edited_readme() {
+    let dir = scratch_dir("lessons").join("memory");
+    crate::knowledge::ensure_at(&dir).unwrap();
+    let readme = dir.join("README.md");
+    assert!(fs::read_to_string(&readme)
+        .unwrap()
+        .contains("**Universal**"));
+    // A person's edit to the rules survives the next ensure.
+    fs::write(&readme, "my rules").unwrap();
+    fs::write(dir.join("20261127T061200Z-pty-race.md"), "# x").unwrap();
+    crate::knowledge::ensure_at(&dir).unwrap();
+    assert_eq!(fs::read_to_string(&readme).unwrap(), "my rules");
+    let names: Vec<String> = crate::ledger::list_entries(&dir)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(
+        names,
+        ["README.md", "20261127T061200Z-pty-race.md"],
+        "rules first, then newest"
+    );
+    let note = crate::knowledge::brief_note(&dir);
+    assert!(note.contains(&dir.display().to_string()) && !note.contains('\n'));
+}

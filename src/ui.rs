@@ -119,7 +119,7 @@ pub fn help_lines() -> Vec<&'static str> {
         "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump (type 2 digits past 9) / first / last",
         "/, F, G     filter (text, is:waiting…) / find here / find all",
-        "a, E,K,T,R  add / env / skills / tools / refs",
+        "a,E,K,T,R,L  add / env / skills / tools / refs / lessons",
         "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
         "h, g       history (SITREPs, / filters) / git status & diff",

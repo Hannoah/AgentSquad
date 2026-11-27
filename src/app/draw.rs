@@ -505,14 +505,16 @@ impl App {
         f.render_widget(ratatui::widgets::Clear, popup);
         let count_note = if h.query.is_empty() {
             format!(
-                " History: {} ({}) ",
+                " {}: {} ({}) ",
+                h.kind,
                 sanitize_chrome_line(&h.project),
                 h.items.len()
             )
         } else {
             format!(
-                " History: {} ({}/{} · /{} ) ",
-                h.project,
+                " {}: {} ({}/{} · /{} ) ",
+                h.kind,
+                sanitize_chrome_line(&h.project),
                 h.view.len(),
                 h.items.len(),
                 h.query
@@ -1125,6 +1127,13 @@ impl App {
                 REFS_ROW,
                 self.vault_modal.as_ref().is_some_and(VaultModal::is_ref),
             ),
+            (
+                5usize,
+                "Lessons",
+                "L",
+                LESSONS_ROW,
+                self.history.as_ref().is_some_and(|h| h.kind == "Lessons"),
+            ),
         ];
         for (idx, label, key_tag, row_id, open) in mgmt_rows {
             if self.mgmt_sel == Some(idx) {
@@ -1685,7 +1694,8 @@ impl App {
                         1 => "Env vault (E)",
                         2 => "Skills (K)",
                         3 => "Tools (T)",
-                        _ => "References (R)",
+                        4 => "References (R)",
+                        _ => "Lessons (L)",
                     };
                     Some((label.to_string(), Color::Cyan))
                 } else if let Some(pi) = sel_pi {

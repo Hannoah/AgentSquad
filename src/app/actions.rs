@@ -500,7 +500,7 @@ impl App {
         if items.is_empty() {
             self.message = (format!("No history in {} yet", p.name), Notice::Warn);
         } else {
-            self.history = Some(History::open(&p.name, items));
+            self.history = Some(History::open("History", &p.name, items));
         }
     }
 
@@ -558,7 +558,7 @@ impl App {
     }
 
     /// Open Management row `m`: `0` Memory monitor, `1` Env vault, `2` Skills,
-    /// `3` Tools, `4` References (scoped to the selected project, or vault-only when none exist).
+    /// `3` Tools, `4` References, `5` Lessons (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;
         let target = self.selected_vault_target();
@@ -568,7 +568,19 @@ impl App {
             2 => self.open_skill_modal(target),
             3 => self.open_tool_modal(target),
             4 => self.open_ref_modal(target),
+            5 => self.open_lessons(),
             _ => {}
+        }
+    }
+
+    /// `L`: browse the shared lessons folder; its path is the popup title.
+    pub(super) fn open_lessons(&mut self) {
+        match crate::knowledge::ensure() {
+            Ok(dir) => {
+                let items = ledger::list_entries(&dir);
+                self.history = Some(History::open("Lessons", &dir.display().to_string(), items));
+            }
+            Err(e) => self.message = (format!("Shared lessons: {e}"), Notice::Error),
         }
     }
 
@@ -973,6 +985,9 @@ impl App {
                         line.push_str(
                             " Available project tools are listed in .squad/TOOLS.md: read it before running commands.",
                         );
+                    }
+                    if let Ok(dir) = crate::knowledge::ensure() {
+                        line.push_str(&crate::knowledge::brief_note(&dir));
                     }
                     let mut bytes = line.into_bytes();
                     bytes.push(b'\r');
