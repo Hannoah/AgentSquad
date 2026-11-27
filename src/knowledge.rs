@@ -158,16 +158,18 @@ pub fn index(dir: &Path, query: &str) -> String {
 /// What the Claude Code SessionStart hook prints: the index as added
 /// context. Non-ASCII is written as `\u` escapes, so a Korean title survives
 /// PowerShell re-encoding the hook's output with the console code page.
-pub fn session_start_json(dir: &Path) -> String {
+pub fn session_start_json(dir: &Path, lead: &str) -> String {
     let mut ctx = crate::json::JsonValue::empty_object();
     ctx.set(
         "hookEventName",
         crate::json::JsonValue::String("SessionStart".into()),
     );
-    ctx.set(
-        "additionalContext",
-        crate::json::JsonValue::String(index(dir, "")),
-    );
+    let text = if lead.is_empty() {
+        index(dir, "")
+    } else {
+        format!("{lead}\n\n{}", index(dir, ""))
+    };
+    ctx.set("additionalContext", crate::json::JsonValue::String(text));
     let mut out = crate::json::JsonValue::empty_object();
     out.set("hookSpecificOutput", ctx);
     let mut ascii = String::new();

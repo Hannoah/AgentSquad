@@ -1050,7 +1050,7 @@ fn lessons_index_lists_titles_and_searches_bodies() {
         "{hit}"
     );
     // The hook output is ASCII-only JSON that still decodes to the Korean title.
-    let json = crate::knowledge::session_start_json(&dir);
+    let json = crate::knowledge::session_start_json(&dir, "");
     assert!(json.is_ascii());
     let v = crate::json::parse(&json).unwrap();
     let ctx = v

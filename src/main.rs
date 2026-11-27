@@ -86,9 +86,16 @@ fn main() -> Result<()> {
         let mut input = String::new();
         let _ = io::stdin().read_to_string(&mut input);
         if sub == Some("start") {
+            // Tells squad this session's hooks are live (and the transcript).
+            ledger::write_state(ledger::STATE_START, &input);
             // The shared lessons' index, never their bodies, joins the context.
+            // A project with a ledger also gets told to read it.
+            let in_ledger = env::current_dir()
+                .ok()
+                .is_some_and(|d| d.ancestors().any(|a| a.join(ledger::DIR).is_dir()));
+            let lead = if in_ledger { ledger::START_NOTE } else { "" };
             if let Ok(dir) = knowledge::ensure() {
-                println!("{}", knowledge::session_start_json(&dir));
+                println!("{}", knowledge::session_start_json(&dir, lead));
             }
             return Ok(());
         }

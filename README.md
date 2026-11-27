@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.53 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.54 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.53
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.54
 ```
 
 To install elsewhere:
@@ -354,9 +354,12 @@ it). Press `b` on a running agent to type the order to read the log into it;
 squad never does that by itself, because typing at the wrong moment could
 answer a trust or permission dialog.
 
-**Filing is enforced for Claude Code.** When a project has a ledger and its
-command is `claude`, squad starts it with a Stop hook (`.squad/hook.json`,
-passed with `--settings`; your own Claude settings are untouched). If the agent
+**Filing is enforced for Claude Code.** From the moment an agent project is
+registered, squad merges its Claude Code hooks into the project's
+`.claude/settings.local.json` (your own settings and hooks stay; the file is
+kept out of git). So the hooks run however Claude starts: as the project's
+command, or typed at a shell prompt in a squad session. At session start the
+hook hands the agent the ledger brief and the shared lessons index. If the agent
 tries to stop after changing files (as `git status` sees them) without filing a
 SITREP since, the hook sends it back once to file one. It never loops, and
 outside a git repository nothing is enforced. Agents' SITREPs are a bonus: the

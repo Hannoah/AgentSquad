@@ -132,6 +132,10 @@ fn every_agent_project_gets_a_squad_folder_when_it_has_none() {
     let agent = scratch_dir("ensure-agent");
     ensure_agent(&mk(&agent, Kind::Agent));
     assert!(agent.join(".squad").join("log").is_dir(), "agent gets one");
+    assert!(
+        agent.join(".claude").join("settings.local.json").is_file(),
+        "and squad's Claude hooks from registration on"
+    );
     // An existing folder is never touched.
     std::fs::write(agent.join(".squad").join("CONTEXT.md"), "mine").unwrap();
     ensure_agent(&mk(&agent, Kind::Agent));
@@ -142,6 +146,7 @@ fn every_agent_project_gets_a_squad_folder_when_it_has_none() {
     let service = scratch_dir("ensure-service");
     ensure_agent(&mk(&service, Kind::Service));
     assert!(!service.join(".squad").exists(), "nothing to record there");
+    assert!(!service.join(".claude").exists(), "services get no hooks");
     // A folder that is gone is not recreated just to hold a ledger.
     let gone = agent.join("deleted");
     ensure_agent(&mk(&gone, Kind::Agent));

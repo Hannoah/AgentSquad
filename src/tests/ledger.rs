@@ -306,24 +306,55 @@ fn stop_hook_quoted_flag_does_not_disable_enforcement() {
 }
 
 #[test]
-fn hook_settings_file_runs_squad_hook_stop() {
+fn claude_hooks_merge_into_local_settings_without_clobbering() {
+    use crate::json::{parse, JsonValue};
     use crate::ledger;
     let dir = scratch_dir("hook-file");
     ledger::ensure(&dir).unwrap();
-    let file = ledger::write_hook_settings(&dir).unwrap();
-    let text = std::fs::read_to_string(file).unwrap();
+    let file = dir.join(".claude").join("settings.local.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    // The person's own permission and Stop hook, plus a stale squad entry.
+    std::fs::write(
+        &file,
+        r#"{"permissions":{"allow":["Bash(git:*)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-notifier"}]},{"hooks":[{"type":"command","command":"& 'C:/old/squad.exe' hook stop"}]}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(ledger::install_claude_settings(&dir), Some(file.clone()));
+    let text = std::fs::read_to_string(&file).unwrap();
+    let v = parse(&text).unwrap();
+    assert!(v.get("permissions").is_some(), "own settings stay: {text}");
+    let hooks = v.get("hooks").unwrap();
+    let Some(JsonValue::Array(stop)) = hooks.get("Stop") else {
+        panic!("{text}");
+    };
+    assert_eq!(
+        stop.len(),
+        2,
+        "own hook kept, stale squad entry replaced: {text}"
+    );
+    assert!(
+        text.contains("my-notifier") && !text.contains("C:/old/"),
+        "{text}"
+    );
+    for (event, sub) in [
+        ("SessionStart", "hook start"),
+        ("Stop", "hook stop"),
+        ("Notification", "hook notify"),
+        ("PermissionRequest", "hook permission"),
+    ] {
+        assert!(hooks.get(event).is_some(), "{event}: {text}");
+        assert!(text.contains(sub), "{sub}: {text}");
+    }
     let shell = if cfg!(windows) { "powershell" } else { "bash" };
-    assert!(text.contains(r#""Stop""#) && text.contains(&format!(r#""shell":"{shell}""#)));
-    assert!(text.contains("' hook stop"), "{text}");
-    assert!(
-        text.contains(r#""Notification""#) && text.contains("' hook notify"),
-        "{text}"
-    );
-    assert!(
-        text.contains(r#""PermissionRequest""#) && text.contains("' hook permission"),
-        "{text}"
-    );
+    assert!(text.contains(&format!(r#""shell": "{shell}""#)), "{text}");
     assert!(!text.contains(r"\U"), "forward slashes only: {text}");
+    // Running again changes nothing and never doubles an entry.
+    ledger::install_claude_settings(&dir).unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    // A file that is not JSON is the person's: left alone.
+    std::fs::write(&file, "not json").unwrap();
+    assert!(ledger::install_claude_settings(&dir).is_none());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "not json");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -479,13 +510,25 @@ fn hookless_agents_get_the_sitrep_reminder_typed_once() {
         restart_on_crash: false,
     };
     let mut s = Session::spawn(&p, 24, 80).unwrap();
-    assert!(s.hook_file.is_none());
+    // Every ledger agent gets a state file and local Claude settings: a
+    // `claude` typed at a shell prompt here would run squad's hooks.
+    let state = s.hook_file.clone().expect("state file for hooks");
+    assert!(dir.join(".claude").join("settings.local.json").is_file());
     assert!(!s.nudge_unrecorded(None), "nothing changed yet");
     sleep(Duration::from_millis(50));
     fs::write(dir.join("a.txt"), "work").unwrap();
     assert!(s.nudge_unrecorded(None), "changed files: reminded");
     assert!(!s.nudge_unrecorded(None), "the next completion passes");
     assert!(s.nudge_unrecorded(None), "then it reminds again");
+    // Once hooks report in (SessionStart), the real Stop hook takes over.
+    let report = crate::ledger::format_state_report(
+        crate::ledger::STATE_START,
+        std::time::SystemTime::now(),
+    );
+    fs::write(&state, report).unwrap();
+    assert!(s.read_hook_state());
+    assert!(!s.nudge_unrecorded(None), "hooked agents are not typed at");
+    assert!(!s.nudge_unrecorded(None));
     drop(s);
     let _ = fs::remove_dir_all(&dir);
 }

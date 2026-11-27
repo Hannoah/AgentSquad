@@ -183,6 +183,8 @@ pub(crate) fn parse_hook_report(text: &str) -> Option<(AgentPhase, Option<std::t
     let phase = match parts.next()? {
         ledger::STATE_DONE => AgentPhase::Done,
         ledger::STATE_ASKING => AgentPhase::NeedsInput,
+        // A session just began: nothing asked yet, nothing done.
+        ledger::STATE_START => AgentPhase::Idle,
         _ => return None,
     };
     let ts = match parts.next() {
@@ -689,24 +691,20 @@ impl Session {
         } else {
             (None, None)
         };
-        // Claude Code agents with a ledger get a Stop hook that sends them
-        // back to file a SITREP; anything else (or an own --settings) is left alone.
-        let is_claude = std::path::Path::new(program)
-            .file_stem()
-            .is_some_and(|s| s.eq_ignore_ascii_case("claude"));
-        let hook =
-            (is_claude && p.kind == Kind::Agent && !p.command.iter().any(|a| a == "--settings"))
-                .then(|| ledger.as_deref().and_then(ledger::write_hook_settings))
-                .flatten();
+        // Agents with a ledger get squad's Claude Code hooks in the project's
+        // local settings, so a `claude` started directly or typed at a shell
+        // prompt in this session both run them.
+        let hooked = p.kind == Kind::Agent
+            && ledger
+                .as_deref()
+                .and_then(ledger::install_claude_settings)
+                .is_some();
         let pair = native_pty_system().openpty(size(rows, cols))?;
         let mut cmd = CommandBuilder::new(program);
-        if let Some(file) = &hook {
-            cmd.arg("--settings");
-            cmd.arg(file);
-        }
-        // The hooks run inside the agent and inherit its environment: this
-        // names the file they tell this session's state through.
-        let hook_file = hook.is_some().then(new_state_file);
+        // The hooks run inside the agent, a child of whatever this starts,
+        // and inherit its environment: this names the file they tell this
+        // session's state through.
+        let hook_file = hooked.then(new_state_file);
         if let Some(f) = &hook_file {
             let _ = std::fs::remove_file(f);
             cmd.env(ledger::STATE_ENV, f);
@@ -1024,7 +1022,11 @@ impl Session {
     /// Skipped while the person has a half-typed line in this session.
     // ponytail: runs git status on the UI thread, once per finished task.
     pub fn nudge_unrecorded(&mut self, lessons: Option<&std::path::Path>) -> bool {
-        if self.hook_file.is_some() || !self.input_line_buf.is_empty() {
+        // Hooks that reported in this session (SessionStart writes at once)
+        // run the real Stop hook; anything else gets the typed reminder.
+        // ponytail: a shell that ran claude and later codex keeps this set,
+        // so that codex goes unreminded.
+        if self.hook_seen.is_some() || !self.input_line_buf.is_empty() {
             return false;
         }
         let Some(dir) = self.ledger.clone() else {
