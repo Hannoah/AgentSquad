@@ -43,12 +43,12 @@ names, paths or people. A lesson must be safe to show to anyone.
    least one of: a procedure, a checklist, a command, a decision rule.
 5. **Self-containedness** (must) - understood without the original
    project's context. It states when it applies and when it must not.
-6. **Durability** (should) - still true months from now. A version-specific
-   note names the version.
-7. **Conciseness** (should) - one lesson per file, read in under a minute.
-8. **No duplicates, with source** (should) - check the existing lessons
-   first. A correction is a new lesson that names the file it supersedes.
-   Record the source project and date.
+6. **Atomicity** (should) - one topic per lesson, so it is easy to search,
+   link and update.
+7. **Freshness** (should) - every lesson has a review date. Duplicates are
+   merged into one; a lesson confirmed wrong is retired (see Upkeep).
+8. **Provenance** (should) - record which project and agent learned it,
+   and check the existing lessons before adding one.
 
 ## Format
 
@@ -60,9 +60,18 @@ names, paths or people. A lesson must be safe to show to anyone.
   - **Lesson**: the procedure, checklist, command or decision rule
   - **Verified**: date and environment (versions)
   - **Source**: which project and agent learned it
-  - **Supersedes**: the file it corrects, if any
-- never edit or delete someone else's lesson.
+  - **Review by**: a date to check it again (e.g. six months out)
 - write in the language the user uses with you.
+
+## Upkeep
+
+- **Past its review date**: check it again. Still true: update
+  **Verified** and **Review by**. Not checkable: leave it for a person.
+- **Duplicates**: merge them into one lesson (keep the best wording and
+  every source), then retire the others.
+- **Confirmed wrong**: retire it. Only with evidence, not a hunch.
+- **Retire** = move the file into `retired/` here and add one line at the
+  top saying why and when. Never delete outright: a person can restore it.
 ";
 
 /// The shared lessons folder: `AGENTSQUAD_MEMORY`, else `memory/` next to
