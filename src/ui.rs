@@ -115,11 +115,11 @@ pub fn help_lines() -> Vec<&'static str> {
     vec![
         "Enter      open session (starts it if stopped)",
         "Click, drag  focus a project or the pane; drag copies text",
-        "Right-click  quick actions & env vars (from a terminal too)",
+        "Right-click  quick actions menu (from a terminal too)",
         "j/k, Tab   select (Management too) / next needing attention",
         "1-9, Home/End  jump (type 2 digits past 9) / first / last",
         "/, F, G     filter (text, is:waiting…) / find here / find all",
-        "a,E,K,T,R,L  add / env / skills / tools / refs / lessons",
+        "a,E..L,O,V  add/env/skills/tools/refs/lessons/models/srv",
         "m, w       message session / quick reply to waiting (?)",
         "b          brief the agent on .squad/ (ledger = true)",
         "h, g       history (SITREPs, / filters) / git status & diff",
@@ -296,6 +296,52 @@ pub fn fitted_hints(m: Mode, width: usize) -> Vec<Span<'static>> {
         return hint_spans(full);
     }
     hint_spans(hints_that_fit(order, width))
+}
+/// Field-aware status bar hints for the Add/Edit project modal.
+pub fn add_field_hints(field: usize, width: usize) -> Vec<Span<'static>> {
+    match field {
+        0 => fitted_hints(Mode::Add, width),
+        1 | 3 | 9 => hint_spans(hints_that_fit(
+            &[
+                ("Space/←→", "toggle"),
+                ("Tab", "next field"),
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+            ],
+            width,
+        )),
+        5..=8 => hint_spans(hints_that_fit(
+            &[
+                ("Space", "configure"),
+                ("Tab", "next field"),
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+            ],
+            width,
+        )),
+        _ => hint_spans(hints_that_fit(
+            &[("Tab", "next field"), ("Enter", "save"), ("Esc", "cancel")],
+            width,
+        )),
+    }
+}
+/// Bottom border hint line for popup modals that drops whole hints when narrow.
+pub fn popup_footer_line(hints: &[(&str, &str)], max_w: usize) -> Line<'static> {
+    let fit_w = max_w.saturating_sub(2);
+    let parts = hints_that_fit(hints, fit_w);
+    let text = parts
+        .iter()
+        .map(|(k, d)| match (*k, *d) {
+            ("", d) => d.to_string(),
+            (k, "") => k.to_string(),
+            (k, d) => format!("{k} {d}"),
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Line::from(Span::styled(
+        format!(" {text} "),
+        Style::default().add_modifier(ratatui::style::Modifier::DIM),
+    ))
 }
 /// The longest leading run of `parts` that fits `width` columns, so a
 /// narrow line drops whole hints instead of clipping one mid-word.

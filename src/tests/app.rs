@@ -1970,3 +1970,48 @@ fn rehost_moves_only_projects_on_the_old_address() {
     assert_eq!(ps[1].path, std::path::Path::new("me@older:~/x"));
     assert_eq!(ps[2].path, std::path::Path::new(r"C:\work"));
 }
+
+#[test]
+fn collapsed_lessons_tooltip_and_remote_host_badge() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let cfg = Config {
+        projects: vec![proj("remote-app", "azureuser@10.0.0.4:~/app", &["claude"])],
+        ..Config::default()
+    };
+    let mut app = App::new(cfg, None);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+    let buf_text = |buf: &ratatui::buffer::Buffer| -> String {
+        let mut s = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        s
+    };
+
+    // Expanded sidebar shows the @host badge for remote SSH projects.
+    term.draw(|f| app.draw(f)).unwrap();
+    let expanded = buf_text(term.backend().buffer());
+    assert!(
+        expanded.contains("@10.0.0.4"),
+        "expected @host badge in sidebar: {expanded}"
+    );
+
+    // Collapsed sidebar hovering LESSONS_ROW shows "Lessons (L)", not "References (R)".
+    app.sidebar_collapsed = true;
+    app.hover_row = Some(LESSONS_ROW);
+    term.draw(|f| app.draw(f)).unwrap();
+    let collapsed = buf_text(term.backend().buffer());
+    assert!(
+        collapsed.contains("Lessons (L)"),
+        "expected Lessons (L) tooltip: {collapsed}"
+    );
+    assert!(
+        !collapsed.contains("References (R)"),
+        "unexpected References (R) tooltip: {collapsed}"
+    );
+}

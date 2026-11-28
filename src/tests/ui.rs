@@ -42,7 +42,7 @@ fn help_covers_keys() {
     let h = help_lines().join("\n");
     for k in [
         "Enter", "/", "j/k", "filter", "restart", "add", "scroll", "1-9", "stop", "d/Del", "q",
-        "?", "Ctrl+Q",
+        "?", "Ctrl+Q", "O", "V",
     ] {
         assert!(h.contains(k), "help missing {k}");
     }
@@ -985,4 +985,23 @@ fn git_diff_lines_and_quick_reply_buttons_work() {
         Some('y')
     );
     assert_eq!(quick_reply_button_hit(popup, inner.x, btn_y + 1), None);
+}
+
+#[test]
+fn add_field_hints_and_popup_footer_adapt_to_context() {
+    let text = |spans: Vec<ratatui::text::Span<'_>>| -> String {
+        spans.into_iter().map(|s| s.content.into_owned()).collect()
+    };
+    assert!(text(add_field_hints(0, 80)).contains("Tab complete path"));
+    assert!(text(add_field_hints(1, 80)).contains("Space/←→ toggle"));
+    assert!(text(add_field_hints(9, 80)).contains("Space/←→ toggle"));
+    assert!(text(add_field_hints(5, 80)).contains("Space configure"));
+    assert!(text(add_field_hints(2, 80)).contains("Tab next field"));
+
+    let hints = &[("↑↓/j/k", "pick"), ("r", "refresh"), ("Esc", "closes")];
+    let wide = popup_footer_line(hints, 60).to_string();
+    assert!(wide.contains("pick") && wide.contains("refresh") && wide.contains("closes"));
+    let narrow = popup_footer_line(hints, 18).to_string();
+    assert!(narrow.contains("pick"));
+    assert!(!narrow.contains("closes"));
 }
