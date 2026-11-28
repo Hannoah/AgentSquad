@@ -557,7 +557,7 @@ impl App {
             .map_or(VaultTarget::VaultOnly, VaultTarget::Project)
     }
 
-    /// Open Management row `m`: `0` Memory monitor, `1` Env vault, `2` Skills,
+    /// Open Management row `m`: `0` Memory monitor, `1` Environment Variable, `2` Skills,
     /// `3` Tools, `4` References, `5` Lessons (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;

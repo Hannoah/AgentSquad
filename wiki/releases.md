@@ -8,6 +8,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.15.55 | 원격 세션: 프로젝트 경로를 user@host:dir 형식(Azure VM, 맥 등 다른 PC)으로 쓰면 ssh로 그 서버에서 터미널을 엶. 기본 셸이면 원격 로그인 셸, 원격 폴더는 ledger·훅 없음. Env vault 이름을 Environment Variable로 변경 | 태그 `v0.15.55` 참고 |
 | v0.15.54 | Claude Code 훅이 더 이상 프로젝트 명령이 claude일 필요 없음: 등록 시점부터 각 에이전트 프로젝트의 .claude/settings.local.json에 squad 훅을 병합(사용자 설정 유지, git 제외)하여 squad 세션의 셸에서 claude를 직접 실행해도 훅 동작. SessionStart 훅이 ledger 안내와 공유 교훈 목차를 넣고 훅 활성 상태를 보고 | 태그 `v0.15.54` 참고 |
 | v0.15.53 | codex와 agy도 작업 시작 때 공유 교훈 목차 조회: squad가 전역 지침 파일(CODEX_HOME/AGENTS.md 또는 override, ~/.gemini/AGENTS.md)에 마커 블록을 두어 'squad lessons' 실행을 안내. 설치된 에이전트만 대상, 파일의 나머지 내용과 줄바꿈 방식은 유지 | 태그 `v0.15.53` 참고 |
 | v0.15.52 | 히스토리 수정: 이전 기준점의 어느 구간이든 맞춰서, 에이전트 입력창·상태줄이 다시 그려져도 매 항목에 전체 스크롤백이 중복 기록되던 문제 해결(실제 항목 1,698줄 → 4줄). 프롬프트 전송 없는 10초 미만 '작업'(다음 질문 타이핑)은 기록하지 않음. 셸에서 실행한 에이전트 CLI에도 SITREP/Promote 안내 전달 | 태그 `v0.15.52` 참고 |

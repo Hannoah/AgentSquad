@@ -1114,3 +1114,50 @@ fn lessons_block_goes_into_global_instructions_once() {
     );
     assert_eq!(s, "a\nNEW\nb\n");
 }
+#[test]
+fn remote_folders_run_over_ssh() {
+    // scp-style folders are remote; drive letters and plain paths are not.
+    assert_eq!(
+        remote(std::path::Path::new("azureuser@10.0.0.4:~/app")),
+        Some(("azureuser@10.0.0.4", "~/app"))
+    );
+    assert_eq!(
+        remote(std::path::Path::new("me@mac.local:")),
+        Some(("me@mac.local", ""))
+    );
+    assert_eq!(remote(std::path::Path::new(r"C:\work\app")), None);
+    assert_eq!(remote(std::path::Path::new("C:/work/app")), None);
+    assert_eq!(remote(std::path::Path::new("./a:b")), None);
+    assert_eq!(remote(std::path::Path::new("work/app")), None);
+
+    let ssh = |h: &str| vec!["ssh".to_string(), "-t".to_string(), h.to_string()];
+    // Default shell: the remote login shell, in the folder.
+    let mut want = ssh("vm");
+    want.push("cd ~'/my app' && exec \"$SHELL\" -l".into());
+    assert_eq!(remote_command("vm", "~/my app", &shell()), want);
+    // A program, no folder: run it in the login folder.
+    let mut want = ssh("vm");
+    want.push("claude".into());
+    assert_eq!(remote_command("vm", "", &["claude".to_string()]), want);
+    // No folder, default shell: plain interactive ssh.
+    assert_eq!(remote_command("vm", "", &shell()), ssh("vm"));
+    let mut want = ssh("vm");
+    want.push(r"cd '/srv/it'\''s' && claude".into());
+    assert_eq!(
+        remote_command("vm", "/srv/it's", &["claude".to_string()]),
+        want
+    );
+
+    // Registered as typed, named after the folder (or host), no ledger.
+    let a = build_project(&[], "azureuser@vm:~/app", Kind::Agent, vec![]).unwrap();
+    assert_eq!(a.name, "app");
+    assert!(!a.has_ledger());
+    let m = build_project(&[], "me@mac.local:", Kind::Agent, vec![]).unwrap();
+    assert_eq!(m.name, "mac.local");
+    assert_eq!(
+        preview_name(&[], "me@mac.local:", Kind::Agent, &[]).as_deref(),
+        Some("mac.local")
+    );
+    create_missing_dir("me@mac.local:~/x").unwrap(); // nothing made locally
+    assert!(!std::path::Path::new("me@mac.local:~").exists());
+}

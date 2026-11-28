@@ -1479,13 +1479,13 @@ impl App {
         };
         match (&m.kind, m.target) {
             (VaultKindState::Env { .. }, VaultTarget::AddForm) => {
-                " Shared Env Vault -> new project .env ".to_string()
+                " Environment Variable -> new project .env ".to_string()
             }
             (VaultKindState::Env { .. }, VaultTarget::Project(pi)) => {
-                format!(" Shared Env Vault -> {}/.env ", project_name(pi))
+                format!(" Environment Variable -> {}/.env ", project_name(pi))
             }
             (VaultKindState::Env { .. }, VaultTarget::VaultOnly) => {
-                " Shared Env Vault ".to_string()
+                " Environment Variable ".to_string()
             }
             (VaultKindState::Skill { .. }, VaultTarget::AddForm) => {
                 " Shared Skills Vault -> new project ".to_string()

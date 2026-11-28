@@ -102,7 +102,7 @@ impl App {
         if let Some(m) = mgmt_row_index(target) {
             let label = match m {
                 0 => " Memory monitor (M) ",
-                1 => " Env vault (E) ",
+                1 => " Environment Variable (E) ",
                 2 => " Skills (K) ",
                 3 => " Tools (T) ",
                 _ => " References (R) ",
@@ -1101,7 +1101,7 @@ impl App {
             ),
             (
                 1usize,
-                "Env vault",
+                "Environment Variable",
                 "E",
                 ENV_ROW,
                 self.vault_modal.as_ref().is_some_and(VaultModal::is_env),
@@ -1691,7 +1691,7 @@ impl App {
                 let prefix = if let Some(m) = self.mgmt_sel {
                     let label = match m {
                         0 => "Memory monitor (M)",
-                        1 => "Env vault (E)",
+                        1 => "Environment Variable (E)",
                         2 => "Skills (K)",
                         3 => "Tools (T)",
                         4 => "References (R)",

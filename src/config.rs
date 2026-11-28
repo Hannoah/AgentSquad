@@ -72,7 +72,8 @@ impl Project {
     /// Agents always keep an operations log (their work history lives in it);
     /// `ledger = true` only matters for a service.
     pub fn has_ledger(&self) -> bool {
-        self.ledger || self.kind == Kind::Agent
+        // The ledger and hooks live in a local folder; a remote one has none.
+        (self.ledger || self.kind == Kind::Agent) && remote(&self.path).is_none()
     }
 }
 /// Bump when `load_from` gains a one-time migration. A file stamped with
@@ -642,18 +643,69 @@ pub fn unique_name(base: &str, existing: &[Project]) -> String {
 pub fn clean_path(raw: &str) -> &str {
     raw.trim().trim_matches('"').trim_matches('\'').trim()
 }
+/// A folder on another machine, written scp-style as `[user@]host:dir`
+/// (`azureuser@10.0.0.4:~/app`, `me@macbook.local:`): `(host, dir)`.
+/// Sessions there run over `ssh`; a blank dir means the login folder.
+/// A drive letter (`C:\x`) is one character, so it never reads as a host.
+pub fn remote(path: &Path) -> Option<(&str, &str)> {
+    let (host, dir) = path.to_str()?.split_once(':')?;
+    let name = host.rsplit('@').next().unwrap_or(host);
+    (name.len() > 1 && !host.contains(['/', '\\', ' '])).then_some((host, dir))
+}
+/// The `ssh` command that runs `command` in `dir` on `host`. A bare local
+/// shell (the default command) becomes the remote login shell; the remote
+/// side is assumed POSIX (Linux, macOS).
+pub fn remote_command(host: &str, dir: &str, command: &[String]) -> Vec<String> {
+    let mut out = vec!["ssh".to_string(), "-t".to_string(), host.to_string()];
+    let run = if is_bare_shell(command) {
+        "exec \"$SHELL\" -l".to_string()
+    } else {
+        join_command(command)
+    };
+    let dir = dir.trim();
+    if dir.is_empty() {
+        if !is_bare_shell(command) {
+            out.push(run);
+        }
+        return out;
+    }
+    // `~/` stays outside the quotes so the remote shell expands it.
+    let (home, rest) = match dir.strip_prefix('~') {
+        Some(r) if r.is_empty() || r.starts_with('/') => ("~", r),
+        _ => ("", dir),
+    };
+    let quoted = if rest.is_empty() {
+        String::new()
+    } else {
+        format!("'{}'", rest.replace('\'', r"'\''"))
+    };
+    out.push(format!("cd {home}{quoted} && {run}"));
+    out
+}
+/// Default name for a remote folder: its last part, or the host for the
+/// login folder.
+fn remote_name((host, dir): (&str, &str)) -> String {
+    match dir.trim_end_matches('/').rsplit('/').next().unwrap_or("") {
+        "" | "~" => host.rsplit('@').next().unwrap_or(host).to_string(),
+        n => n.to_string(),
+    }
+}
 /// Create the folder named by `path_raw` (parents too) when it does not
 /// exist yet. An existing folder or file is left alone; a file then fails
 /// later in `build_project`. Blank input does nothing.
 pub fn create_missing_dir(path_raw: &str) -> Result<()> {
     let p = clean_path(path_raw);
-    if p.is_empty() || Path::new(p).exists() {
+    if p.is_empty() || Path::new(p).exists() || remote(Path::new(p)).is_some() {
         return Ok(());
     }
     fs::create_dir_all(p).with_context(|| format!("Cannot create folder {p}"))
 }
 /// Canonical form of a project folder and its name, or why it cannot be one.
 pub fn resolve_dir(anchor: &str) -> Result<(PathBuf, String), String> {
+    // ponytail: a remote folder is taken as typed; ssh reports a bad one.
+    if let Some(r) = remote(Path::new(anchor)) {
+        return Ok((PathBuf::from(anchor), remote_name(r)));
+    }
     let path = plain_path(fs::canonicalize(anchor).map_err(|e| format!("Bad path: {e}"))?);
     if !path.is_dir() {
         return Err("Project path must be a directory.".into());
@@ -760,9 +812,12 @@ pub fn preview_name(
     parts: &[String],
 ) -> Option<String> {
     let trimmed = clean_path(path_raw);
-    let dir = Path::new(trimmed)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned());
+    let dir = match remote(Path::new(trimmed)) {
+        Some(r) => Some(remote_name(r)),
+        None => Path::new(trimmed)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned()),
+    };
     let base = match kind {
         Kind::Agent => dir,
         Kind::Service => program_name(parts).or(dir),

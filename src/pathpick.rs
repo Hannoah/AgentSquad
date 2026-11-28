@@ -35,6 +35,10 @@ pub fn check(raw: &str) -> PathState {
     if p.is_empty() {
         return PathState::Blank;
     }
+    // ponytail: remote folders are not checked; ssh says when one is wrong.
+    if crate::config::remote(std::path::Path::new(p)).is_some() {
+        return PathState::Folder;
+    }
     match fs::metadata(p) {
         Ok(m) if m.is_dir() => PathState::Folder,
         Ok(_) => PathState::NotFolder,

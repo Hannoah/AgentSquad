@@ -791,7 +791,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     let mut app = App::new(cfg, None);
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
 
-    // Open Shared Env Vault via `E` on agent-a.
+    // Open Environment Variable via `E` on agent-a.
     app.selected = 0;
     app.on_key(key(KeyCode::Char('E')), 27, 70);
     assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
@@ -1007,7 +1007,7 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     assert_eq!((app.selected, app.mgmt_sel), (1, None));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!(app.mgmt_sel, Some(0));
-    app.on_key(key(KeyCode::Char('ㅓ')), 24, 54); // Hangul j -> Env vault
+    app.on_key(key(KeyCode::Char('ㅓ')), 24, 54); // Hangul j -> Environment Variable
     assert_eq!(app.mgmt_sel, Some(1));
     app.on_key(key(KeyCode::Down), 24, 54); // Skills
     assert_eq!(app.mgmt_sel, Some(2));
@@ -1028,7 +1028,7 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(2), "Up reaches Skills");
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(1), "Up reaches Env vault");
+    assert_eq!(app.mgmt_sel, Some(1), "Up reaches Environment Variable");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(0));
     // Project actions have no target on a Management row.

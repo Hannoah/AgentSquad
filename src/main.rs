@@ -232,6 +232,7 @@ fn main() -> Result<()> {
                 create_missing_dir(path_raw)?;
             } else if !clean_path(path_raw).is_empty()
                 && !std::path::Path::new(clean_path(path_raw)).exists()
+                && config::remote(std::path::Path::new(clean_path(path_raw))).is_none()
             {
                 bail!(
                     "Folder {} does not exist. Add --create to make it.",

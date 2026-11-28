@@ -548,7 +548,7 @@ pub(crate) struct App {
     pub(crate) search_active: bool,
     pub(crate) hangul_hotkey_seen: bool,
     /// Arrow keys past the last project land on the Management rows:
-    /// `0` = Memory monitor, `1` = Env vault, `2` = Skills, `3` = Tools, `4` = References.
+    /// `0` = Memory monitor, `1` = Environment Variable, `2` = Skills, `3` = Tools, `4` = References.
     pub(crate) mgmt_sel: Option<usize>,
     /// Multi-digit row jump: digits typed within ~1.5s accumulate here.
     pub(crate) jump_buf: String,

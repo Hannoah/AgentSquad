@@ -1,4 +1,6 @@
-use crate::config::{is_bare_shell, pty_env, sanitize_chrome_line, size, Kind, Project};
+use crate::config::{
+    is_bare_shell, pty_env, remote, remote_command, sanitize_chrome_line, size, Kind, Project,
+};
 use crate::ledger;
 #[cfg(unix)]
 use crate::sys::kill_group;
@@ -659,11 +661,12 @@ pub struct Session {
 impl Session {
     pub fn spawn(p: &Project, rows: u16, cols: u16) -> Result<Self> {
         // A hand-edited config can carry `command = []`.
-        let Some(program) = p.command.first() else {
+        if p.command.is_empty() {
             anyhow::bail!("Project '{}' has an empty command", p.name);
-        };
+        }
+        let remote = remote(&p.path);
         // Otherwise the OS blames the program ("directory name is invalid").
-        if !p.path.is_dir() {
+        if remote.is_none() && !p.path.is_dir() {
             anyhow::bail!("Folder {} of '{}' is missing", p.path.display(), p.name);
         }
         let (ledger, ledger_note) = if p.has_ledger() {
@@ -700,6 +703,9 @@ impl Session {
                 .and_then(ledger::install_claude_settings)
                 .is_some();
         let pair = native_pty_system().openpty(size(rows, cols))?;
+        let ssh = remote.map(|(host, dir)| remote_command(host, dir, &p.command));
+        let argv = ssh.as_deref().unwrap_or(&p.command);
+        let program = &argv[0];
         let mut cmd = CommandBuilder::new(program);
         // The hooks run inside the agent, a child of whatever this starts,
         // and inherit its environment: this names the file they tell this
@@ -709,8 +715,10 @@ impl Session {
             let _ = std::fs::remove_file(f);
             cmd.env(ledger::STATE_ENV, f);
         }
-        cmd.args(&p.command[1..]);
-        cmd.cwd(&p.path);
+        cmd.args(&argv[1..]);
+        if remote.is_none() {
+            cmd.cwd(&p.path);
+        }
         for (k, v) in pty_env() {
             cmd.env(k, v);
         }
