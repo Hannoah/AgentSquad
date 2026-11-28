@@ -1957,3 +1957,16 @@ fn add_form_puts_a_registered_server_in_front_of_the_folder() {
         "{local}"
     );
 }
+
+#[test]
+fn rehost_moves_only_projects_on_the_old_address() {
+    let mut ps = vec![
+        proj("a", "me@old:~/app", &["bash"]),
+        proj("b", "me@older:~/x", &["bash"]),
+        proj("c", r"C:\work", &["bash"]),
+    ];
+    assert_eq!(rehost(&mut ps, "me@old", "me@new"), 1);
+    assert_eq!(ps[0].path, std::path::Path::new("me@new:~/app"));
+    assert_eq!(ps[1].path, std::path::Path::new("me@older:~/x"));
+    assert_eq!(ps[2].path, std::path::Path::new(r"C:\work"));
+}

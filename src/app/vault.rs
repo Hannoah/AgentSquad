@@ -1637,8 +1637,13 @@ impl App {
             ed.err = format!("{name} already exists.");
             return;
         }
-        // ponytail: a changed address does not follow into projects already
-        // on the old one; edit those projects to pick the server again.
+        // The address it had, so its projects can follow a change.
+        let old_addr = next
+            .vars
+            .iter()
+            .find(|s| s.key == old)
+            .map(|s| s.value.clone())
+            .filter(|a| *a != addr);
         let entry = envvault::EnvEntry {
             key: name.clone(),
             value: addr,
@@ -1656,6 +1661,39 @@ impl App {
             modal.sel = pos;
         }
         modal.close_editor();
+        if let Some(old_addr) = old_addr {
+            self.rehost_projects(&old_addr, &name);
+        }
+    }
+
+    /// A server's address changed: its projects open at the new one.
+    /// Running sessions keep their connection until restarted.
+    fn rehost_projects(&mut self, old_addr: &str, name: &str) {
+        let Some(new_addr) = self
+            .servers_vault
+            .vars
+            .iter()
+            .find(|s| s.key == name)
+            .map(|s| s.value.clone())
+        else {
+            return;
+        };
+        match persist_rehost(old_addr, &new_addr) {
+            Ok(0) => {}
+            Ok(n) => {
+                rehost(&mut self.cfg.projects, old_addr, &new_addr);
+                self.message = (
+                    format!("Moved {n} project(s) to {name} at {new_addr}; restart running ones to reconnect"),
+                    Notice::Info,
+                );
+            }
+            Err(e) => {
+                self.message = (
+                    format!("Server saved, but its projects were not moved: {e:#}"),
+                    Notice::Error,
+                );
+            }
+        }
     }
 
     /// Sync the skills modal's picks into its project (`false` closes modal;

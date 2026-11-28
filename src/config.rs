@@ -323,6 +323,29 @@ pub fn persist_edit(name: &str, command: Vec<String>, autostart: bool) -> Result
     p.autostart = autostart;
     save(&disk)
 }
+/// Point every project on server address `old` at `new` (same folder, so
+/// names stay). Returns how many moved.
+pub fn rehost(projects: &mut [Project], old: &str, new: &str) -> usize {
+    let mut n = 0;
+    for p in projects {
+        let dir = match remote(&p.path) {
+            Some((host, dir)) if host == old => dir.to_string(),
+            _ => continue,
+        };
+        p.path = PathBuf::from(server_path(new, &dir));
+        n += 1;
+    }
+    n
+}
+/// `rehost` on disk, re-reading the file first (see `persist_add`).
+pub fn persist_rehost(old: &str, new: &str) -> Result<usize> {
+    let mut disk = load()?;
+    let n = rehost(&mut disk.projects, old, new);
+    if n > 0 {
+        save(&disk)?;
+    }
+    Ok(n)
+}
 /// Move `name` to folder `path` on disk, re-reading the file first (see
 /// `persist_add`). Returns the name it has afterwards (see `relocate`).
 pub fn persist_move(name: &str, path: &Path) -> Result<String> {
