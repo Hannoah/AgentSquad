@@ -558,7 +558,7 @@ impl App {
     }
 
     /// Open Management row `m`: `0` Memory monitor, `1` Environment Variable, `2` Skills,
-    /// `3` Tools, `4` References, `5` Lessons (scoped to the selected project, or vault-only when none exist).
+    /// `3` Tools, `4` References, `5` Lessons, `6` LLM models (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;
         let target = self.selected_vault_target();
@@ -569,6 +569,7 @@ impl App {
             3 => self.open_tool_modal(target),
             4 => self.open_ref_modal(target),
             5 => self.open_lessons(),
+            6 => self.open_model_modal(target),
             _ => {}
         }
     }
@@ -817,10 +818,9 @@ impl App {
         self.dirty = true;
     }
 
-    /// Run one row of the right-click quick-action menu. `action` is the
-    /// row index into the kind-aware menu (services get a trailing
-    /// auto-restart row past the base rows).
-    pub(super) fn run_context_action(&mut self, pi: usize, action: usize, rows: u16, cols: u16) {
+    /// Run the right-click quick-action menu item keyed `key` (see
+    /// `context_menu_items_for`).
+    pub(super) fn run_context_action(&mut self, pi: usize, key: char, rows: u16, cols: u16) {
         if self.cfg.projects.get(pi).is_none() {
             return;
         }
@@ -829,53 +829,28 @@ impl App {
         if let Some(pos) = self.order.iter().position(|&x| x == pi) {
             self.selected = pos;
         }
-        // Services get one trailing row: the crash auto-restart toggle.
-        let service_extra = self
-            .cfg
-            .projects
-            .get(pi)
-            .is_some_and(|p| p.kind == Kind::Service);
-        if slot_running(&self.sessions, pi) {
-            match action {
-                13 if service_extra => self.toggle_restart_on_crash(pi),
-                0 => self.mode = Mode::Focus,
-                1 => {
-                    self.mode = Mode::Send;
-                    self.send_to = SendTo::One;
-                    self.send_buf.clear();
-                }
-                2 => self.confirm_stop = Some(pi),
-                3 => self.confirm_restart = Some(pi),
-                4 => self.open_edit(),
-                5 => self.open_history(),
-                6 => self.toggle_pin(),
-                7 => self.begin_set_superior(pi),
-                8 => self.confirm_remove = Some(pi),
-                9 => self.open_env_info(pi),
-                10 => self.open_skill_modal(VaultTarget::Project(pi)),
-                11 => self.open_tool_modal(VaultTarget::Project(pi)),
-                12 => self.open_ref_modal(VaultTarget::Project(pi)),
-                _ => {}
-            }
-            return;
-        }
-        match action {
-            11 if service_extra => self.toggle_restart_on_crash(pi),
-            0 => self.open_session(pi, rows, cols),
-            1 => {
+        let running = slot_running(&self.sessions, pi);
+        let target = VaultTarget::Project(pi);
+        match key {
+            'f' if running => self.mode = Mode::Focus,
+            'f' => self.open_session(pi, rows, cols),
+            'm' if running => {
                 self.mode = Mode::Send;
                 self.send_to = SendTo::One;
                 self.send_buf.clear();
             }
-            2 => self.open_edit(),
-            3 => self.open_history(),
-            4 => self.toggle_pin(),
-            5 => self.begin_set_superior(pi),
-            6 => self.confirm_remove = Some(pi),
-            7 => self.open_env_info(pi),
-            8 => self.open_skill_modal(VaultTarget::Project(pi)),
-            9 => self.open_tool_modal(VaultTarget::Project(pi)),
-            10 => self.open_ref_modal(VaultTarget::Project(pi)),
+            'r' if running => self.confirm_restart = Some(pi),
+            's' if running => self.confirm_stop = Some(pi),
+            'e' => self.open_edit(),
+            'O' => self.open_model_modal(target),
+            'E' => self.open_env_modal(target),
+            'K' => self.open_skill_modal(target),
+            'T' => self.open_tool_modal(target),
+            'R' => self.open_ref_modal(target),
+            'h' => self.open_history(),
+            'u' => self.begin_set_superior(pi),
+            'A' if self.cfg.projects[pi].kind == Kind::Service => self.toggle_restart_on_crash(pi),
+            'd' => self.confirm_remove = Some(pi),
             _ => {}
         }
     }
@@ -906,39 +881,14 @@ impl App {
             KeyCode::Enter => {
                 let action = self.context_sel.min(count.saturating_sub(1));
                 self.context_menu = None;
-                self.run_context_action(pi, action, rows, cols);
-            }
-            KeyCode::Char(c) => {
-                if let Some(idx) = items.iter().position(|(key, _)| *key == c) {
-                    self.context_menu = None;
-                    self.run_context_action(pi, idx, rows, cols);
+                if let Some(&(key, _)) = items.get(action) {
+                    self.run_context_action(pi, key, rows, cols);
                 }
             }
-            _ => {}
-        }
-    }
-
-    /// Keys in the read-only environment popup.
-    pub(super) fn key_env_info(&mut self, k: KeyEvent) {
-        let Some(info) = self.env_info.as_mut() else {
-            return;
-        };
-        match k.code {
-            KeyCode::Char('v') => info.reveal = !info.reveal,
-            KeyCode::Char('a') => {
-                let pi = info.pi;
-                self.env_info = None;
-                self.open_env_modal(VaultTarget::Project(pi));
-                if let Some(m) = self.vault_modal.as_mut() {
-                    m.ensure_editor_open();
-                }
+            KeyCode::Char(c) if items.iter().any(|(key, _)| *key == c) => {
+                self.context_menu = None;
+                self.run_context_action(pi, c, rows, cols);
             }
-            KeyCode::Char('e' | 'E') => {
-                let pi = info.pi;
-                self.env_info = None;
-                self.open_env_modal(VaultTarget::Project(pi));
-            }
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.env_info = None,
             _ => {}
         }
     }

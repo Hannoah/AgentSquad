@@ -73,9 +73,6 @@ impl App {
         self.draw_quick_reply(f);
         self.draw_confirms(f);
         self.draw_context_menu(f);
-        if let Some(lines) = self.env_info_lines() {
-            modal(f, "Environment", Color::Cyan, lines);
-        }
         if self.mode == Mode::Add {
             self.draw_add(f);
         }
@@ -105,6 +102,7 @@ impl App {
                 1 => " Environment Variable (E) ",
                 2 => " Skills (K) ",
                 3 => " Tools (T) ",
+                6 => " LLM models (O) ",
                 _ => " References (R) ",
             };
             spans.push(Span::styled(
@@ -775,13 +773,6 @@ impl App {
         }
     }
 
-    /// The environment popup's rows, shared by drawing and click mapping.
-    pub(super) fn env_info_lines(&self) -> Option<Vec<Line<'static>>> {
-        let info = self.env_info.as_ref()?;
-        let p = self.cfg.projects.get(info.pi)?;
-        Some(env_info_lines(p, &info.dotenv, info.reveal))
-    }
-
     /// What a project without a session is doing: waiting, or on its way up.
     fn idle_word(&self, pi: usize) -> &'static str {
         if self.is_starting(pi) {
@@ -1133,6 +1124,13 @@ impl App {
                 "L",
                 LESSONS_ROW,
                 self.history.as_ref().is_some_and(|h| h.kind == "Lessons"),
+            ),
+            (
+                6usize,
+                "LLM models",
+                "O",
+                MODELS_ROW,
+                self.vault_modal.as_ref().is_some_and(VaultModal::is_model),
             ),
         ];
         for (idx, label, key_tag, row_id, open) in mgmt_rows {
@@ -1695,6 +1693,7 @@ impl App {
                         2 => "Skills (K)",
                         3 => "Tools (T)",
                         4 => "References (R)",
+                        6 => "LLM models (O)",
                         _ => "Lessons (L)",
                     };
                     Some((label.to_string(), Color::Cyan))

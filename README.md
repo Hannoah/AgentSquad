@@ -33,7 +33,7 @@ squad --version
 To pin a version or install elsewhere:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.55 SQUAD_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/Hannoah/AgentSquad/main/tools/install.sh | SQUAD_VERSION=v0.15.56 SQUAD_INSTALL_DIR=/usr/local/bin bash
 ```
 
 On macOS, new sessions default to your `$SHELL`. Config lives in `~/.config/AgentSquad/config.toml`.
@@ -62,7 +62,7 @@ squad --version
 To pin a version (default is latest):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.55
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 -Version v0.15.56
 ```
 
 To install elsewhere:
@@ -153,7 +153,7 @@ case-insensitively by `remove` and `start`.
 | Key | Action |
 |-----|--------|
 | `Enter` | Open the selected session: start it if stopped, then focus its terminal |
-| Click | Click a project to select it; click a live terminal to focus it; right-click a row (even while typing in a terminal) to open its quick actions, including **Environment variables** (the agent's `.env`, masked; `v` reveals), **Set superior…**, and **Enable auto-restart** (services only). The sidebar's bottom line summarizes waiting agents (`? name: question`) when their rows scroll away |
+| Click | Click a project to select it; click a live terminal to focus it; right-click a row (even while typing in a terminal) to open its quick actions, grouped as session (`f` focus/start, `m` send, `r` restart, `s` stop), configuration (`e` edit, `O` LLM model, `E` environment variables, `K`/`T`/`R` skills/tools/references), `h` history and `u` set superior, `A` auto-restart (services only), and `d` remove last; the keys match the manager's. The sidebar's bottom line summarizes waiting agents (`? name: question`) when their rows scroll away |
 | `j` / `k`, `↑` / `↓` | Move selection (`n` / `p` still work) |
 | `1`–`9` | Jump to a visible row (type two digits in a row past 9) |
 | `Home` / `End` | First / last project |
@@ -165,6 +165,7 @@ case-insensitively by `remove` and `start`.
 | `K` | Shared Skills Vault: register reusable skills (`skills.toml`, local folder/`SKILL.md` path or inline instructions) and sync them to `.agents/skills/` and `.claude/skills/` for `agy`, `claude`, `muse`, and `codex`. Skills the project already has stay; assigned ones are added next to them. When the project has its own folder under an assigned skill's name (or a hand-edited copy) that differs from the vault version, `Enter` asks before replacing or deleting it (`y` replace, `n` keep yours, `Esc` back); the add/edit form and `squad skills apply` keep such folders and say so (`--force` replaces them) |
 | `T` | Shared Tools Vault: register reusable MCP servers (`mcp`) and CLI tools (`cli`) (`tools.toml`); syncs MCP servers to `.mcp.json` (`claude`/`muse`), `.agents/mcp_config.json` (`agy`), and `.codex/config.toml` (`codex`), and CLI tools to `.squad/TOOLS.md` |
 | `R` | Shared References Vault: register GitHub links & descriptions (`references.toml`) and append/remove a managed `<!-- agentsquad:references:start/end -->` block inside `CLAUDE.md` / `AGENTS.md` (+ `GEMINI.md` if present) without disturbing existing content |
+| `O` | LLM models: register a model, endpoint and token (`models.toml`, private like `env.toml`) under a provider (`anthropic`, `openai`, `gemini`; `Space` on Provider toggles) and pick one per provider for the selected project. Enter writes it into the project's `.env` as that provider's variables (`ANTHROPIC_MODEL`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`, `OPENAI_MODEL`/`OPENAI_BASE_URL`/`OPENAI_API_KEY`, `GEMINI_MODEL`/`GOOGLE_GEMINI_BASE_URL`/`GEMINI_API_KEY`); sessions started in the project get them in their environment, since agent CLIs do not read `.env` |
 | `L` | Shared Lessons: browse `memory/` next to `config.toml` (the path is the popup title). One lesson per file, readable by every agent; `README.md` there holds the rules for promoting a lesson from a project's `.squad/` (must: generality, non-obviousness, verified, actionability, self-containedness, plus an always-on safety rule; should: atomicity, freshness (review dates, merging, retiring wrong lessons into `retired/`), provenance) and is never overwritten. A Claude Code agent gets the index (titles only, never bodies) when its session starts, codex and agy are told by a marked block squad keeps in their global instructions (`$CODEX_HOME/AGENTS.md`, `~/.gemini/AGENTS.md`; only when that agent is installed, nothing else in the file is touched) to run `squad lessons` at the start of a task, any agent can run `squad lessons [<word>]` to look them up, `b` (brief) points the agent at this folder, and whenever an agent finishes a task with files changed since its last SITREP it is sent back once to file one with a `Promote:` verdict (the lesson file it filed here, or none): Claude Code through its Stop hook, other agents (codex, agy, ...) by squad typing the same reminder (into a bare shell only while an agent CLI started there holds the foreground) |
 | `m` | Message: type a line and send it to the selected session (starts it if stopped) |
 | `w`, click `? N` | Quick Reply: answer an agent waiting for input (`?`) without leaving your current view (`Enter`/`y`/`n`/`1`-`9` or `t` to type a custom reply, `Tab` cycles waiting agents) |

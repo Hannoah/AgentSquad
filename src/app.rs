@@ -31,6 +31,7 @@ use crate::envvault::{self, EnvVault};
 use crate::history;
 use crate::input::*;
 use crate::ledger;
+use crate::models::{self, ModelVault, Provider};
 use crate::pathpick::{self, PathState, Pick};
 use crate::refs::{self, ProjectReferences, ReferenceVault};
 use crate::select::Selection;
@@ -173,14 +174,6 @@ pub(crate) enum SendTo {
     All,
     /// A new commander name for the selected agent.
     Under,
-}
-
-/// What the read-only environment popup shows: project `pi`'s `.env`, read
-/// once when it opens.
-pub(crate) struct EnvInfo {
-    pub(crate) pi: usize,
-    pub(crate) reveal: bool,
-    pub(crate) dotenv: BTreeMap<String, String>,
 }
 
 /// Remote quick-reply popup for an agent waiting on user input (`?`).
@@ -514,6 +507,7 @@ pub(crate) struct App {
     pub(crate) skills_vault: SkillVault,
     pub(crate) tools_vault: ToolVault,
     pub(crate) refs_vault: ReferenceVault,
+    pub(crate) models_vault: ModelVault,
     pub(crate) vault_modal: Option<VaultModal>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
@@ -554,7 +548,6 @@ pub(crate) struct App {
     pub(crate) jump_buf: String,
     pub(crate) jump_at: Instant,
     /// Read-only environment popup opened from the right-click menu.
-    pub(crate) env_info: Option<EnvInfo>,
     pub(crate) quit: bool,
 }
 
@@ -582,6 +575,7 @@ impl App {
         let skills_vault = skills::load_skills().unwrap_or_default();
         let tools_vault = tools::load_tools().unwrap_or_default();
         let refs_vault = refs::load_refs().unwrap_or_default();
+        let models_vault = models::load_models().unwrap_or_default();
         let selected = start_selection(
             &cfg.projects,
             &order,
@@ -677,6 +671,7 @@ impl App {
             skills_vault,
             tools_vault,
             refs_vault,
+            models_vault,
             vault_modal: None,
             starting: HashMap::new(),
             auto_restarts: HashMap::new(),
@@ -698,7 +693,6 @@ impl App {
             mgmt_sel: None,
             jump_buf: String::new(),
             jump_at: Instant::now() - Duration::from_secs(10),
-            env_info: None,
             quit: false,
         }
     }
@@ -712,7 +706,6 @@ impl App {
             || self.quick_reply.is_some()
             || self.procs.is_some()
             || self.context_menu.is_some()
-            || self.env_info.is_some()
             || self.confirm_quit
             || self.confirm_start_all
             || self.confirm_stop.is_some()
@@ -1033,17 +1026,6 @@ impl App {
 
     pub(crate) fn refresh_prefixes(&mut self) {
         self.rank_prefixes = compute_rank_prefixes(&self.cfg.projects);
-    }
-
-    pub(crate) fn open_env_info(&mut self, pi: usize) {
-        if let Some(p) = self.cfg.projects.get(pi) {
-            let dotenv = envvault::read_dotenv(&p.path);
-            self.env_info = Some(EnvInfo {
-                pi,
-                reveal: false,
-                dotenv,
-            });
-        }
     }
 
     pub(super) fn target_dir(&self, target: VaultTarget) -> Option<std::path::PathBuf> {

@@ -47,8 +47,6 @@ impl App {
         let k = hotkey_event(k);
         if self.context_menu.is_some() {
             self.key_context_menu(k, rows, cols);
-        } else if self.env_info.is_some() {
-            self.key_env_info(k);
         } else if self.history.is_some() {
             self.key_history(k);
         } else if self.gsearch.is_some() {
@@ -581,7 +579,7 @@ impl App {
         if !matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit()) {
             self.jump_buf.clear();
         }
-        const MGMT_LAST: usize = 5;
+        const MGMT_LAST: usize = 6;
         if let Some(m) = self.mgmt_sel {
             match k.code {
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
@@ -679,6 +677,7 @@ impl App {
             KeyCode::Char('T') => self.open_tool_modal(self.selected_vault_target()),
             KeyCode::Char('R') => self.open_ref_modal(self.selected_vault_target()),
             KeyCode::Char('L') => self.open_lessons(),
+            KeyCode::Char('O') => self.open_model_modal(self.selected_vault_target()),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f' | 'F') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_search();

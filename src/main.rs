@@ -8,6 +8,7 @@ pub mod input;
 pub mod json;
 pub mod knowledge;
 pub mod ledger;
+pub mod models;
 pub mod pathpick;
 pub mod refs;
 pub mod select;

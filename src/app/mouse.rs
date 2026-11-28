@@ -116,7 +116,6 @@ impl App {
                 || self.history.is_some()
                 || self.git_view.is_some()
                 || self.context_menu.is_some()
-                || self.env_info.is_some()
                 || !self.confirm_modals().is_empty())
         {
             // Keep modal popups isolated: wheel events do not leak into the dimmed background.
@@ -286,14 +285,6 @@ impl App {
                     }
                 }
                 self.dirty = true;
-            } else if let Some(lines) = self.env_info_lines() {
-                // Read-only popup: a click outside closes it.
-                if !modal_rect(&lines, area.into())
-                    .contains(ratatui::layout::Position::new(m.column, m.row))
-                {
-                    self.env_info = None;
-                    self.dirty = true;
-                }
             } else if self.mode == Mode::Help {
                 // Clicks inside the popup (e.g. selecting text) keep it open.
                 if !help_popup(area.into())
@@ -367,13 +358,10 @@ impl App {
                         } else {
                             // Row 0 names the project; rows 1.. are actions.
                             let rel = m.row.saturating_sub(popup.y + 1) as usize;
-                            if rel >= 1
-                                && rel - 1
-                                    < context_menu_items_for(running, kind, restart_on_crash).len()
-                            {
-                                let action = rel - 1;
+                            let items = context_menu_items_for(running, kind, restart_on_crash);
+                            if let Some(&(key, _)) = rel.checked_sub(1).and_then(|i| items.get(i)) {
                                 self.context_menu = None;
-                                self.run_context_action(pi, action, rows, cols);
+                                self.run_context_action(pi, key, rows, cols);
                             }
                         }
                     }

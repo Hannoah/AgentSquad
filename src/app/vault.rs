@@ -119,6 +119,43 @@ impl RefEditor {
     }
 }
 
+/// Inline form inside `VaultModal` (`Model`) for a shared LLM model.
+pub(crate) struct ModelEditor {
+    pub(crate) provider: Provider,
+    pub(crate) name: LineInput,
+    pub(crate) model: LineInput,
+    pub(crate) endpoint: LineInput,
+    pub(crate) token: LineInput,
+    /// `0` = provider toggle, `1` name, `2` model, `3` endpoint, `4` token.
+    pub(crate) field: usize,
+    pub(crate) editing_name: Option<String>,
+    pub(crate) err: String,
+}
+
+impl ModelEditor {
+    pub(crate) fn blank() -> Self {
+        Self {
+            provider: Provider::default(),
+            name: LineInput::new(),
+            model: LineInput::new(),
+            endpoint: LineInput::new(),
+            token: LineInput::new(),
+            field: 1,
+            editing_name: None,
+            err: String::new(),
+        }
+    }
+    fn input(&mut self) -> Option<&mut LineInput> {
+        match self.field {
+            1 => Some(&mut self.name),
+            2 => Some(&mut self.model),
+            3 => Some(&mut self.endpoint),
+            4 => Some(&mut self.token),
+            _ => None,
+        }
+    }
+}
+
 /// Kind-specific state carried inside [`VaultModal`].
 pub(crate) enum VaultKindState {
     Env {
@@ -141,6 +178,12 @@ pub(crate) enum VaultKindState {
     Ref {
         project_state: ProjectReferences,
         editor: Option<RefEditor>,
+    },
+    Model {
+        /// The target project's `.env`, where models are written.
+        project_dotenv: BTreeMap<String, String>,
+        reveal: bool,
+        editor: Option<ModelEditor>,
     },
 }
 
@@ -183,12 +226,17 @@ impl VaultModal {
         matches!(self.kind, VaultKindState::Ref { .. })
     }
 
+    pub(crate) fn is_model(&self) -> bool {
+        matches!(self.kind, VaultKindState::Model { .. })
+    }
+
     pub(crate) fn has_editor(&self) -> bool {
         match &self.kind {
             VaultKindState::Env { editor, .. } => editor.is_some(),
             VaultKindState::Skill { editor, .. } => editor.is_some(),
             VaultKindState::Tool { editor, .. } => editor.is_some(),
             VaultKindState::Ref { editor, .. } => editor.is_some(),
+            VaultKindState::Model { editor, .. } => editor.is_some(),
         }
     }
 
@@ -198,24 +246,7 @@ impl VaultModal {
             VaultKindState::Skill { editor, .. } => editor.is_some(),
             VaultKindState::Tool { editor, .. } => editor.as_ref().is_some_and(|e| e.field != 0),
             VaultKindState::Ref { editor, .. } => editor.is_some(),
-        }
-    }
-
-    pub(crate) fn ensure_editor_open(&mut self) {
-        match &mut self.kind {
-            VaultKindState::Env { editor, .. } if editor.is_none() => {
-                *editor = Some(EnvEditor::blank());
-            }
-            VaultKindState::Skill { editor, .. } if editor.is_none() => {
-                *editor = Some(SkillEditor::blank());
-            }
-            VaultKindState::Tool { editor, .. } if editor.is_none() => {
-                *editor = Some(ToolEditor::blank());
-            }
-            VaultKindState::Ref { editor, .. } if editor.is_none() => {
-                *editor = Some(RefEditor::blank());
-            }
-            _ => {}
+            VaultKindState::Model { editor, .. } => editor.as_ref().is_some_and(|e| e.field != 0),
         }
     }
 
@@ -225,6 +256,7 @@ impl VaultModal {
             VaultKindState::Skill { editor, .. } => *editor = Some(SkillEditor::blank()),
             VaultKindState::Tool { editor, .. } => *editor = Some(ToolEditor::blank()),
             VaultKindState::Ref { editor, .. } => *editor = Some(RefEditor::blank()),
+            VaultKindState::Model { editor, .. } => *editor = Some(ModelEditor::blank()),
         }
     }
 
@@ -234,6 +266,7 @@ impl VaultModal {
             VaultKindState::Skill { editor, .. } => *editor = None,
             VaultKindState::Tool { editor, .. } => *editor = None,
             VaultKindState::Ref { editor, .. } => *editor = None,
+            VaultKindState::Model { editor, .. } => *editor = None,
         }
     }
 
@@ -298,6 +331,17 @@ impl VaultModal {
                 ed.err.clear();
                 true
             }
+            VaultKindState::Model {
+                editor: Some(ed), ..
+            } => {
+                if let Some(input) = ed.input() {
+                    for ch in chars {
+                        input.insert(ch);
+                    }
+                    ed.err.clear();
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -308,6 +352,7 @@ impl VaultModal {
             VaultKindState::Skill { .. } => 6,
             VaultKindState::Tool { .. } => 7,
             VaultKindState::Ref { .. } => 6,
+            VaultKindState::Model { .. } => 8,
         }
     }
 
@@ -317,6 +362,7 @@ impl VaultModal {
             VaultKindState::Skill { .. } => 'K',
             VaultKindState::Tool { .. } => 'T',
             VaultKindState::Ref { .. } => 'R',
+            VaultKindState::Model { .. } => 'O',
         }
     }
 
@@ -326,6 +372,7 @@ impl VaultModal {
             VaultKindState::Skill { .. } => "skill",
             VaultKindState::Tool { .. } => "tool",
             VaultKindState::Ref { .. } => "reference",
+            VaultKindState::Model { .. } => "model",
         }
     }
 
@@ -335,6 +382,7 @@ impl VaultModal {
             VaultKindState::Skill { .. } => "skill",
             VaultKindState::Tool { .. } => "tool",
             VaultKindState::Ref { .. } => "reference",
+            VaultKindState::Model { .. } => "model",
         }
     }
 
@@ -344,6 +392,7 @@ impl VaultModal {
             VaultKindState::Skill { .. } => "sync skills",
             VaultKindState::Tool { .. } => "sync tools",
             VaultKindState::Ref { .. } => "sync refs",
+            VaultKindState::Model { .. } => "write .env",
         }
     }
 
@@ -361,6 +410,9 @@ impl VaultModal {
             VaultKindState::Ref { .. } => {
                 "  No shared references registered yet. Press a to add a GitHub link."
             }
+            VaultKindState::Model { .. } => {
+                "  No LLM models registered yet. Press a to add a model, endpoint and token."
+            }
         }
     }
 
@@ -375,6 +427,9 @@ impl VaultModal {
             }
             VaultKindState::Ref { .. } => {
                 "Syncs CLAUDE.md + AGENTS.md (+ GEMINI.md if present); blank Name uses URL slug"
+            }
+            VaultKindState::Model { .. } => {
+                "Written to .env as the provider's variables; sessions started there get them"
             }
         }
     }
@@ -531,12 +586,63 @@ impl App {
         ));
     }
 
+    pub(crate) fn open_model_modal(&mut self, target: VaultTarget) {
+        if let Ok(fresh) = models::load_models() {
+            self.models_vault = fresh;
+        }
+        let project_dotenv = match target {
+            VaultTarget::Project(_) => self
+                .target_dir(target)
+                .map(|dir| envvault::read_dotenv(&dir))
+                .unwrap_or_default(),
+            _ => BTreeMap::new(),
+        };
+        let picked = models::applied_names(&self.models_vault, &project_dotenv);
+        // The add form has no model field: models are picked per project.
+        let target = if target == VaultTarget::AddForm {
+            VaultTarget::VaultOnly
+        } else {
+            target
+        };
+        let editor = self.models_vault.models.is_empty().then(ModelEditor::blank);
+        self.vault_modal = Some(VaultModal::new(
+            target,
+            picked,
+            VaultKindState::Model {
+                project_dotenv,
+                reveal: false,
+                editor,
+            },
+        ));
+    }
+
+    /// Space/click on a row. A model replaces any other picked model of its
+    /// provider: a project's `.env` holds one per provider.
+    fn toggle_pick(&self, modal: &mut VaultModal, name: String) {
+        if modal.picked.remove(&name) {
+            return;
+        }
+        if modal.is_model() {
+            let provider = |n: &str| {
+                self.models_vault
+                    .models
+                    .iter()
+                    .find(|m| m.name == n)
+                    .map(|m| m.provider)
+            };
+            let mine = provider(&name);
+            modal.picked.retain(|n| provider(n) != mine);
+        }
+        modal.picked.insert(name);
+    }
+
     fn vault_len(&self, kind: &VaultKindState) -> usize {
         match kind {
             VaultKindState::Env { .. } => self.env_vault.vars.len(),
             VaultKindState::Skill { .. } => self.skills_vault.skills.len(),
             VaultKindState::Tool { .. } => self.tools_vault.tools.len(),
             VaultKindState::Ref { .. } => self.refs_vault.references.len(),
+            VaultKindState::Model { .. } => self.models_vault.models.len(),
         }
     }
 
@@ -549,6 +655,9 @@ impl App {
             VaultKindState::Tool { .. } => self.tools_vault.tools.get(idx).map(|e| e.name.clone()),
             VaultKindState::Ref { .. } => {
                 self.refs_vault.references.get(idx).map(|e| e.name.clone())
+            }
+            VaultKindState::Model { .. } => {
+                self.models_vault.models.get(idx).map(|e| e.name.clone())
             }
         }
     }
@@ -573,6 +682,12 @@ impl App {
             VaultKindState::Ref { .. } => self
                 .refs_vault
                 .references
+                .iter()
+                .map(|e| e.name.clone())
+                .collect(),
+            VaultKindState::Model { .. } => self
+                .models_vault
+                .models
                 .iter()
                 .map(|e| e.name.clone())
                 .collect(),
@@ -635,9 +750,7 @@ impl App {
                 modal.sel = i;
                 if modal.target != VaultTarget::VaultOnly && !modal.has_editor() {
                     if let Some(name) = self.vault_entry_name(&modal.kind, i) {
-                        if !modal.picked.remove(&name) {
-                            modal.picked.insert(name);
-                        }
+                        self.toggle_pick(&mut modal, name);
                     }
                 }
             }
@@ -709,17 +822,17 @@ impl App {
             }
             KeyCode::Char(' ') if can_pick && len > 0 => {
                 if let Some(name) = self.vault_entry_name(&modal.kind, modal.sel) {
-                    if !modal.picked.remove(&name) {
-                        modal.picked.insert(name);
-                    }
+                    self.toggle_pick(modal, name);
                 }
             }
-            KeyCode::Char('A') if can_pick && len > 0 => {
+            KeyCode::Char('A') if can_pick && len > 0 && !modal.is_model() => {
                 let names = self.vault_all_names(&modal.kind);
                 toggle_all_picked(&mut modal.picked, names.iter());
             }
             KeyCode::Char('v') => {
-                if let VaultKindState::Env { reveal, .. } = &mut modal.kind {
+                if let VaultKindState::Env { reveal, .. } | VaultKindState::Model { reveal, .. } =
+                    &mut modal.kind
+                {
                     *reveal = !*reveal;
                 }
             }
@@ -793,6 +906,22 @@ impl App {
                         modal.sel = modal
                             .sel
                             .min(self.refs_vault.references.len().saturating_sub(1));
+                    }
+                    Err(e) => self.message = (format!("Save failed: {e:#}"), Notice::Error),
+                }
+            }
+            // ponytail: projects keep the deleted model's variables in .env
+            // until synced; deleting never rewrites other projects.
+            VaultKindState::Model { .. } => {
+                let mut next_vault = self.models_vault.clone();
+                next_vault.models.retain(|m| m.name != target_name);
+                match models::save_models(&next_vault) {
+                    Ok(()) => {
+                        self.models_vault = next_vault;
+                        modal.picked.remove(target_name);
+                        modal.sel = modal
+                            .sel
+                            .min(self.models_vault.models.len().saturating_sub(1));
                     }
                     Err(e) => self.message = (format!("Save failed: {e:#}"), Notice::Error),
                 }
@@ -890,6 +1019,19 @@ impl App {
                     });
                 }
             }
+            VaultKindState::Model { editor, .. } => {
+                if let Some(entry) = self.models_vault.models.get(modal.sel) {
+                    let mut ed = ModelEditor::blank();
+                    ed.provider = entry.provider;
+                    ed.name.set(&entry.name);
+                    ed.model.set(&entry.model);
+                    ed.endpoint.set(&entry.endpoint);
+                    ed.token.set(&entry.token);
+                    ed.field = 2;
+                    ed.editing_name = Some(entry.name.clone());
+                    *editor = Some(ed);
+                }
+            }
         }
     }
 
@@ -904,6 +1046,7 @@ impl App {
                 VaultKindState::Skill { .. } => self.save_skill_editor(modal),
                 VaultKindState::Tool { .. } => self.save_tool_editor(modal),
                 VaultKindState::Ref { .. } => self.save_ref_editor(modal),
+                VaultKindState::Model { .. } => self.save_model_editor(modal),
             }
             return;
         }
@@ -975,6 +1118,23 @@ impl App {
                     };
                     if input.edit_key(k) == Some(true) {
                         ed.err.clear();
+                    }
+                }
+            },
+            VaultKindState::Model {
+                editor: Some(ed), ..
+            } => match k.code {
+                KeyCode::Tab | KeyCode::Down => ed.field = (ed.field + 1) % 5,
+                KeyCode::BackTab | KeyCode::Up => ed.field = (ed.field + 4) % 5,
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if ed.field == 0 => {
+                    ed.provider = ed.provider.next();
+                    ed.err.clear();
+                }
+                _ => {
+                    if let Some(input) = ed.input() {
+                        if input.edit_key(k) == Some(true) {
+                            ed.err.clear();
+                        }
                     }
                 }
             },
@@ -1320,6 +1480,58 @@ impl App {
         modal.close_editor();
     }
 
+    fn save_model_editor(&mut self, modal: &mut VaultModal) {
+        let VaultKindState::Model {
+            editor: Some(ed), ..
+        } = &mut modal.kind
+        else {
+            return;
+        };
+        let name = match models::validate_model_name(&ed.name.as_str()) {
+            Ok(n) => n,
+            Err(e) => {
+                ed.err = e;
+                return;
+            }
+        };
+        let model = ed.model.as_str().trim().to_string();
+        if model.is_empty() {
+            ed.err = "Model cannot be empty.".into();
+            ed.field = 2;
+            return;
+        }
+        let entry = models::ModelEntry {
+            name: name.clone(),
+            provider: ed.provider,
+            model,
+            endpoint: ed.endpoint.as_str().trim().to_string(),
+            token: ed.token.as_str().trim().to_string(),
+        };
+        let mut next_vault = self.models_vault.clone();
+        let old = ed.editing_name.clone().unwrap_or_else(|| name.clone());
+        if old != name && next_vault.models.iter().any(|m| m.name == name) {
+            ed.err = format!("{name} already exists.");
+            return;
+        }
+        match next_vault.models.iter().position(|m| m.name == old) {
+            Some(pos) => next_vault.models[pos] = entry,
+            None => next_vault.models.push(entry),
+        }
+        if let Err(e) = models::save_models(&next_vault) {
+            ed.err = format!("Save failed: {e:#}");
+            return;
+        }
+        self.models_vault = next_vault;
+        modal.picked.remove(&old);
+        if let Some(pos) = self.models_vault.models.iter().position(|m| m.name == name) {
+            modal.sel = pos;
+        }
+        modal.close_editor();
+        if modal.target != VaultTarget::VaultOnly {
+            self.toggle_pick(modal, name);
+        }
+    }
+
     /// Sync the skills modal's picks into its project (`false` closes modal;
     /// `true` keeps it open on failure).
     fn sync_skill_modal(&mut self, modal: &VaultModal, overwrite: bool) -> bool {
@@ -1368,6 +1580,7 @@ impl App {
                     VaultKindState::Skill { .. } => self.add_skills = picked,
                     VaultKindState::Tool { .. } => self.add_tools = picked,
                     VaultKindState::Ref { .. } => self.add_refs = picked,
+                    VaultKindState::Model { .. } => {}
                 }
                 false
             }
@@ -1464,6 +1677,29 @@ impl App {
                             }
                         }
                     }
+                    VaultKindState::Model { project_dotenv, .. } => {
+                        match models::sync_project_models(
+                            &project_path,
+                            &self.models_vault,
+                            &modal.picked,
+                            project_dotenv,
+                        ) {
+                            Ok((0, 0)) => false,
+                            Ok((written, removed)) => {
+                                self.message = (
+                                    format!(
+                                        "Updated {project_name}/.env models ({written} set, -{removed} removed); restart its session to use them"
+                                    ),
+                                    Notice::Info,
+                                );
+                                false
+                            }
+                            Err(e) => {
+                                self.message = (format!("Models failed: {e:#}"), Notice::Error);
+                                true
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1523,6 +1759,10 @@ impl App {
             (VaultKindState::Ref { .. }, VaultTarget::VaultOnly) => {
                 " Shared References Vault ".to_string()
             }
+            (VaultKindState::Model { .. }, VaultTarget::Project(pi)) => {
+                format!(" LLM Models -> {}/.env ", project_name(pi))
+            }
+            (VaultKindState::Model { .. }, _) => " LLM Models ".to_string(),
         }
     }
 
@@ -1561,7 +1801,7 @@ impl App {
                 m.target,
                 m.footer_verb(),
                 can_pick,
-                m.is_env(),
+                m.is_env() || m.is_model(),
                 parts[3].width,
             ),
         };
@@ -1670,6 +1910,23 @@ impl App {
                     format!("{prefix}{:<nw$}  URL / Description", "Name", nw = nw)
                 };
                 (0, nw, bw, dw, head)
+            }
+            VaultKindState::Model { .. } => {
+                let show_badge = matches!(m.target, VaultTarget::Project(_));
+                let kw = 9usize;
+                let nw = 18usize.min(inner_w / 4);
+                let bw = if show_badge { 11usize } else { 0 };
+                let dw = inner_w
+                    .saturating_sub(prefix_cols + kw + nw + bw + 5)
+                    .max(8);
+                let head = format!(
+                    "{prefix}{:<kw$} {:<nw$}  {:<dw$}{}",
+                    "Provider",
+                    "Name",
+                    "Model / Endpoint / Token",
+                    if bw > 0 { "  .env" } else { "" },
+                );
+                (kw, nw, bw, dw, head)
             }
         };
 
@@ -1798,6 +2055,7 @@ impl App {
                     ))
                 })
                 .collect(),
+            VaultKindState::Model { .. } => Vec::new(),
         }
     }
 
@@ -1956,6 +2214,64 @@ impl App {
                 }
                 Line::from(spans)
             }
+            VaultKindState::Model {
+                project_dotenv,
+                reveal,
+                ..
+            } => {
+                let entry = &self.models_vault.models[i];
+                let checked = m.picked.contains(&entry.name);
+                let mut spans = vault_row_prefix(can_pick, active, checked, row_style);
+                spans.push(Span::styled(
+                    format!("{:<kw$} ", entry.provider.as_str(), kw = kind_w),
+                    if active {
+                        row_style
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    },
+                ));
+                let token = if *reveal {
+                    entry.token.clone()
+                } else {
+                    envvault::mask_value(&entry.token)
+                };
+                let detail = [
+                    entry.model.as_str(),
+                    entry.endpoint.as_str(),
+                    token.as_str(),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("  ");
+                push_vault_name_detail(
+                    &mut spans,
+                    &entry.name,
+                    &detail,
+                    name_w,
+                    detail_w,
+                    active,
+                    row_style,
+                );
+                if badge_w > 0 {
+                    let applied = entry.applied(project_dotenv);
+                    let (badge, color) = match (applied, checked) {
+                        (true, true) => ("  in .env", Color::Green),
+                        (true, false) => ("  removes", Color::Red),
+                        (false, true) => ("  writes", Color::Yellow),
+                        (false, false) => ("", Color::Reset),
+                    };
+                    spans.push(Span::styled(
+                        badge,
+                        if active {
+                            row_style
+                        } else {
+                            Style::default().fg(color)
+                        },
+                    ));
+                }
+                Line::from(spans)
+            }
         }
     }
 
@@ -1998,6 +2314,16 @@ impl App {
                     " Edit Shared Reference "
                 } else {
                     " New Shared Reference "
+                },
+                ed.editing_name.is_some(),
+            ),
+            VaultKindState::Model {
+                editor: Some(ed), ..
+            } => (
+                if ed.editing_name.is_some() {
+                    " Edit LLM Model "
+                } else {
+                    " New LLM Model "
                 },
                 ed.editing_name.is_some(),
             ),
@@ -2117,6 +2443,42 @@ impl App {
                     ));
                 }
                 ed_lines.push(editor_hint_or_err(&ed.err, ed_w, false));
+            }
+            VaultKindState::Model {
+                editor: Some(ed), ..
+            } => {
+                let avail = ed_w.saturating_sub(14).max(4);
+                let bold = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+                let on = ed.field == 0;
+                ed_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} {:<8}: ", if on { ">" } else { " " }, "Provider"),
+                        if on {
+                            bold
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                    Span::styled(
+                        format!("{} (Space toggles)", ed.provider.as_str()),
+                        if on { bold } else { Style::default() },
+                    ),
+                ]));
+                for (fi, (label, input)) in [
+                    (1usize, ("Name", &ed.name)),
+                    (2usize, ("Model", &ed.model)),
+                    (3usize, ("Endpoint", &ed.endpoint)),
+                    (4usize, ("Token", &ed.token)),
+                ] {
+                    ed_lines.push(render_editor_input_row(
+                        label,
+                        8,
+                        input,
+                        ed.field == fi,
+                        avail,
+                    ));
+                }
+                ed_lines.push(editor_hint_or_err(&ed.err, ed_w, ed.field == 0));
             }
             _ => {}
         }

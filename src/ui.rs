@@ -458,41 +458,35 @@ pub fn context_menu_items_for(
             },
         ));
     }
+    items.push(('d', "Remove project…"));
     items
 }
 
 fn context_menu_items_base(running: bool) -> Vec<(char, &'static str)> {
-    if running {
+    // Grouped top to bottom: run the session, configure the project,
+    // look back and organize, then the destructive remove last. Keys match
+    // the manager's where it has one (m, r, s, e, h, u, d, E/K/T/R/O).
+    let mut items = if running {
         vec![
-            ('1', "Focus terminal"),
-            ('2', "Send message…"),
-            ('3', "Stop session…"),
-            ('4', "Restart session…"),
-            ('5', "Edit project…"),
-            ('6', "View history"),
-            ('7', "Toggle pin"),
-            ('8', "Set superior…"),
-            ('9', "Remove project…"),
-            ('0', "Environment variables"),
-            ('K', "Skills…"),
-            ('T', "Tools…"),
-            ('R', "References…"),
+            ('f', "Focus terminal"),
+            ('m', "Send message…"),
+            ('r', "Restart session…"),
+            ('s', "Stop session…"),
         ]
     } else {
-        vec![
-            ('1', "Start and focus"),
-            ('2', "Send message…"),
-            ('3', "Edit project…"),
-            ('4', "View history"),
-            ('5', "Toggle pin"),
-            ('6', "Set superior…"),
-            ('7', "Remove project…"),
-            ('8', "Environment variables"),
-            ('K', "Skills…"),
-            ('T', "Tools…"),
-            ('R', "References…"),
-        ]
-    }
+        vec![('f', "Start and focus")]
+    };
+    items.extend([
+        ('e', "Edit project…"),
+        ('O', "LLM model…"),
+        ('E', "Environment variables…"),
+        ('K', "Skills…"),
+        ('T', "Tools…"),
+        ('R', "References…"),
+        ('h', "History"),
+        ('u', "Set superior…"),
+    ]);
+    items
 }
 /// Rendered lines for the quick-action menu popup, shared by drawing
 /// and click mapping: one row per action, then the key hint.
@@ -548,18 +542,8 @@ pub fn context_menu_lines_at_for(
         ]));
     }
     lines.push(Line::from(""));
-    // The tenth row is keyed `0`, followed by `K`/`T`/`R` for Skills/Tools/References.
-    let mut range = if items.iter().any(|(k, _)| *k == '0') {
-        "0-9/K/T/R"
-    } else {
-        "1-8/K/T/R"
-    }
-    .to_string();
-    if items.iter().any(|(k, _)| *k == 'A') {
-        range.push_str("/A");
-    }
     lines.push(Line::from(hint_spans(&[
-        (range.as_str(), "selects"),
+        ("key", "runs"),
         ("↑↓/Enter", "runs"),
         ("Esc", "cancels"),
     ])));
@@ -884,7 +868,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · F/Ctrl+F  search output · G  search all · a  add · E  env · K  skills · T  tools · R  refs · e  edit · f  pin · [/]  collapse · z  zoom
+  /  filter · F/Ctrl+F  search output · G  search all · a  add · E  env · K  skills · T  tools · R  refs · O  models · e  edit · f  pin · [/]  collapse · z  zoom
   m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
   h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help
@@ -1282,80 +1266,4 @@ pub fn color(c: vt100::Color) -> Color {
         vt100::Color::Idx(n) => Color::Indexed(n),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
-}
-/// Rows of the `.env` list the environment popup shows before "… N more".
-pub const ENV_INFO_ROWS: usize = 15;
-/// The read-only environment popup for one project: its `.env` entries
-/// (masked unless `reveal`), what squad adds to every session, then keys.
-pub fn env_info_lines(
-    p: &Project,
-    dotenv: &std::collections::BTreeMap<String, String>,
-    reveal: bool,
-) -> Vec<Line<'static>> {
-    use crate::config::fit;
-    use ratatui::style::Modifier;
-    let dim = Style::default().add_modifier(Modifier::DIM);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            sanitize_chrome_line(&p.name),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            fit(&sanitize_chrome_line(&p.path.display().to_string()), 58),
-            dim,
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            match dotenv.len() {
-                0 => ".env  (none)".to_string(),
-                n => format!(".env  ({n} key{})", if n == 1 { "" } else { "s" }),
-            },
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-    ];
-    let key_w = dotenv
-        .keys()
-        .map(|k| k.chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(22);
-    for (k, v) in dotenv.iter().take(ENV_INFO_ROWS) {
-        let shown = if reveal {
-            sanitize_chrome_line(v)
-        } else {
-            crate::envvault::mask_value(v)
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:<key_w$}", fit(&sanitize_chrome_line(k), key_w)),
-                Style::default().fg(Color::Yellow),
-            ),
-            Span::raw("  "),
-            Span::raw(fit(&shown, 56usize.saturating_sub(key_w))),
-        ]));
-    }
-    if dotenv.len() > ENV_INFO_ROWS {
-        lines.push(Line::from(Span::styled(
-            format!("  … and {} more", dotenv.len() - ENV_INFO_ROWS),
-            dim,
-        )));
-    }
-    let added: Vec<String> = crate::config::pty_env()
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect();
-    lines.push(Line::from(Span::styled(
-        format!("squad also sets {}", added.join(" ")),
-        dim,
-    )));
-    lines.push(Line::from(""));
-    lines.push(Line::from(hint_spans(&[
-        ("a", "add"),
-        ("e/E", "edit"),
-        ("v", if reveal { "masks" } else { "reveals" }),
-        ("Esc", "closes"),
-    ])));
-    lines
 }

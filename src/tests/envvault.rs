@@ -134,3 +134,48 @@ fn propagate_env_updates_renames_and_deletes_only_holders() {
     let _ = fs::remove_dir_all(&a);
     let _ = fs::remove_dir_all(&b);
 }
+#[test]
+fn llm_models_write_one_per_provider_into_dotenv() {
+    use crate::models::*;
+    let dir = scratch_dir("models-sync");
+    let m = |name: &str, provider, model: &str, token: &str| ModelEntry {
+        name: name.into(),
+        provider,
+        model: model.into(),
+        endpoint: String::new(),
+        token: token.into(),
+    };
+    let vault = ModelVault {
+        models: vec![
+            m("opus", Provider::Anthropic, "claude-opus-5-5", "sk-a"),
+            m("sonnet", Provider::Anthropic, "claude-sonnet-5-5", ""),
+            m("gpt", Provider::Openai, "gpt-x", "sk-o"),
+        ],
+    };
+    fs::write(dir.join(".env"), "KEEP=1\nOPENAI_API_KEY=mine\n").unwrap();
+    let pick = |names: &[&str]| names.iter().map(|s| s.to_string()).collect();
+
+    // Pick opus: its model and token land; a hand-written OpenAI key survives.
+    let env = read_dotenv(&dir);
+    sync_project_models(&dir, &vault, &pick(&["opus"]), &env).unwrap();
+    let env = read_dotenv(&dir);
+    assert_eq!(env["ANTHROPIC_MODEL"], "claude-opus-5-5");
+    assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "sk-a");
+    assert_eq!(env["OPENAI_API_KEY"], "mine");
+    assert_eq!(env["KEEP"], "1");
+    assert_eq!(applied_names(&vault, &env), pick(&["opus"]));
+
+    // Switch to sonnet: opus's token goes, since sonnet has none.
+    sync_project_models(&dir, &vault, &pick(&["sonnet"]), &env).unwrap();
+    let env = read_dotenv(&dir);
+    assert_eq!(env["ANTHROPIC_MODEL"], "claude-sonnet-5-5");
+    assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN"));
+
+    // Unpick everything: the managed provider is cleared, the rest stays.
+    sync_project_models(&dir, &vault, &pick(&[]), &env).unwrap();
+    let env = read_dotenv(&dir);
+    assert!(!env.contains_key("ANTHROPIC_MODEL"));
+    assert_eq!(env["OPENAI_API_KEY"], "mine");
+    assert!(is_model_key("GEMINI_API_KEY") && !is_model_key("KEEP"));
+    let _ = fs::remove_dir_all(&dir);
+}

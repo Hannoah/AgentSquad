@@ -704,41 +704,41 @@ fn pane_usage_note_labels_numbers() {
 #[test]
 fn context_menu_offers_start_for_stopped() {
     let running = context_menu_items(true);
-    assert_eq!(running.len(), 13);
-    assert!(running.iter().any(|(_, l)| l.contains("Focus")));
-    assert!(running.iter().any(|(_, l)| l.contains("Stop")));
-    assert!(running.iter().any(|(_, l)| l.contains("Edit")));
-    assert!(running.iter().any(|(_, l)| l.contains("history")));
+    let keys = |items: &[(char, &str)]| items.iter().map(|(k, _)| *k).collect::<String>();
+    // Session first, then configuration, then history/organizing, remove last.
+    assert_eq!(keys(&running), "fmrseOEKTRhud");
     let stopped = context_menu_items(false);
-    assert_eq!(stopped.len(), 11);
-    // Services get one trailing auto-restart row; agents keep the base menu.
+    assert_eq!(keys(&stopped), "feOEKTRhud");
+    assert!(stopped[0].1.contains("Start"));
+    assert!(!stopped
+        .iter()
+        .any(|(_, l)| l.contains("Stop") || l.contains("Send")));
+    assert!(
+        !running.iter().any(|(_, l)| l.contains("pin")),
+        "pin lives on f"
+    );
+    // Services get the auto-restart toggle just before Remove; agents never.
     let svc_running = context_menu_items_for(true, Kind::Service, false);
-    assert_eq!(svc_running.len(), running.len() + 1);
-    assert_eq!(svc_running.last(), Some(&('A', "Enable auto-restart")));
+    assert_eq!(keys(&svc_running), "fmrseOEKTRhuAd");
+    assert_eq!(svc_running[12], ('A', "Enable auto-restart"));
     let svc_on = context_menu_items_for(false, Kind::Service, true);
-    assert_eq!(svc_on.last(), Some(&('A', "Disable auto-restart")));
+    assert!(svc_on.contains(&('A', "Disable auto-restart")));
     assert_eq!(
         context_menu_items_for(true, Kind::Agent, true),
         running,
         "agents never see the toggle"
     );
-    for items in [&running, &stopped] {
-        assert!(items.iter().any(|(_, l)| l.contains("Environment")));
-        assert!(items.iter().any(|(_, l)| l.contains("Skills")));
-        assert!(items.iter().any(|(_, l)| l.contains("Tools")));
-        assert!(items.iter().any(|(_, l)| l.contains("References")));
+    for items in [&running, &stopped, &svc_running] {
+        let mut ks: Vec<char> = items.iter().map(|(k, _)| *k).collect();
+        ks.sort();
+        ks.dedup();
+        assert_eq!(ks.len(), items.len(), "keys are unique");
+        assert!(
+            !ks.contains(&'j') && !ks.contains(&'k'),
+            "j/k move the highlight"
+        );
+        assert_eq!(items.last().unwrap().0, 'd', "remove is last");
     }
-    assert!(stopped.iter().any(|(_, l)| l.contains("Start")));
-    assert!(!stopped.iter().any(|(_, l)| l.contains("Stop")));
-    // Number keys are 1-based in order with no gaps, followed by K/T/R for Skills/Tools/References.
-    assert_eq!(
-        running.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'K', 'T', 'R']
-    );
-    assert_eq!(
-        stopped.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        ['1', '2', '3', '4', '5', '6', '7', '8', 'K', 'T', 'R']
-    );
 }
 
 #[test]

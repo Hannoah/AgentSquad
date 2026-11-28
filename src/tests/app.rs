@@ -677,21 +677,21 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     app.context_sel = 0;
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(
-        app.context_sel, 10,
-        "Up wraps to last stopped menu item (References)"
+        app.context_sel, 9,
+        "Up wraps to last stopped menu item (Remove project)"
     );
     app.on_key(key(KeyCode::Char('j')), 24, 54);
     assert_eq!(app.context_sel, 0, "j wraps back to first item");
-    // Item index 3 on stopped menu is View history.
-    for _ in 0..3 {
+    // Item index 7 on stopped menu is History.
+    for _ in 0..7 {
         app.on_key(key(KeyCode::Down), 24, 54);
     }
-    assert_eq!(app.context_sel, 3);
+    assert_eq!(app.context_sel, 7);
     app.on_key(key(KeyCode::Enter), 24, 54);
     assert!(app.context_menu.is_none());
     assert!(
         app.history.is_some(),
-        "Enter executed selected item (View history)"
+        "Enter executed selected item (History)"
     );
     app.on_key(key(KeyCode::Esc), 24, 54);
 
@@ -990,7 +990,7 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
 }
 
 #[test]
-fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
+fn arrows_reach_management_and_right_click_takes_focus_and_opens_env() {
     let dir = scratch_dir("mgmt-nav");
     fs::write(dir.join(".env"), "API_KEY=supersecret\nPORT=8080\n").unwrap();
     let path = dir.to_str().unwrap();
@@ -1002,7 +1002,7 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
         ..Default::default()
     };
     let mut app = App::new(cfg, None);
-    // Down past the last project steps onto Management (Memory, Env, Skills, Tools, Refs, Lessons), then wraps to top.
+    // Down past the last project steps onto Management (Memory, Env, Skills, Tools, Refs, Lessons, Models), then wraps to top.
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (1, None));
     app.on_key(key(KeyCode::Down), 24, 54);
@@ -1017,10 +1017,14 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     assert_eq!(app.mgmt_sel, Some(4));
     app.on_key(key(KeyCode::Down), 24, 54); // Lessons
     assert_eq!(app.mgmt_sel, Some(5));
+    app.on_key(key(KeyCode::Down), 24, 54); // LLM models
+    assert_eq!(app.mgmt_sel, Some(6));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (0, None));
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(5), "Up from the top reaches Lessons");
+    assert_eq!(app.mgmt_sel, Some(6), "Up from the top reaches LLM models");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(5), "Up reaches Lessons");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(4), "Up reaches References");
     app.on_key(key(KeyCode::Up), 24, 54);
@@ -1056,33 +1060,10 @@ fn arrows_reach_management_and_right_click_takes_focus_with_env_info() {
     assert_eq!(app.context_menu, Some(1));
     assert_eq!(app.selected, 1);
 
-    // Last stopped-menu row shows the agent's environment, masked.
-    app.on_key(key(KeyCode::Char('8')), 24, 54);
+    // `E` opens the project's environment variables straight in the vault.
+    app.on_key(key(KeyCode::Char('E')), 24, 54);
     assert!(app.context_menu.is_none());
-    let text = |app: &App| {
-        let info = app.env_info.as_ref().unwrap();
-        env_info_lines(&app.cfg.projects[info.pi], &info.dotenv, info.reveal)
-            .iter()
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let shown = text(&app);
-    assert!(
-        shown.contains("API_KEY") && shown.contains("PORT"),
-        "{shown}"
-    );
-    assert!(!shown.contains("supersecret"), "values masked by default");
-    term.draw(|f| app.draw(f)).unwrap();
-    app.on_key(key(KeyCode::Char('v')), 24, 54);
-    assert!(text(&app).contains("supersecret"), "v reveals");
-    // Pressing `a` inside Environment variables jumps straight to adding an env var.
-    app.on_key(key(KeyCode::Char('a')), 24, 54);
-    assert!(app.env_info.is_none());
-    assert!(app
-        .vault_modal
-        .as_ref()
-        .is_some_and(|m| m.is_env() && m.has_editor()));
+    assert!(app.vault_modal.as_ref().is_some_and(|m| m.is_env()));
     app.vault_modal = None;
     let _ = fs::remove_dir_all(&dir);
 }

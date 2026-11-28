@@ -722,6 +722,15 @@ impl Session {
         for (k, v) in pty_env() {
             cmd.env(k, v);
         }
+        // Agent CLIs do not read `.env`: the LLM model picked for this
+        // project (Management > LLM models) reaches them through the env.
+        if remote.is_none() {
+            for (k, v) in crate::envvault::read_dotenv(&p.path) {
+                if crate::models::is_model_key(&k) {
+                    cmd.env(k, v);
+                }
+            }
+        }
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let child = pair
