@@ -197,6 +197,10 @@ fn llm_model_test_pings_the_endpoint_and_reads_the_reply() {
     assert!(body.contains(r#""model":"m\"1""#));
     let (url, _, _) = test_request(&m(Provider::Openai, "http://x/v1/"));
     assert_eq!(url, "http://x/v1/chat/completions");
+    // A pasted full call URL is not doubled, and sessions get the base.
+    let full = m(Provider::Openai, "http://x/v1/chat/completions");
+    assert_eq!(test_request(&full).0, "http://x/v1/chat/completions");
+    assert!(full.env().iter().any(|e| e.value == "http://x/v1"));
     let (url, h, _) = test_request(&m(Provider::Gemini, ""));
     assert!(url.ends_with("/v1beta/models/m\"1:generateContent"));
     assert!(h.contains(&"x-goog-api-key: sek".to_string()));

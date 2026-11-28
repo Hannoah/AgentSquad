@@ -77,7 +77,8 @@ impl ModelEntry {
     /// The variables this model writes; blank endpoint or token are left out.
     pub fn env(&self) -> Vec<EnvEntry> {
         let [mk, ek, tk] = self.provider.keys();
-        [(mk, &self.model), (ek, &self.endpoint), (tk, &self.token)]
+        let base = self.base_url();
+        [(mk, &self.model), (ek, &base), (tk, &self.token)]
             .into_iter()
             .filter(|(_, v)| !v.trim().is_empty())
             .map(|(k, v)| EnvEntry {
@@ -85,6 +86,17 @@ impl ModelEntry {
                 value: v.trim().to_string(),
             })
             .collect()
+    }
+    /// The endpoint as a base URL: a pasted full call URL (`.../v1/chat/completions`)
+    /// loses the call path, which the CLIs and the test ping append themselves.
+    pub fn base_url(&self) -> String {
+        let e = self.endpoint.trim().trim_end_matches('/');
+        let call = match self.provider {
+            Provider::Anthropic => "/v1/messages",
+            Provider::Openai => "/chat/completions",
+            Provider::Gemini => "",
+        };
+        e.strip_suffix(call).unwrap_or(e).to_string()
     }
     /// The project's `.env` holds exactly this model.
     pub fn applied(&self, dotenv: &BTreeMap<String, String>) -> bool {
@@ -193,7 +205,8 @@ pub fn sync_project_models(
 pub fn test_request(m: &ModelEntry) -> (String, Vec<String>, String) {
     let model = crate::json::JsonValue::String(m.model.trim().to_string()).to_pretty();
     let model = model.trim();
-    let base = m.endpoint.trim().trim_end_matches('/');
+    let base = m.base_url();
+    let base = base.as_str();
     let token = m.token.trim();
     let ping = r#"[{"role":"user","content":"Reply with OK."}]"#;
     let mut headers = vec!["Content-Type: application/json".to_string()];
