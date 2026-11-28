@@ -133,12 +133,12 @@ impl App {
         };
         // A missing folder is made on the spot (the field says so).
         if self.add_state == PathState::Missing {
-            if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
+            if let Err(e) = create_missing_dir(&self.add_full_path()) {
                 self.add_err = format!("{e:#}");
                 return;
             }
         }
-        let new_path = match resolve_dir(clean_path(&self.add_path.as_str())) {
+        let new_path = match resolve_dir(clean_path(&self.add_full_path())) {
             Ok((path, _)) => path,
             Err(e) => {
                 self.add_err = e;
@@ -558,7 +558,7 @@ impl App {
     }
 
     /// Open Management row `m`: `0` Memory monitor, `1` Environment Variable, `2` Skills,
-    /// `3` Tools, `4` References, `5` Lessons, `6` LLM models (scoped to the selected project, or vault-only when none exist).
+    /// `3` Tools, `4` References, `5` Lessons, `6` LLM models, `7` Servers (scoped to the selected project, or vault-only when none exist).
     pub(super) fn open_mgmt(&mut self, m: usize) {
         self.mode = Mode::Manager;
         let target = self.selected_vault_target();
@@ -570,6 +570,7 @@ impl App {
             4 => self.open_ref_modal(target),
             5 => self.open_lessons(),
             6 => self.open_model_modal(target),
+            7 => self.open_server_modal(),
             _ => {}
         }
     }

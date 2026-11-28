@@ -868,7 +868,7 @@ Usage:
 
 Manager keys:
   j/k, arrows  select · Enter  open · 1-9  jump · Home/End  first/last
-  /  filter · F/Ctrl+F  search output · G  search all · a  add · E  env · K  skills · T  tools · R  refs · O  models · e  edit · f  pin · [/]  collapse · z  zoom
+  /  filter · F/Ctrl+F  search output · G  search all · a  add · E  env · K  skills · T  tools · R  refs · O  models · V  servers · e  edit · f  pin · [/]  collapse · z  zoom
   m  message · w  quick reply (?) · u  commander · b  brief (ledger) · o  order (all under a commander)
   h  history · g  git diff · M  memory monitor · s  stop · r  restart · d/Del  remove · S  start all · U  update
   PgUp/PgDn  scroll · q  quit · ?  help

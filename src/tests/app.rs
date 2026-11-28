@@ -645,9 +645,16 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     empty.on_key(key(KeyCode::Tab), 24, 54);
     assert_eq!(empty.add_field, 8, "Tab from Tools goes to References");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 0, "Tab from References wraps to Path");
+    assert_eq!(empty.add_field, 9, "Tab from References wraps to Server");
+    empty.on_key(key(KeyCode::Tab), 24, 54);
+    assert_eq!(empty.add_field, 0, "Tab from Server goes to Path");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 8, "BackTab from Path wraps to References");
+    assert_eq!(empty.add_field, 9, "BackTab from Path goes to Server");
+    empty.on_key(key(KeyCode::BackTab), 24, 54);
+    assert_eq!(
+        empty.add_field, 8,
+        "BackTab from Server wraps to References"
+    );
     empty.on_key(key(KeyCode::BackTab), 24, 54);
     assert_eq!(empty.add_field, 7, "BackTab from References goes to Tools");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
@@ -1019,10 +1026,14 @@ fn arrows_reach_management_and_right_click_takes_focus_and_opens_env() {
     assert_eq!(app.mgmt_sel, Some(5));
     app.on_key(key(KeyCode::Down), 24, 54); // LLM models
     assert_eq!(app.mgmt_sel, Some(6));
+    app.on_key(key(KeyCode::Down), 24, 54); // Servers
+    assert_eq!(app.mgmt_sel, Some(7));
     app.on_key(key(KeyCode::Down), 24, 54);
     assert_eq!((app.selected, app.mgmt_sel), (0, None));
     app.on_key(key(KeyCode::Up), 24, 54);
-    assert_eq!(app.mgmt_sel, Some(6), "Up from the top reaches LLM models");
+    assert_eq!(app.mgmt_sel, Some(7), "Up from the top reaches Servers");
+    app.on_key(key(KeyCode::Up), 24, 54);
+    assert_eq!(app.mgmt_sel, Some(6), "Up reaches LLM models");
     app.on_key(key(KeyCode::Up), 24, 54);
     assert_eq!(app.mgmt_sel, Some(5), "Up reaches Lessons");
     app.on_key(key(KeyCode::Up), 24, 54);
@@ -1908,4 +1919,41 @@ fn unified_vault_modal_mouse_wheel_paste_and_outside_click() {
     );
     assert!(app.vault_modal.is_none());
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn add_form_puts_a_registered_server_in_front_of_the_folder() {
+    use crate::envvault::EnvEntry;
+    assert_eq!(validate_server_addr(" me@vm ").as_deref(), Ok("me@vm"));
+    assert!(validate_server_addr("me@vm:~/x").is_err());
+    assert!(validate_server_addr("a b").is_err());
+    assert_eq!(server_path("", r"C:\x"), r"C:\x");
+
+    let mut app = App::new(Config::default(), None);
+    app.servers_vault.vars = vec![EnvEntry {
+        key: "azure".into(),
+        value: "me@vm".into(),
+    }];
+    app.mode = Mode::Add;
+    app.add_field = 9;
+    app.add_path.set("~/app");
+    assert_eq!(app.add_full_path(), "~/app", "local keeps the path");
+    app.on_key(key(KeyCode::Right), 24, 80);
+    assert_eq!(app.add_full_path(), "me@vm:~/app");
+    // The remote `~` is left for the remote shell, not expanded here.
+    app.on_key(key(KeyCode::Down), 24, 80);
+    assert_eq!(app.add_field, 0);
+    app.on_key(key(KeyCode::Char('/')), 24, 80);
+    assert_eq!(app.add_full_path(), "me@vm:~/app/");
+    assert!(
+        app.add_picks.is_empty(),
+        "no local folder list for a server"
+    );
+    app.on_key(key(KeyCode::Up), 24, 80);
+    app.on_key(key(KeyCode::Right), 24, 80);
+    let local = app.add_full_path();
+    assert!(
+        !local.contains("me@vm") && local.ends_with("app/"),
+        "{local}"
+    );
 }

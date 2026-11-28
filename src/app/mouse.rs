@@ -378,16 +378,21 @@ impl App {
                     let rel_y = m.row.saturating_sub(popup.y + 1);
                     let list_h = self.add_list_h();
                     let editing = self.add_edit.is_some();
-                    match rel_y {
-                        0 => self.add_field = 0,
-                        r if r <= list_h => {
+                    // The Server row sits above the rest of the form.
+                    match rel_y.checked_sub(1) {
+                        None => {
+                            self.add_field = 9;
+                            self.cycle_server(true);
+                        }
+                        Some(0) => self.add_field = 0,
+                        Some(r) if r <= list_h => {
                             let win = self.add_pick_window();
                             let row = usize::from(r.saturating_sub(2));
                             if r >= 2 && row < win.len() {
                                 self.pick_path(win.start + row);
                             }
                         }
-                        r => match r - list_h {
+                        Some(r) => match r - list_h {
                             1 if !editing => {
                                 self.add_field = 1;
                                 self.add_kind = self.add_kind.toggled();

@@ -690,6 +690,28 @@ fn remote_name((host, dir): (&str, &str)) -> String {
         n => n.to_string(),
     }
 }
+/// Registered servers (`servers.toml` next to `config.toml`), kept in the
+/// env-vault shape: `key` is the server's name, `value` its ssh address.
+pub fn servers_path() -> Result<PathBuf> {
+    Ok(config_path()?.with_file_name("servers.toml"))
+}
+/// A server address as ssh takes it (`user@host`, `host`, an ssh alias):
+/// it must read back as a remote folder once `:dir` is added.
+pub fn validate_server_addr(raw: &str) -> Result<String, String> {
+    let a = raw.trim();
+    if a.contains(':') || remote(Path::new(&format!("{a}:"))).is_none() {
+        return Err("Address is user@host or an ssh alias (no spaces, ':' or slashes).".into());
+    }
+    Ok(a.to_string())
+}
+/// The project path for folder `dir` on server `addr`; a blank address is
+/// this PC and leaves `dir` as typed.
+pub fn server_path(addr: &str, dir: &str) -> String {
+    match addr.trim() {
+        "" => dir.to_string(),
+        a => format!("{a}:{}", dir.trim()),
+    }
+}
 /// Create the folder named by `path_raw` (parents too) when it does not
 /// exist yet. An existing folder or file is left alone; a file then fails
 /// later in `build_project`. Blank input does nothing.

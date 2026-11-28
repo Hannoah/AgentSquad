@@ -341,8 +341,9 @@ pub const TOOLS_ROW: usize = usize::MAX - 3;
 pub const REFS_ROW: usize = usize::MAX - 4;
 pub const LESSONS_ROW: usize = usize::MAX - 5;
 pub const MODELS_ROW: usize = usize::MAX - 6;
+pub const SERVERS_ROW: usize = usize::MAX - 7;
 
-/// Map a Management sidebar row sentinel to its `mgmt_sel` index (`0..=6`).
+/// Map a Management sidebar row sentinel to its `mgmt_sel` index (`0..=7`).
 pub fn mgmt_row_index(target: usize) -> Option<usize> {
     match target {
         MEMORY_ROW => Some(0),
@@ -352,6 +353,7 @@ pub fn mgmt_row_index(target: usize) -> Option<usize> {
         REFS_ROW => Some(4),
         LESSONS_ROW => Some(5),
         MODELS_ROW => Some(6),
+        SERVERS_ROW => Some(7),
         _ => None,
     }
 }

@@ -425,6 +425,8 @@ pub(crate) struct App {
     pub(crate) filter_buf: LineInput,
     pub(crate) add_field: usize,
     pub(crate) add_path: LineInput,
+    /// Server row of the form: `0` is this PC, `i` is `servers_vault.vars[i - 1]`.
+    pub(crate) add_server: usize,
     pub(crate) add_kind: Kind,
     pub(crate) add_cmd: LineInput,
     pub(crate) add_under: LineInput,
@@ -511,6 +513,8 @@ pub(crate) struct App {
     pub(crate) tools_vault: ToolVault,
     pub(crate) refs_vault: ReferenceVault,
     pub(crate) models_vault: ModelVault,
+    /// Registered servers (`V`): name -> ssh address.
+    pub(crate) servers_vault: EnvVault,
     pub(crate) vault_modal: Option<VaultModal>,
     /// Projects whose session is starting on a worker, each with the keys
     /// typed at it meanwhile (sent once the session is up).
@@ -579,6 +583,7 @@ impl App {
         let tools_vault = tools::load_tools().unwrap_or_default();
         let refs_vault = refs::load_refs().unwrap_or_default();
         let models_vault = models::load_models().unwrap_or_default();
+        let servers_vault = load_servers();
         let selected = start_selection(
             &cfg.projects,
             &order,
@@ -617,6 +622,7 @@ impl App {
             filter_buf: LineInput::new(),
             add_field: 0,
             add_path: LineInput::new(),
+            add_server: 0,
             add_kind: Kind::Agent,
             add_cmd: LineInput::new(),
             add_under: LineInput::new(),
@@ -678,6 +684,7 @@ impl App {
             tools_vault,
             refs_vault,
             models_vault,
+            servers_vault,
             vault_modal: None,
             starting: HashMap::new(),
             auto_restarts: HashMap::new(),
@@ -742,7 +749,7 @@ impl App {
         }
         match self.mode {
             Mode::Manager | Mode::Help => true,
-            Mode::Add => matches!(self.add_field, 1 | 3 | 5 | 6 | 7 | 8),
+            Mode::Add => matches!(self.add_field, 1 | 3 | 5 | 6 | 7 | 8 | 9),
             Mode::Focus | Mode::Send | Mode::Filter | Mode::Search => false,
         }
     }
@@ -1507,7 +1514,20 @@ impl App {
             .into_keys()
             .collect();
         self.add_edit = Some(p.name);
-        self.add_path.set(&p.path.display().to_string());
+        self.servers_vault = load_servers();
+        let path = p.path.display().to_string();
+        // A folder on a registered server shows as that server plus its dir.
+        let on = remote(&p.path).and_then(|(host, dir)| {
+            let i = self
+                .servers_vault
+                .vars
+                .iter()
+                .position(|s| s.value == host)?;
+            Some((i + 1, dir.to_string()))
+        });
+        let (server, dir) = on.unwrap_or((0, path));
+        self.add_server = server;
+        self.add_path.set(&dir);
         self.add_kind = p.kind;
         if p.command != shell() {
             self.add_cmd.set(&join_command(&p.command));
@@ -1521,7 +1541,14 @@ impl App {
     fn open_add(&mut self) {
         self.add_edit = None;
         self.mode = Mode::Add;
-        self.add_field = 0;
+        self.servers_vault = load_servers();
+        self.add_server = 0;
+        // With servers registered the form opens on the Server row.
+        self.add_field = if self.servers_vault.vars.is_empty() {
+            0
+        } else {
+            9
+        };
         self.add_path.clear();
         self.add_kind = Kind::Agent;
         self.add_cmd.clear();
@@ -1535,6 +1562,19 @@ impl App {
         self.add_state = PathState::Blank;
         self.add_top.set(0);
         self.path_edited();
+    }
+
+    /// The server picked in the form: `(name, address)`, or `None` for this PC.
+    pub(crate) fn add_server_entry(&self) -> Option<&envvault::EnvEntry> {
+        self.add_server
+            .checked_sub(1)
+            .and_then(|i| self.servers_vault.vars.get(i))
+    }
+
+    /// The Path field as it will be stored: `host:dir` on a server.
+    pub(crate) fn add_full_path(&self) -> String {
+        let addr = self.add_server_entry().map_or("", |s| s.value.as_str());
+        server_path(addr, &self.add_path.as_str())
     }
 
     fn stopped_count(&self) -> usize {
@@ -1560,6 +1600,13 @@ impl App {
     }
 
     // ---- drawing ----
+}
+
+/// The registered servers (`V`); none when the file is missing or broken.
+pub(crate) fn load_servers() -> EnvVault {
+    servers_path()
+        .and_then(|p| envvault::load_env_from(&p))
+        .unwrap_or_default()
 }
 
 fn compute_rank_prefixes(projects: &[Project]) -> Vec<String> {

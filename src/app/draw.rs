@@ -103,6 +103,7 @@ impl App {
                 2 => " Skills (K) ",
                 3 => " Tools (T) ",
                 6 => " LLM models (O) ",
+                7 => " Servers (V) ",
                 _ => " References (R) ",
             };
             spans.push(Span::styled(
@@ -1132,6 +1133,13 @@ impl App {
                 MODELS_ROW,
                 self.vault_modal.as_ref().is_some_and(VaultModal::is_model),
             ),
+            (
+                7usize,
+                "Servers",
+                "V",
+                SERVERS_ROW,
+                self.vault_modal.as_ref().is_some_and(VaultModal::is_server),
+            ),
         ];
         for (idx, label, key_tag, row_id, open) in mgmt_rows {
             if self.mgmt_sel == Some(idx) {
@@ -1694,6 +1702,7 @@ impl App {
                         3 => "Tools (T)",
                         4 => "References (R)",
                         6 => "LLM models (O)",
+                        7 => "Servers (V)",
                         _ => "Lessons (L)",
                     };
                     Some((label.to_string(), Color::Cyan))
@@ -1955,16 +1964,46 @@ impl App {
                 .filter(|&(j, _)| j != i)
                 .map(|(_, p)| p.clone())
                 .collect();
-            let name = preview_name(&others, &self.add_path.as_str(), Kind::Agent, &[])?;
+            let name = preview_name(&others, &self.add_full_path(), Kind::Agent, &[])?;
             return (!name.eq_ignore_ascii_case(old)).then_some(name);
         }
         let parts = split_command(&self.add_cmd.as_str());
         preview_name(
             &self.cfg.projects,
-            &self.add_path.as_str(),
+            &self.add_full_path(),
             self.add_kind,
             &parts,
         )
+    }
+
+    /// The Server row above Path: this PC or a registered server (`V`).
+    fn add_server_line(&self, modal_w: usize) -> Line<'static> {
+        let active = self.add_field == 9;
+        let label_style = if active {
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let value = match self.add_server_entry() {
+            Some(s) => format!("{} ({}) · ←→ picks", s.key, s.value),
+            None if self.servers_vault.vars.is_empty() => {
+                "local (this PC) · V in manager registers servers".to_string()
+            }
+            None => "local (this PC) · ←→ picks".to_string(),
+        };
+        let label = format!("{} Server: ", if active { ">" } else { " " });
+        let value = fit(&value, modal_w.saturating_sub(label.chars().count()));
+        Line::from(vec![
+            Span::styled(label, label_style),
+            Span::styled(
+                value,
+                if active {
+                    label_style
+                } else {
+                    Style::default()
+                },
+            ),
+        ])
     }
 
     /// Does the typed path exist? Shown at the right end of the Path row.
@@ -2010,7 +2049,7 @@ impl App {
     /// `PICK_ROWS`, reserved even when fewer match so the popup never jumps.
     /// Zero when another field is active.
     pub(super) fn add_list_h(&self) -> u16 {
-        if self.add_field == 0 {
+        if self.add_field == 0 && self.add_server_entry().is_none() {
             1 + PICK_ROWS as u16
         } else {
             0
@@ -2057,7 +2096,7 @@ impl App {
     pub(super) fn add_popup(&self, area: Rect) -> Rect {
         let modal_w = usize::from(72u16.min(area.width)).saturating_sub(2);
         let err_rows = self.add_err_lines(modal_w).len() as u16;
-        let rows = 9 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
+        let rows = 10 + self.add_list_h() + u16::from(self.add_status().is_some()) + err_rows;
         fixed_rect(72, rows + 2, area)
     }
 
@@ -2140,10 +2179,10 @@ impl App {
         } else {
             self.add_cmd.as_str()
         };
-        let path_label = if self.add_kind == Kind::Service {
-            "Path (optional)"
-        } else {
-            "Path"
+        let path_label = match (self.add_server_entry(), self.add_kind) {
+            (Some(_), _) => "Folder on server",
+            (None, Kind::Service) => "Path (optional)",
+            (None, _) => "Path",
         };
         let autostart_hint = if self.add_autostart {
             "yes (Space toggles)".to_string()
@@ -2183,10 +2222,10 @@ impl App {
         } else {
             path_mark.chars().count() + 1
         };
-        let mut lines = Vec::new();
+        let mut lines = vec![self.add_server_line(modal_w)];
         for (i, (label, val)) in fields.iter().enumerate() {
             let active = i == self.add_field;
-            let locked = (editing && !matches!(i, 0 | 2 | 3 | 5 | 6 | 7 | 8))
+            let locked = (editing && !matches!(i, 0 | 2 | 3 | 5 | 6 | 7 | 8 | 9))
                 || (!editing && self.add_kind == Kind::Service && i == 4);
             let mark = if active { ">" } else { " " };
             let label_style = if active {

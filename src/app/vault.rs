@@ -185,6 +185,8 @@ pub(crate) enum VaultKindState {
         reveal: bool,
         editor: Option<ModelEditor>,
     },
+    /// Registered servers: the env editor's key is the name, value the address.
+    Server { editor: Option<EnvEditor> },
 }
 
 /// Unified Shared Vault & project-sync popup (`Env`, `Skills`, `Tools`, `References`).
@@ -230,6 +232,10 @@ impl VaultModal {
         matches!(self.kind, VaultKindState::Model { .. })
     }
 
+    pub(crate) fn is_server(&self) -> bool {
+        matches!(self.kind, VaultKindState::Server { .. })
+    }
+
     pub(crate) fn has_editor(&self) -> bool {
         match &self.kind {
             VaultKindState::Env { editor, .. } => editor.is_some(),
@@ -237,6 +243,7 @@ impl VaultModal {
             VaultKindState::Tool { editor, .. } => editor.is_some(),
             VaultKindState::Ref { editor, .. } => editor.is_some(),
             VaultKindState::Model { editor, .. } => editor.is_some(),
+            VaultKindState::Server { editor } => editor.is_some(),
         }
     }
 
@@ -247,6 +254,7 @@ impl VaultModal {
             VaultKindState::Tool { editor, .. } => editor.as_ref().is_some_and(|e| e.field != 0),
             VaultKindState::Ref { editor, .. } => editor.is_some(),
             VaultKindState::Model { editor, .. } => editor.as_ref().is_some_and(|e| e.field != 0),
+            VaultKindState::Server { editor } => editor.is_some(),
         }
     }
 
@@ -257,6 +265,7 @@ impl VaultModal {
             VaultKindState::Tool { editor, .. } => *editor = Some(ToolEditor::blank()),
             VaultKindState::Ref { editor, .. } => *editor = Some(RefEditor::blank()),
             VaultKindState::Model { editor, .. } => *editor = Some(ModelEditor::blank()),
+            VaultKindState::Server { editor } => *editor = Some(EnvEditor::blank()),
         }
     }
 
@@ -267,6 +276,7 @@ impl VaultModal {
             VaultKindState::Tool { editor, .. } => *editor = None,
             VaultKindState::Ref { editor, .. } => *editor = None,
             VaultKindState::Model { editor, .. } => *editor = None,
+            VaultKindState::Server { editor } => *editor = None,
         }
     }
 
@@ -275,7 +285,8 @@ impl VaultModal {
         match &mut self.kind {
             VaultKindState::Env {
                 editor: Some(ed), ..
-            } => {
+            }
+            | VaultKindState::Server { editor: Some(ed) } => {
                 let input = if ed.field == 0 {
                     &mut ed.key
                 } else {
@@ -353,6 +364,7 @@ impl VaultModal {
             VaultKindState::Tool { .. } => 7,
             VaultKindState::Ref { .. } => 6,
             VaultKindState::Model { .. } => 8,
+            VaultKindState::Server { .. } => 5,
         }
     }
 
@@ -363,6 +375,7 @@ impl VaultModal {
             VaultKindState::Tool { .. } => 'T',
             VaultKindState::Ref { .. } => 'R',
             VaultKindState::Model { .. } => 'O',
+            VaultKindState::Server { .. } => 'V',
         }
     }
 
@@ -373,6 +386,7 @@ impl VaultModal {
             VaultKindState::Tool { .. } => "tool",
             VaultKindState::Ref { .. } => "reference",
             VaultKindState::Model { .. } => "model",
+            VaultKindState::Server { .. } => "server",
         }
     }
 
@@ -383,6 +397,7 @@ impl VaultModal {
             VaultKindState::Tool { .. } => "tool",
             VaultKindState::Ref { .. } => "reference",
             VaultKindState::Model { .. } => "model",
+            VaultKindState::Server { .. } => "server",
         }
     }
 
@@ -393,6 +408,7 @@ impl VaultModal {
             VaultKindState::Tool { .. } => "sync tools",
             VaultKindState::Ref { .. } => "sync refs",
             VaultKindState::Model { .. } => "write .env",
+            VaultKindState::Server { .. } => "",
         }
     }
 
@@ -413,6 +429,9 @@ impl VaultModal {
             VaultKindState::Model { .. } => {
                 "  No LLM models registered yet. Press a to add a model, endpoint and token."
             }
+            VaultKindState::Server { .. } => {
+                "  No servers registered yet. Press a to add a name and user@host."
+            }
         }
     }
 
@@ -430,6 +449,9 @@ impl VaultModal {
             }
             VaultKindState::Model { .. } => {
                 "Written to .env as the provider's variables; sessions started there get them"
+            }
+            VaultKindState::Server { .. } => {
+                "Address as ssh takes it: user@host or an ssh alias; pick it in the Add form"
             }
         }
     }
@@ -616,6 +638,17 @@ impl App {
         ));
     }
 
+    /// `V`: the registered servers, picked per project in the Add form.
+    pub(crate) fn open_server_modal(&mut self) {
+        self.servers_vault = load_servers();
+        let editor = self.servers_vault.vars.is_empty().then(EnvEditor::blank);
+        self.vault_modal = Some(VaultModal::new(
+            VaultTarget::VaultOnly,
+            BTreeSet::new(),
+            VaultKindState::Server { editor },
+        ));
+    }
+
     /// Space/click on a row. A model replaces any other picked model of its
     /// provider: a project's `.env` holds one per provider.
     fn toggle_pick(&self, modal: &mut VaultModal, name: String) {
@@ -643,6 +676,7 @@ impl App {
             VaultKindState::Tool { .. } => self.tools_vault.tools.len(),
             VaultKindState::Ref { .. } => self.refs_vault.references.len(),
             VaultKindState::Model { .. } => self.models_vault.models.len(),
+            VaultKindState::Server { .. } => self.servers_vault.vars.len(),
         }
     }
 
@@ -658,6 +692,9 @@ impl App {
             }
             VaultKindState::Model { .. } => {
                 self.models_vault.models.get(idx).map(|e| e.name.clone())
+            }
+            VaultKindState::Server { .. } => {
+                self.servers_vault.vars.get(idx).map(|e| e.key.clone())
             }
         }
     }
@@ -690,6 +727,12 @@ impl App {
                 .models
                 .iter()
                 .map(|e| e.name.clone())
+                .collect(),
+            VaultKindState::Server { .. } => self
+                .servers_vault
+                .vars
+                .iter()
+                .map(|e| e.key.clone())
                 .collect(),
         }
     }
@@ -935,6 +978,21 @@ impl App {
                     Err(e) => self.message = (format!("Save failed: {e:#}"), Notice::Error),
                 }
             }
+            // ponytail: projects on a deleted server keep their user@host:dir
+            // path and still open over ssh; nothing is rewritten.
+            VaultKindState::Server { .. } => {
+                let mut next = self.servers_vault.clone();
+                next.vars.retain(|s| s.key != target_name);
+                match servers_path().and_then(|p| envvault::save_env_to(&next, &p)) {
+                    Ok(()) => {
+                        self.servers_vault = next;
+                        modal.sel = modal
+                            .sel
+                            .min(self.servers_vault.vars.len().saturating_sub(1));
+                    }
+                    Err(e) => self.message = (format!("Save failed: {e:#}"), Notice::Error),
+                }
+            }
         }
     }
 
@@ -1041,6 +1099,16 @@ impl App {
                     *editor = Some(ed);
                 }
             }
+            VaultKindState::Server { editor } => {
+                if let Some(entry) = self.servers_vault.vars.get(modal.sel) {
+                    let mut ed = EnvEditor::blank();
+                    ed.key.set(&entry.key);
+                    ed.value.set(&entry.value);
+                    ed.field = 1;
+                    ed.editing_key = Some(entry.key.clone());
+                    *editor = Some(ed);
+                }
+            }
         }
     }
 
@@ -1056,13 +1124,15 @@ impl App {
                 VaultKindState::Tool { .. } => self.save_tool_editor(modal),
                 VaultKindState::Ref { .. } => self.save_ref_editor(modal),
                 VaultKindState::Model { .. } => self.save_model_editor(modal),
+                VaultKindState::Server { .. } => self.save_server_editor(modal),
             }
             return;
         }
         match &mut modal.kind {
             VaultKindState::Env {
                 editor: Some(ed), ..
-            } => match k.code {
+            }
+            | VaultKindState::Server { editor: Some(ed) } => match k.code {
                 KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
                     ed.field = 1 - ed.field;
                 }
@@ -1541,6 +1611,53 @@ impl App {
         }
     }
 
+    fn save_server_editor(&mut self, modal: &mut VaultModal) {
+        let VaultKindState::Server { editor: Some(ed) } = &mut modal.kind else {
+            return;
+        };
+        let name = match models::validate_model_name(&ed.key.as_str()) {
+            Ok(n) => n,
+            Err(e) => {
+                ed.err = e;
+                ed.field = 0;
+                return;
+            }
+        };
+        let addr = match validate_server_addr(&ed.value.as_str()) {
+            Ok(a) => a,
+            Err(e) => {
+                ed.err = e;
+                ed.field = 1;
+                return;
+            }
+        };
+        let old = ed.editing_key.clone().unwrap_or_else(|| name.clone());
+        let mut next = self.servers_vault.clone();
+        if old != name && next.vars.iter().any(|s| s.key == name) {
+            ed.err = format!("{name} already exists.");
+            return;
+        }
+        // ponytail: a changed address does not follow into projects already
+        // on the old one; edit those projects to pick the server again.
+        let entry = envvault::EnvEntry {
+            key: name.clone(),
+            value: addr,
+        };
+        match next.vars.iter().position(|s| s.key == old) {
+            Some(pos) => next.vars[pos] = entry,
+            None => next.vars.push(entry),
+        }
+        if let Err(e) = servers_path().and_then(|p| envvault::save_env_to(&next, &p)) {
+            ed.err = format!("Save failed: {e:#}");
+            return;
+        }
+        self.servers_vault = next;
+        if let Some(pos) = self.servers_vault.vars.iter().position(|s| s.key == name) {
+            modal.sel = pos;
+        }
+        modal.close_editor();
+    }
+
     /// Sync the skills modal's picks into its project (`false` closes modal;
     /// `true` keeps it open on failure).
     fn sync_skill_modal(&mut self, modal: &VaultModal, overwrite: bool) -> bool {
@@ -1589,7 +1706,7 @@ impl App {
                     VaultKindState::Skill { .. } => self.add_skills = picked,
                     VaultKindState::Tool { .. } => self.add_tools = picked,
                     VaultKindState::Ref { .. } => self.add_refs = picked,
-                    VaultKindState::Model { .. } => {}
+                    VaultKindState::Model { .. } | VaultKindState::Server { .. } => {}
                 }
                 false
             }
@@ -1709,6 +1826,7 @@ impl App {
                             }
                         }
                     }
+                    VaultKindState::Server { .. } => false,
                 }
             }
         }
@@ -1772,6 +1890,7 @@ impl App {
                 format!(" LLM Models -> {}/.env ", project_name(pi))
             }
             (VaultKindState::Model { .. }, _) => " LLM Models ".to_string(),
+            (VaultKindState::Server { .. }, _) => " Servers ".to_string(),
         }
     }
 
@@ -1938,6 +2057,11 @@ impl App {
                 );
                 (kw, nw, bw, dw, head)
             }
+            VaultKindState::Server { .. } => {
+                let nw = 20usize.min(inner_w / 3);
+                let dw = inner_w.saturating_sub(prefix_cols + nw + 3).max(8);
+                (0, nw, 0, dw, format!("{prefix}{:<nw$}  Address", "Name"))
+            }
         };
 
         if header_area.height > 0 {
@@ -2065,7 +2189,7 @@ impl App {
                     ))
                 })
                 .collect(),
-            VaultKindState::Model { .. } => Vec::new(),
+            VaultKindState::Model { .. } | VaultKindState::Server { .. } => Vec::new(),
         }
     }
 
@@ -2282,6 +2406,20 @@ impl App {
                 }
                 Line::from(spans)
             }
+            VaultKindState::Server { .. } => {
+                let entry = &self.servers_vault.vars[i];
+                let mut spans = vault_row_prefix(false, active, false, row_style);
+                push_vault_name_detail(
+                    &mut spans,
+                    &entry.key,
+                    &entry.value,
+                    name_w,
+                    detail_w,
+                    active,
+                    row_style,
+                );
+                Line::from(spans)
+            }
         }
     }
 
@@ -2336,6 +2474,14 @@ impl App {
                     " New LLM Model "
                 },
                 ed.editing_name.is_some(),
+            ),
+            VaultKindState::Server { editor: Some(ed) } => (
+                if ed.editing_key.is_some() {
+                    " Edit Server "
+                } else {
+                    " New Server "
+                },
+                ed.editing_key.is_some(),
             ),
             _ => return,
         };
@@ -2489,6 +2635,22 @@ impl App {
                     ));
                 }
                 ed_lines.push(editor_hint_or_err(&ed.err, ed_w, ed.field == 0));
+            }
+            VaultKindState::Server { editor: Some(ed) } => {
+                let avail = ed_w.saturating_sub(12).max(4);
+                for (fi, (label, input)) in [("Name", &ed.key), ("Address", &ed.value)]
+                    .iter()
+                    .enumerate()
+                {
+                    ed_lines.push(render_editor_input_row(
+                        label,
+                        7,
+                        input,
+                        ed.field == fi,
+                        avail,
+                    ));
+                }
+                ed_lines.push(editor_hint_or_err(&ed.err, ed_w, false));
             }
             _ => {}
         }

@@ -254,6 +254,16 @@ impl App {
     /// The Path field changed: re-check it, relist the folders under it and
     /// drop stale errors.
     pub(super) fn path_edited(&mut self) {
+        // A folder on a server is not on this disk: no `~` expansion (the
+        // remote shell does it), no folder list, no exists check.
+        if self.add_server_entry().is_some() {
+            self.add_picks.clear();
+            self.add_sel = None;
+            self.add_top.set(0);
+            self.add_state = PathState::Blank;
+            self.add_err.clear();
+            return;
+        }
         // No shell here: expand a leading `~` in the field itself, or a new
         // folder would be made as a literal `~` under the current directory.
         let home = if cfg!(windows) {
@@ -301,6 +311,13 @@ impl App {
         }
     }
 
+    /// Step the Server row through this PC and the registered servers.
+    pub(super) fn cycle_server(&mut self, forward: bool) {
+        let n = self.servers_vault.vars.len() + 1;
+        self.add_server = (self.add_server + if forward { 1 } else { n - 1 }) % n;
+        self.path_edited();
+    }
+
     /// Tab in the Path field: take the highlighted folder; otherwise an
     /// empty field takes the first suggested parent and a typed one completes
     /// its last segment against the disk.
@@ -328,7 +345,7 @@ impl App {
             (false, Some(i)) => self.add_sel = Some(i - 1),
             (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
             (false, None) => {
-                self.add_field = 8;
+                self.add_field = 9;
             }
         }
     }
@@ -370,6 +387,8 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 8 => {
                 self.open_ref_modal(VaultTarget::AddForm);
             }
+            KeyCode::Left | KeyCode::Char(' ') if self.add_field == 9 => self.cycle_server(false),
+            KeyCode::Right if self.add_field == 9 => self.cycle_server(true),
             KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
             KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
             KeyCode::Up if self.add_edit.is_some() && self.add_field == 0 => {
@@ -387,18 +406,20 @@ impl App {
                     5 => 6,
                     6 => 7,
                     7 => 8,
+                    8 => 9,
                     _ => 0,
                 };
             }
             KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
                 self.add_field = match self.add_field {
+                    9 => 8,
                     8 => 7,
                     7 => 6,
                     6 => 5,
                     5 => 3,
                     3 => 2,
                     2 => 0,
-                    _ => 8,
+                    _ => 9,
                 };
             }
             KeyCode::Enter => {
@@ -413,14 +434,14 @@ impl App {
                 }
                 // A missing folder is made on the spot (the field says so).
                 if self.add_err.is_empty() && self.add_state == PathState::Missing {
-                    if let Err(e) = create_missing_dir(&self.add_path.as_str()) {
+                    if let Err(e) = create_missing_dir(&self.add_full_path()) {
                         self.add_err = format!("{e:#}");
                     }
                 }
                 if self.add_err.is_empty() {
                     match build_project(
                         &self.cfg.projects,
-                        &self.add_path.as_str(),
+                        &self.add_full_path(),
                         self.add_kind,
                         split_command(&self.add_cmd.as_str()),
                     ) {
@@ -579,7 +600,7 @@ impl App {
         if !matches!(k.code, KeyCode::Char(c) if c.is_ascii_digit()) {
             self.jump_buf.clear();
         }
-        const MGMT_LAST: usize = 6;
+        const MGMT_LAST: usize = 7;
         if let Some(m) = self.mgmt_sel {
             match k.code {
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => {
@@ -678,6 +699,7 @@ impl App {
             KeyCode::Char('R') => self.open_ref_modal(self.selected_vault_target()),
             KeyCode::Char('L') => self.open_lessons(),
             KeyCode::Char('O') => self.open_model_modal(self.selected_vault_target()),
+            KeyCode::Char('V') => self.open_server_modal(),
             KeyCode::Char('e') if !self.order.is_empty() => self.open_edit(),
             KeyCode::Char('f' | 'F') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_search();
@@ -839,7 +861,15 @@ impl App {
     }
 }
 
+/// Tab order of the add form: Server (9) sits above Path (0).
 fn next_add_field(cur: usize, kind: Kind, forward: bool) -> usize {
+    match (cur, forward) {
+        (8, true) => return 9,
+        (9, true) => return 0,
+        (9, false) => return 8,
+        (0, false) => return 9,
+        _ => {}
+    }
     if kind == Kind::Service {
         match (cur, forward) {
             (0, true) => 1,
