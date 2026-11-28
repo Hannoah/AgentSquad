@@ -8,6 +8,7 @@
 
 | 버전 | 변경 | 태그 커밋 |
 |---|---|---|
+| v0.15.57 | macOS CI 수정: 프로그램 이름을 / 와 \ 양쪽 구분자로 추출해 macOS에서도 Windows 경로(C:\tools\codex.cmd)를 codex로 인식 | 태그 `v0.15.57` 참고 |
 | v0.15.56 | Management에 LLM 모델 메뉴(O) 추가: provider(anthropic/openai/gemini)별 모델·엔드포인트·토큰 등록, 프로젝트당 provider별 하나 선택 시 .env에 환경변수로 기록되고 그 프로젝트에서 시작하는 세션에 전달. 우클릭 메뉴를 세션→설정→기록→삭제(맨 끝) 순으로 재배치하고 매니저와 같은 단축키 사용, 핀 토글·정지 상태 메시지 보내기·읽기 전용 환경변수 팝업 제거 | 태그 `v0.15.56` 참고 |
 | v0.15.55 | 원격 세션: 프로젝트 경로를 user@host:dir 형식(Azure VM, 맥 등 다른 PC)으로 쓰면 ssh로 그 서버에서 터미널을 엶. 기본 셸이면 원격 로그인 셸, 원격 폴더는 ledger·훅 없음. Env vault 이름을 Environment Variable로 변경 | 태그 `v0.15.55` 참고 |
 | v0.15.54 | Claude Code 훅이 더 이상 프로젝트 명령이 claude일 필요 없음: 등록 시점부터 각 에이전트 프로젝트의 .claude/settings.local.json에 squad 훅을 병합(사용자 설정 유지, git 제외)하여 squad 세션의 셸에서 claude를 직접 실행해도 훅 동작. SessionStart 훅이 ledger 안내와 공유 교훈 목차를 넣고 훅 활성 상태를 보고 | 태그 `v0.15.54` 참고 |

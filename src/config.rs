@@ -834,11 +834,15 @@ pub fn is_agent_cli(prog: &str) -> bool {
     )
 }
 pub(crate) fn program_stem(prog: &str) -> String {
-    let base = std::path::Path::new(prog)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    // Both separators on every OS: a Windows path stored in a config read
+    // on macOS still names its program.
+    let base = prog
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| prog.to_string());
+        .unwrap_or(prog)
+        .to_string();
     let lower = base.to_ascii_lowercase();
     for ext in [".exe", ".cmd", ".bat", ".com"] {
         if let Some(stem) = lower.strip_suffix(ext) {
