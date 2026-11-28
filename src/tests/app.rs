@@ -94,7 +94,7 @@ fn add_form_error_keeps_existing_filter() {
     app.on_key(key(KeyCode::Char('a')), 27, 70);
     assert_eq!(app.mode, Mode::Add);
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(!app.add_err.is_empty());
+    assert!(!app.add.err.is_empty());
     app.on_key(key(KeyCode::Esc), 27, 70);
     assert_eq!(app.mode, Mode::Manager);
     assert_eq!(app.filter_buf.as_str(), "beta");
@@ -117,18 +117,18 @@ fn edit_form_preserves_custom_bare_shell_command_and_blocks_move_while_starting(
     let mut app = App::new(cfg, None);
     app.open_edit();
     assert_eq!(
-        app.add_cmd.as_str(),
+        app.add.cmd.as_str(),
         join_command(&custom_shell),
         "custom bare-shell flags are kept instead of replaced by default shell"
     );
 
     // Moving a project whose session is starting is blocked cleanly.
     let dir = scratch_dir("edit-starting");
-    app.add_path.set(dir.to_str().unwrap());
-    app.add_state = crate::pathpick::PathState::Folder;
+    app.add.path.set(dir.to_str().unwrap());
+    app.add.state = crate::pathpick::PathState::Folder;
     app.starting.insert("demo".into(), Vec::new());
     app.save_edit();
-    assert!(app.add_err.contains("still starting"), "{}", app.add_err);
+    assert!(app.add.err.contains("still starting"), "{}", app.add.err);
     assert_eq!(app.mode, Mode::Add);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -316,13 +316,13 @@ fn stopped_project_card_zoom_badge_and_tab_complete_work() {
     // Tab completion also works on Reports to in the Add form.
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.on_key(key(KeyCode::Char('a')), 27, 70);
-    app.add_field = 4;
-    app.add_under.set("wo");
+    app.add.field = 4;
+    app.add.under.set("wo");
     app.on_key(key(KeyCode::Tab), 27, 70);
-    assert_eq!(app.add_under.as_str(), "worker");
+    assert_eq!(app.add.under.as_str(), "worker");
 
     // Long add_err wraps inside the modal without panicking.
-    app.add_err = "x".repeat(120);
+    app.add.err = "x".repeat(120);
     term.draw(|f| app.draw(f)).unwrap();
 
     // Memory monitor & History popups draw cleanly.
@@ -631,39 +631,39 @@ fn ui_ux_context_menu_nav_attention_jump_service_add_and_80col_pane() {
     assert_eq!(empty.mode, Mode::Add);
 
     // 2. Service Add form skips Reports-to (field 4) on Tab/Down and reaches Env (5), Skills (6), Tools (7).
-    empty.add_kind = Kind::Service;
-    empty.add_field = 3; // Autostart
+    empty.add.kind = Kind::Service;
+    empty.add.field = 3; // Autostart
     empty.on_key(key(KeyCode::Tab), 24, 54);
     assert_eq!(
-        empty.add_field, 5,
+        empty.add.field, 5,
         "Tab from Autostart on Service skips Reports-to and goes to Env"
     );
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 6, "Tab from Env goes to Skills");
+    assert_eq!(empty.add.field, 6, "Tab from Env goes to Skills");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 7, "Tab from Skills goes to Tools");
+    assert_eq!(empty.add.field, 7, "Tab from Skills goes to Tools");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 8, "Tab from Tools goes to References");
+    assert_eq!(empty.add.field, 8, "Tab from Tools goes to References");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 9, "Tab from References wraps to Server");
+    assert_eq!(empty.add.field, 9, "Tab from References wraps to Server");
     empty.on_key(key(KeyCode::Tab), 24, 54);
-    assert_eq!(empty.add_field, 0, "Tab from Server goes to Path");
+    assert_eq!(empty.add.field, 0, "Tab from Server goes to Path");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 9, "BackTab from Path goes to Server");
+    assert_eq!(empty.add.field, 9, "BackTab from Path goes to Server");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
     assert_eq!(
-        empty.add_field, 8,
+        empty.add.field, 8,
         "BackTab from Server wraps to References"
     );
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 7, "BackTab from References goes to Tools");
+    assert_eq!(empty.add.field, 7, "BackTab from References goes to Tools");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 6, "BackTab from Tools goes to Skills");
+    assert_eq!(empty.add.field, 6, "BackTab from Tools goes to Skills");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
-    assert_eq!(empty.add_field, 5, "BackTab from Skills goes to Env");
+    assert_eq!(empty.add.field, 5, "BackTab from Skills goes to Env");
     empty.on_key(key(KeyCode::BackTab), 24, 54);
     assert_eq!(
-        empty.add_field, 3,
+        empty.add.field, 3,
         "BackTab from Env on Service skips Reports-to to Autostart"
     );
     term80.draw(|f| empty.draw(f)).unwrap();
@@ -863,13 +863,13 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     // Also test selecting from Add modal's Env (.env) field (field 5).
     app.on_key(key(KeyCode::Char('a')), 27, 70);
     assert_eq!(app.mode, Mode::Add);
-    app.add_field = 5;
+    app.add.field = 5;
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(app.vault_modal.is_none());
-    assert!(app.add_env.contains("SHARED_API_KEY"));
+    assert!(app.add.env.contains("SHARED_API_KEY"));
     term.draw(|f| app.draw(f)).unwrap();
     let proj_c = dir.join("agent-c");
     fs::create_dir_all(&proj_c).unwrap();
@@ -890,11 +890,11 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     app.mode = Mode::Filter;
     assert!(!app.wants_ascii_ime());
     app.mode = Mode::Add;
-    app.add_field = 0; // Path text field
+    app.add.field = 0; // Path text field
     assert!(!app.wants_ascii_ime());
-    app.add_field = 1; // Kind toggle
+    app.add.field = 1; // Kind toggle
     assert!(app.wants_ascii_ime());
-    app.add_field = 5; // Env picker field
+    app.add.field = 5; // Env picker field
     assert!(app.wants_ascii_ime());
     app.on_key(key(KeyCode::Esc), 27, 70);
     app.on_key(key(KeyCode::Char('ㅁ')), 27, 70); // Hangul 'ㅁ' -> 'a' (Add)
@@ -959,8 +959,8 @@ fn env_vault_registers_shares_and_applies_to_project_dotenv() {
     // and Enter on the Env (.env) row opens the picker with `.env` badges.
     app.selected = 0; // agent-a has SHARED_API_KEY
     app.open_edit();
-    assert!(app.add_env.contains("SHARED_API_KEY"));
-    app.add_field = 5;
+    assert!(app.add.env.contains("SHARED_API_KEY"));
+    app.add.field = 5;
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_env));
     assert!(app
@@ -1382,18 +1382,18 @@ fn collapsed_hover_tooltip_and_terminal_scrollback_search() {
     for c in "needle".chars() {
         app.on_key(key(KeyCode::Char(c)), 27, 92);
     }
-    assert_eq!(app.search_matches.len(), 2);
-    assert_eq!(app.search_idx, 1);
+    assert_eq!(app.search.matches.len(), 2);
+    assert_eq!(app.search.idx, 1);
     app.on_key(key(KeyCode::Up), 27, 92);
-    assert_eq!(app.search_idx, 0);
+    assert_eq!(app.search.idx, 0);
     assert!(app.sessions[0].as_ref().unwrap().scroll > 0);
     app.on_key(key(KeyCode::Enter), 27, 92);
     assert_eq!(app.mode, Mode::Manager);
-    assert!(app.search_active);
+    assert!(app.search.active);
     term.draw(|f| app.draw(f)).unwrap();
     assert!(buf_text(&term).contains("Find \"needle\": 1/2"));
     app.on_key(key(KeyCode::Esc), 27, 92);
-    assert!(!app.search_active);
+    assert!(!app.search.active);
 
     drop(app);
     let _ = fs::remove_dir_all(&dir);
@@ -1551,13 +1551,13 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
 
     // Edit project (`e`) loads installed skills into add_skills, and Add form field 6 picks skills.
     app.open_edit();
-    assert!(app.add_skills.contains("code-review"));
-    app.add_field = 6;
+    assert!(app.add.skills.contains("code-review"));
+    app.add.field = 6;
     app.on_key(key(KeyCode::Enter), 27, 70);
     assert!(app.vault_modal.as_ref().is_some_and(VaultModal::is_skill));
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
-    assert!(!app.add_skills.contains("code-review"));
+    assert!(!app.add.skills.contains("code-review"));
     app.on_key(key(KeyCode::Esc), 27, 70);
 
     // Right-click context menu `'K'` opens Skills modal for the selected project.
@@ -1573,7 +1573,7 @@ fn skills_vault_modal_registers_syncs_and_attaches_in_add_edit() {
 
     // Verify apply_add_skills installs picked skills onto a new project folder.
     app.on_key(key(KeyCode::Char('a')), 27, 70);
-    app.add_field = 6;
+    app.add.field = 6;
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
@@ -1693,7 +1693,7 @@ fn tools_vault_modal_registers_syncs_mcp_and_cli_and_attaches_in_add_edit() {
     assert!(proj_b.join(".squad/TOOLS.md").is_file());
 
     app.on_key(key(KeyCode::Char('a')), 27, 70);
-    app.add_field = 7;
+    app.add.field = 7;
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Char('A')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
@@ -1845,7 +1845,7 @@ fn refs_vault_modal_registers_appends_and_removes_marker_section_cleanly() {
 
     // Add form field 8 + apply_add_refs attaches picked refs to a new project.
     app.on_key(key(KeyCode::Char('a')), 27, 70);
-    app.add_field = 8;
+    app.add.field = 8;
     app.on_key(key(KeyCode::Char(' ')), 27, 70);
     app.on_key(key(KeyCode::Char('A')), 27, 70);
     app.on_key(key(KeyCode::Enter), 27, 70);
@@ -1935,18 +1935,18 @@ fn add_form_puts_a_registered_server_in_front_of_the_folder() {
         value: "me@vm".into(),
     }];
     app.mode = Mode::Add;
-    app.add_field = 9;
-    app.add_path.set("~/app");
+    app.add.field = 9;
+    app.add.path.set("~/app");
     assert_eq!(app.add_full_path(), "~/app", "local keeps the path");
     app.on_key(key(KeyCode::Right), 24, 80);
     assert_eq!(app.add_full_path(), "me@vm:~/app");
     // The remote `~` is left for the remote shell, not expanded here.
     app.on_key(key(KeyCode::Down), 24, 80);
-    assert_eq!(app.add_field, 0);
+    assert_eq!(app.add.field, 0);
     app.on_key(key(KeyCode::Char('/')), 24, 80);
     assert_eq!(app.add_full_path(), "me@vm:~/app/");
     assert!(
-        app.add_picks.is_empty(),
+        app.add.picks.is_empty(),
         "no local folder list for a server"
     );
     app.on_key(key(KeyCode::Up), 24, 80);

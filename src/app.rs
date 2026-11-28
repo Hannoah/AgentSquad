@@ -403,6 +403,82 @@ impl GitView {
     }
 }
 
+pub(crate) struct AddForm {
+    pub(crate) field: usize,
+    pub(crate) path: LineInput,
+    /// Server row of the form: `0` is this PC, `i` is `servers_vault.vars[i - 1]`.
+    pub(crate) server: usize,
+    pub(crate) kind: Kind,
+    pub(crate) cmd: LineInput,
+    pub(crate) under: LineInput,
+    pub(crate) autostart: bool,
+    /// Shared env keys selected in Add/Edit mode to apply to `.env` on save.
+    pub(crate) env: BTreeSet<String>,
+    /// Shared skills selected in Add/Edit mode to install on save.
+    pub(crate) skills: BTreeSet<String>,
+    /// Shared tools selected in Add/Edit mode to install on save.
+    pub(crate) tools: BTreeSet<String>,
+    /// Shared references selected in Add/Edit mode to sync on save.
+    pub(crate) refs: BTreeSet<String>,
+    /// Name of the project the form is editing; None when it adds one.
+    pub(crate) edit: Option<String>,
+    pub(crate) err: String,
+    /// What the Path field points at (checked on edits, not per frame).
+    pub(crate) state: PathState,
+    /// The folders listed under the Path field: the parents your projects live in
+    /// while it is empty, otherwise the subfolders matching what is typed.
+    pub(crate) picks: Vec<Pick>,
+    /// The highlighted row of `picks`; None until the user steps into the list.
+    pub(crate) sel: Option<usize>,
+    /// First visible row of `picks`, kept steady while stepping with arrows.
+    pub(crate) top: std::cell::Cell<usize>,
+}
+
+impl AddForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            field: 0,
+            path: LineInput::new(),
+            server: 0,
+            kind: Kind::Agent,
+            cmd: LineInput::new(),
+            under: LineInput::new(),
+            autostart: false,
+            env: BTreeSet::new(),
+            skills: BTreeSet::new(),
+            tools: BTreeSet::new(),
+            refs: BTreeSet::new(),
+            edit: None,
+            err: String::new(),
+            state: PathState::Blank,
+            picks: Vec::new(),
+            sel: None,
+            top: Default::default(),
+        }
+    }
+}
+
+/// Terminal scrollback search state (`F` / `Ctrl+F`).
+pub(crate) struct SearchState {
+    pub(crate) buf: LineInput,
+    pub(crate) pi: Option<usize>,
+    pub(crate) matches: Vec<SearchMatch>,
+    pub(crate) idx: usize,
+    pub(crate) active: bool,
+}
+
+impl SearchState {
+    pub(crate) fn new() -> Self {
+        Self {
+            buf: LineInput::new(),
+            pi: None,
+            matches: Vec::new(),
+            idx: 0,
+            active: false,
+        }
+    }
+}
+
 pub(crate) struct App {
     pub(crate) cfg: Config,
     pub(crate) sessions: Vec<Option<Session>>,
@@ -423,34 +499,7 @@ pub(crate) struct App {
     /// What the status-bar input line does with the text typed into it.
     pub(crate) send_to: SendTo,
     pub(crate) filter_buf: LineInput,
-    pub(crate) add_field: usize,
-    pub(crate) add_path: LineInput,
-    /// Server row of the form: `0` is this PC, `i` is `servers_vault.vars[i - 1]`.
-    pub(crate) add_server: usize,
-    pub(crate) add_kind: Kind,
-    pub(crate) add_cmd: LineInput,
-    pub(crate) add_under: LineInput,
-    pub(crate) add_autostart: bool,
-    /// Shared env keys selected in Add/Edit mode to apply to `.env` on save.
-    pub(crate) add_env: BTreeSet<String>,
-    /// Shared skills selected in Add/Edit mode to install on save.
-    pub(crate) add_skills: BTreeSet<String>,
-    /// Shared tools selected in Add/Edit mode to install on save.
-    pub(crate) add_tools: BTreeSet<String>,
-    /// Shared references selected in Add/Edit mode to sync on save.
-    pub(crate) add_refs: BTreeSet<String>,
-    /// Name of the project the form is editing; None when it adds one.
-    pub(crate) add_edit: Option<String>,
-    pub(crate) add_err: String,
-    /// What the Path field points at (checked on edits, not per frame).
-    pub(crate) add_state: PathState,
-    /// The folders listed under the Path field: the parents your projects live in
-    /// while it is empty, otherwise the subfolders matching what is typed.
-    pub(crate) add_picks: Vec<Pick>,
-    /// The highlighted row of `add_picks`; None until the user steps into the list.
-    pub(crate) add_sel: Option<usize>,
-    /// First visible row of `add_picks`, kept steady while stepping with arrows.
-    pub(crate) add_top: std::cell::Cell<usize>,
+    pub(crate) add: AddForm,
     /// Text being selected (or just copied) in the terminal pane.
     pub(crate) sel: Option<Selection>,
     pub(crate) confirm_stop: Option<usize>,
@@ -484,6 +533,9 @@ pub(crate) struct App {
     /// Model tests (`t` in Management O): `(name, reply or error)`.
     pub(crate) model_tx: mpsc::Sender<(String, Result<String, String>)>,
     pub(crate) model_rx: mpsc::Receiver<(String, Result<String, String>)>,
+    /// Off-thread `git status` checks for non-hooked agent task completions: project name.
+    pub(crate) nudge_tx: mpsc::Sender<String>,
+    pub(crate) nudge_rx: mpsc::Receiver<String>,
     pub(crate) update_offer: Option<String>,
     pub(crate) confirm_update: bool,
     /// An installed update waiting for the decision to restart into it.
@@ -542,19 +594,15 @@ pub(crate) struct App {
     /// Live Git status & diff popup (`g`).
     pub(crate) git_view: Option<GitView>,
     /// Terminal scrollback search state (`F` / `Ctrl+F`).
-    pub(crate) search_buf: LineInput,
-    pub(crate) search_pi: Option<usize>,
-    pub(crate) search_matches: Vec<SearchMatch>,
-    pub(crate) search_idx: usize,
-    pub(crate) search_active: bool,
+    pub(crate) search: SearchState,
     pub(crate) hangul_hotkey_seen: bool,
     /// Arrow keys past the last project land on the Management rows:
-    /// `0` = Memory monitor, `1` = Environment Variable, `2` = Skills, `3` = Tools, `4` = References.
+    /// `0` = Memory monitor, `1` = Environment Variable, `2` = Skills, `3` = Tools,
+    /// `4` = References, `5` = Lessons, `6` = LLM models, `7` = Servers.
     pub(crate) mgmt_sel: Option<usize>,
     /// Multi-digit row jump: digits typed within ~1.5s accumulate here.
     pub(crate) jump_buf: String,
     pub(crate) jump_at: Instant,
-    /// Read-only environment popup opened from the right-click menu.
     pub(crate) quit: bool,
 }
 
@@ -602,6 +650,7 @@ impl App {
         let (start_tx, start_rx) = mpsc::channel::<Started>();
         let (upd_tx, upd_rx) = mpsc::channel::<UpdateMsg>();
         let (model_tx, model_rx) = mpsc::channel();
+        let (nudge_tx, nudge_rx) = mpsc::channel();
         if update_check_enabled() {
             let tx = upd_tx.clone();
             thread::spawn(move || watch_for_updates(tx));
@@ -620,23 +669,7 @@ impl App {
             send_buf: LineInput::new(),
             send_to: SendTo::One,
             filter_buf: LineInput::new(),
-            add_field: 0,
-            add_path: LineInput::new(),
-            add_server: 0,
-            add_kind: Kind::Agent,
-            add_cmd: LineInput::new(),
-            add_under: LineInput::new(),
-            add_autostart: false,
-            add_env: BTreeSet::new(),
-            add_skills: BTreeSet::new(),
-            add_tools: BTreeSet::new(),
-            add_refs: BTreeSet::new(),
-            add_edit: None,
-            add_err: String::new(),
-            add_state: PathState::Blank,
-            add_picks: Vec::new(),
-            add_sel: None,
-            add_top: Default::default(),
+            add: AddForm::new(),
             sel: None,
             confirm_stop: None,
             confirm_remove: None,
@@ -664,6 +697,8 @@ impl App {
             upd_rx,
             model_tx,
             model_rx,
+            nudge_tx,
+            nudge_rx,
             update_offer: None,
             confirm_update: false,
             applied: None,
@@ -697,11 +732,7 @@ impl App {
             wait_badge_rect: Rect::default(),
             quick_reply: None,
             git_view: None,
-            search_buf: LineInput::new(),
-            search_pi: None,
-            search_matches: Vec::new(),
-            search_idx: 0,
-            search_active: false,
+            search: SearchState::new(),
             hangul_hotkey_seen: false,
             mgmt_sel: None,
             jump_buf: String::new(),
@@ -749,7 +780,7 @@ impl App {
         }
         match self.mode {
             Mode::Manager | Mode::Help => true,
-            Mode::Add => matches!(self.add_field, 1 | 3 | 5 | 6 | 7 | 8 | 9),
+            Mode::Add => matches!(self.add.field, 1 | 3 | 5 | 6 | 7 | 8 | 9),
             Mode::Focus | Mode::Send | Mode::Filter | Mode::Search => false,
         }
     }
@@ -1044,10 +1075,11 @@ impl App {
     pub(super) fn target_dir(&self, target: VaultTarget) -> Option<std::path::PathBuf> {
         match target {
             VaultTarget::AddForm => self
-                .add_edit
+                .add
+                .edit
                 .is_some()
                 .then(|| {
-                    let raw = self.add_path.as_str();
+                    let raw = self.add.path.as_str();
                     std::path::PathBuf::from(clean_path(&raw))
                 })
                 .filter(|p| p.is_dir()),
@@ -1199,6 +1231,22 @@ impl App {
             };
             self.dirty = true;
         }
+        while let Ok(name) = self.nudge_rx.try_recv() {
+            if let Some(pi) = self
+                .cfg
+                .projects
+                .iter()
+                .position(|p| p.name.eq_ignore_ascii_case(&name))
+            {
+                if let Some(Some(s)) = self.sessions.get_mut(pi) {
+                    if s.last_phase == AgentPhase::Done
+                        && s.send_nudge(crate::knowledge::dir().ok().as_deref())
+                    {
+                        self.dirty = true;
+                    }
+                }
+            }
+        }
         while let Ok(m) = self.upd_rx.try_recv() {
             match m {
                 UpdateMsg::Available(tag) => {
@@ -1273,8 +1321,15 @@ impl App {
                         // agent CLI started at its prompt holds the foreground.
                         let cmd = &self.cfg.projects[pi].command;
                         if !is_bare_shell(cmd) || s.fg_name.as_deref().is_some_and(is_agent_cli) {
-                            let lessons = crate::knowledge::dir().ok();
-                            s.nudge_unrecorded(lessons.as_deref());
+                            if let Some(dir) = s.nudge_check_dir() {
+                                let tx = self.nudge_tx.clone();
+                                let name = self.cfg.projects[pi].name.clone();
+                                thread::spawn(move || {
+                                    if ledger::unrecorded(&dir) {
+                                        let _ = tx.send(name);
+                                    }
+                                });
+                            }
                         }
                         let projects = &self.cfg.projects;
                         if let Some(c) = superior(projects, pi) {
@@ -1494,26 +1549,26 @@ impl App {
             self.refs_vault = fresh;
         }
         let dotenv = envvault::read_dotenv(&p.path);
-        self.add_env = self
+        self.add.env = self
             .env_vault
             .vars
             .iter()
             .filter(|e| dotenv.contains_key(&e.key))
             .map(|e| e.key.clone())
             .collect();
-        self.add_skills = skills::read_project_skills(&p.path, &self.skills_vault)
+        self.add.skills = skills::read_project_skills(&p.path, &self.skills_vault)
             .vault_state
             .into_keys()
             .collect();
-        self.add_tools = tools::read_project_tools(&p.path, &self.tools_vault)
+        self.add.tools = tools::read_project_tools(&p.path, &self.tools_vault)
             .vault_state
             .into_keys()
             .collect();
-        self.add_refs = refs::read_project_refs(&p.path, &self.refs_vault)
+        self.add.refs = refs::read_project_refs(&p.path, &self.refs_vault)
             .vault_state
             .into_keys()
             .collect();
-        self.add_edit = Some(p.name);
+        self.add.edit = Some(p.name);
         self.servers_vault = load_servers();
         let path = p.path.display().to_string();
         // A folder on a registered server shows as that server plus its dir.
@@ -1526,47 +1581,48 @@ impl App {
             Some((i + 1, dir.to_string()))
         });
         let (server, dir) = on.unwrap_or((0, path));
-        self.add_server = server;
-        self.add_path.set(&dir);
-        self.add_kind = p.kind;
+        self.add.server = server;
+        self.add.path.set(&dir);
+        self.add.kind = p.kind;
         if p.command != shell() {
-            self.add_cmd.set(&join_command(&p.command));
+            self.add.cmd.set(&join_command(&p.command));
         }
-        self.add_under.set(p.reports_to.as_deref().unwrap_or(""));
-        self.add_autostart = p.autostart;
-        self.add_field = 2;
+        self.add.under.set(p.reports_to.as_deref().unwrap_or(""));
+        self.add.autostart = p.autostart;
+        self.add.field = 2;
         self.path_edited();
     }
 
     fn open_add(&mut self) {
-        self.add_edit = None;
+        self.add.edit = None;
         self.mode = Mode::Add;
         self.servers_vault = load_servers();
-        self.add_server = 0;
+        self.add.server = 0;
         // With servers registered the form opens on the Server row.
-        self.add_field = if self.servers_vault.vars.is_empty() {
+        self.add.field = if self.servers_vault.vars.is_empty() {
             0
         } else {
             9
         };
-        self.add_path.clear();
-        self.add_kind = Kind::Agent;
-        self.add_cmd.clear();
-        self.add_under.clear();
-        self.add_autostart = false;
-        self.add_env.clear();
-        self.add_skills.clear();
-        self.add_tools.clear();
-        self.add_refs.clear();
-        self.add_err.clear();
-        self.add_state = PathState::Blank;
-        self.add_top.set(0);
+        self.add.path.clear();
+        self.add.kind = Kind::Agent;
+        self.add.cmd.clear();
+        self.add.under.clear();
+        self.add.autostart = false;
+        self.add.env.clear();
+        self.add.skills.clear();
+        self.add.tools.clear();
+        self.add.refs.clear();
+        self.add.err.clear();
+        self.add.state = PathState::Blank;
+        self.add.top.set(0);
         self.path_edited();
     }
 
     /// The server picked in the form: `(name, address)`, or `None` for this PC.
     pub(crate) fn add_server_entry(&self) -> Option<&envvault::EnvEntry> {
-        self.add_server
+        self.add
+            .server
             .checked_sub(1)
             .and_then(|i| self.servers_vault.vars.get(i))
     }
@@ -1574,7 +1630,7 @@ impl App {
     /// The Path field as it will be stored: `host:dir` on a server.
     pub(crate) fn add_full_path(&self) -> String {
         let addr = self.add_server_entry().map_or("", |s| s.value.as_str());
-        server_path(addr, &self.add_path.as_str())
+        server_path(addr, &self.add.path.as_str())
     }
 
     fn stopped_count(&self) -> usize {

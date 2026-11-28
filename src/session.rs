@@ -1037,19 +1037,28 @@ impl Session {
     /// the same reminder (SITREP plus the Promote verdict) once. The next
     /// completion passes, as `stop_hook_active` does, so it never loops.
     /// Skipped while the person has a half-typed line in this session.
-    // ponytail: runs git status on the UI thread, once per finished task.
-    pub fn nudge_unrecorded(&mut self, lessons: Option<&std::path::Path>) -> bool {
+    ///
+    /// Returns the ledger directory to check off-thread, or `None` if this
+    /// completion should be skipped (and clears the one-shot `nudged` skip).
+    pub fn nudge_check_dir(&mut self) -> Option<std::path::PathBuf> {
         // Hooks that reported in this session (SessionStart writes at once)
         // run the real Stop hook; anything else gets the typed reminder.
         // ponytail: a shell that ran claude and later codex keeps this set,
         // so that codex goes unreminded.
         if self.hook_seen.is_some() || !self.input_line_buf.is_empty() {
-            return false;
+            return None;
         }
-        let Some(dir) = self.ledger.clone() else {
-            return false;
-        };
-        if std::mem::take(&mut self.nudged) || !ledger::unrecorded(&dir) {
+        let dir = self.ledger.as_ref()?;
+        if std::mem::take(&mut self.nudged) {
+            return None;
+        }
+        Some(dir.clone())
+    }
+    /// Type the `[squad]` SITREP reminder into the session if it is still
+    /// running and idle of user input.
+    pub fn send_nudge(&mut self, lessons: Option<&std::path::Path>) -> bool {
+        if self.hook_seen.is_some() || !self.input_line_buf.is_empty() || !self.status.is_running()
+        {
             return false;
         }
         // Starts with `[`: no menu takes that as an answer by accident.
@@ -1062,6 +1071,16 @@ impl Session {
         // the reminder would count as the SITREP it asks for.
         self.nudged = true;
         true
+    }
+    /// Synchronous helper used by tests: checks `git status` and sends the reminder.
+    pub fn nudge_unrecorded(&mut self, lessons: Option<&std::path::Path>) -> bool {
+        let Some(dir) = self.nudge_check_dir() else {
+            return false;
+        };
+        if !ledger::unrecorded(&dir) {
+            return false;
+        }
+        self.send_nudge(lessons)
     }
     /// Record a fact in the project's ledger, when it has one.
     pub fn log_event(&self, text: &str) {

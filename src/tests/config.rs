@@ -354,7 +354,7 @@ fn persist_helpers_keep_other_writers_projects() {
     let mut app = crate::app::App::new(load_from(&file).unwrap(), None);
     app.open_edit();
     app.save_edit();
-    assert_eq!(app.cfg.projects[0].name, "realname", "{}", app.add_err);
+    assert_eq!(app.cfg.projects[0].name, "realname", "{}", app.add.err);
     assert_eq!(load_from(&file).unwrap().projects[0].name, "realname");
     let _ = fs::remove_dir_all(&dir);
     env::remove_var("AGENTSQUAD_CONFIG");
@@ -1129,8 +1129,19 @@ fn remote_folders_run_over_ssh() {
     assert_eq!(remote(std::path::Path::new("C:/work/app")), None);
     assert_eq!(remote(std::path::Path::new("./a:b")), None);
     assert_eq!(remote(std::path::Path::new("work/app")), None);
+    assert_eq!(remote(std::path::Path::new("-oProxyCommand=id:app")), None);
+    assert_eq!(remote(std::path::Path::new("user@-host:~/app")), None);
+    assert!(validate_server_addr("-oProxyCommand=id").is_err());
+    assert!(validate_server_addr("user@-host").is_err());
 
-    let ssh = |h: &str| vec!["ssh".to_string(), "-t".to_string(), h.to_string()];
+    let ssh = |h: &str| {
+        vec![
+            "ssh".to_string(),
+            "-t".to_string(),
+            "--".to_string(),
+            h.to_string(),
+        ]
+    };
     // Default shell: the remote login shell, in the folder.
     let mut want = ssh("vm");
     want.push("cd ~'/my app' && exec \"$SHELL\" -l".into());
@@ -1160,4 +1171,26 @@ fn remote_folders_run_over_ssh() {
     );
     create_missing_dir("me@mac.local:~/x").unwrap(); // nothing made locally
     assert!(!std::path::Path::new("me@mac.local:~").exists());
+}
+
+#[test]
+fn test_model_rejects_control_chars_and_unsafe_gemini_model() {
+    use crate::models::{test_model, ModelEntry, Provider};
+    let bad_token = ModelEntry {
+        name: "t".into(),
+        provider: Provider::Anthropic,
+        model: "claude-sonnet-4-5".into(),
+        endpoint: String::new(),
+        token: "sk-123\nX-Injected: evil".into(),
+    };
+    assert!(test_model(&bad_token).is_err());
+
+    let bad_gemini = ModelEntry {
+        name: "g".into(),
+        provider: Provider::Gemini,
+        model: "gemini-2.5-pro?key=evil".into(),
+        endpoint: String::new(),
+        token: String::new(),
+    };
+    assert!(test_model(&bad_gemini).is_err());
 }

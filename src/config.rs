@@ -673,13 +673,22 @@ pub fn clean_path(raw: &str) -> &str {
 pub fn remote(path: &Path) -> Option<(&str, &str)> {
     let (host, dir) = path.to_str()?.split_once(':')?;
     let name = host.rsplit('@').next().unwrap_or(host);
-    (name.len() > 1 && !host.contains(['/', '\\', ' '])).then_some((host, dir))
+    (name.len() > 1
+        && !host.starts_with('-')
+        && !name.starts_with('-')
+        && !host.contains(['/', '\\', ' ']))
+    .then_some((host, dir))
 }
 /// The `ssh` command that runs `command` in `dir` on `host`. A bare local
 /// shell (the default command) becomes the remote login shell; the remote
 /// side is assumed POSIX (Linux, macOS).
 pub fn remote_command(host: &str, dir: &str, command: &[String]) -> Vec<String> {
-    let mut out = vec!["ssh".to_string(), "-t".to_string(), host.to_string()];
+    let mut out = vec![
+        "ssh".to_string(),
+        "-t".to_string(),
+        "--".to_string(),
+        host.to_string(),
+    ];
     let run = if is_bare_shell(command) {
         "exec \"$SHELL\" -l".to_string()
     } else {
@@ -723,7 +732,10 @@ pub fn servers_path() -> Result<PathBuf> {
 pub fn validate_server_addr(raw: &str) -> Result<String, String> {
     let a = raw.trim();
     if a.contains(':') || remote(Path::new(&format!("{a}:"))).is_none() {
-        return Err("Address is user@host or an ssh alias (no spaces, ':' or slashes).".into());
+        return Err(
+            "Address is user@host or an ssh alias (no spaces, ':', slashes, or leading '-')."
+                .into(),
+        );
     }
     Ok(a.to_string())
 }

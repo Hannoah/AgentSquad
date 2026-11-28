@@ -1341,26 +1341,26 @@ impl App {
                 .right_aligned(),
             );
         }
-        if self.search_active && self.search_pi == sel_pi && !self.search_buf.is_empty() {
-            let label = if self.search_matches.is_empty() {
-                format!(" Find \"{}\": 0 ", fit(&self.search_buf.as_str(), 12))
+        if self.search.active && self.search.pi == sel_pi && !self.search.buf.is_empty() {
+            let label = if self.search.matches.is_empty() {
+                format!(" Find \"{}\": 0 ", fit(&self.search.buf.as_str(), 12))
             } else {
                 format!(
                     " Find \"{}\": {}/{} ",
-                    fit(&self.search_buf.as_str(), 12),
-                    self.search_idx + 1,
-                    self.search_matches.len()
+                    fit(&self.search.buf.as_str(), 12),
+                    self.search.idx + 1,
+                    self.search.matches.len()
                 )
             };
             block = block.title_bottom(Line::from(Span::styled(
                 label,
                 Style::default()
-                    .fg(if self.search_matches.is_empty() {
+                    .fg(if self.search.matches.is_empty() {
                         Color::Red
                     } else {
                         Color::Black
                     })
-                    .bg(if self.search_matches.is_empty() {
+                    .bg(if self.search.matches.is_empty() {
                         Color::Reset
                     } else {
                         Color::Yellow
@@ -1373,15 +1373,15 @@ impl App {
         if let Some(s) = sel_session {
             let screen = s.parser.screen();
             s.paint(f.buffer_mut(), inner);
-            if self.search_active && self.search_pi == sel_pi && !self.search_buf.is_empty() {
-                let active_match = self.search_matches.get(self.search_idx).copied();
+            if self.search.active && self.search.pi == sel_pi && !self.search.buf.is_empty() {
+                let active_match = self.search.matches.get(self.search.idx).copied();
                 let other_hit = Style::default().bg(Color::Yellow).fg(Color::Black);
                 let cur_hit = Style::default()
                     .bg(Color::Cyan)
                     .fg(Color::Black)
                     .add_modifier(ratatui::style::Modifier::BOLD);
                 for (vis_row, logical_line, cs, ce) in
-                    s.visible_search_hits(&self.search_buf.as_str())
+                    s.visible_search_hits(&self.search.buf.as_str())
                 {
                     if vis_row >= inner.height {
                         continue;
@@ -1634,20 +1634,20 @@ impl App {
                 input_w,
             ));
         } else if self.mode == Mode::Search {
-            let status = if self.search_buf.is_empty() {
+            let status = if self.search.buf.is_empty() {
                 " (type to search, Esc clears)".to_string()
-            } else if self.search_matches.is_empty() {
+            } else if self.search.matches.is_empty() {
                 " (0 matches · Esc clears)".to_string()
             } else {
                 format!(
                     " ({}/{} · ↑↓ step · Enter keeps · Esc clears)",
-                    self.search_idx + 1,
-                    self.search_matches.len()
+                    self.search.idx + 1,
+                    self.search.matches.len()
                 )
             };
             bar.extend(input_line(
                 "Find: ".to_string(),
-                &self.search_buf,
+                &self.search.buf,
                 status,
                 input_w,
             ));
@@ -1947,7 +1947,7 @@ impl App {
     /// The name the add form would register, shown while typing. An edit
     /// shows it only when a new folder would rename the agent.
     pub(super) fn add_preview(&self) -> Option<String> {
-        if let Some(old) = &self.add_edit {
+        if let Some(old) = &self.add.edit {
             let i = self
                 .cfg
                 .projects
@@ -1967,18 +1967,18 @@ impl App {
             let name = preview_name(&others, &self.add_full_path(), Kind::Agent, &[])?;
             return (!name.eq_ignore_ascii_case(old)).then_some(name);
         }
-        let parts = split_command(&self.add_cmd.as_str());
+        let parts = split_command(&self.add.cmd.as_str());
         preview_name(
             &self.cfg.projects,
             &self.add_full_path(),
-            self.add_kind,
+            self.add.kind,
             &parts,
         )
     }
 
     /// The Server row above Path: this PC or a registered server (`V`).
     fn add_server_line(&self, modal_w: usize) -> Line<'static> {
-        let active = self.add_field == 9;
+        let active = self.add.field == 9;
         let label_style = if active {
             Style::default().add_modifier(ratatui::style::Modifier::BOLD)
         } else {
@@ -2009,7 +2009,7 @@ impl App {
     /// Does the typed path exist? Shown at the right end of the Path row.
     fn add_mark(&self, modal_w: usize) -> (&'static str, Color) {
         let compact = modal_w < 60;
-        match self.add_state {
+        match self.add.state {
             PathState::Folder => ("✓ folder", Color::Green),
             PathState::Missing => (
                 if compact {
@@ -2034,7 +2034,7 @@ impl App {
     /// The line under the fields: the name the project would get.
     fn add_status(&self) -> Option<Line<'static>> {
         let name = self.add_preview()?;
-        let text = if self.add_edit.is_some() {
+        let text = if self.add.edit.is_some() {
             format!("  Renames to: {name}")
         } else {
             format!("  Registers as: {name}")
@@ -2049,7 +2049,7 @@ impl App {
     /// `PICK_ROWS`, reserved even when fewer match so the popup never jumps.
     /// Zero when another field is active.
     pub(super) fn add_list_h(&self) -> u16 {
-        if self.add_field == 0 && self.add_server_entry().is_none() {
+        if self.add.field == 0 && self.add_server_entry().is_none() {
             1 + PICK_ROWS as u16
         } else {
             0
@@ -2059,24 +2059,24 @@ impl App {
     /// The rows of `add_picks` on screen: at most `PICK_ROWS`, scrolled smoothly
     /// via `keep_visible` so stepping up/down never jumps early.
     pub(super) fn add_pick_window(&self) -> std::ops::Range<usize> {
-        if self.add_field != 0 {
+        if self.add.field != 0 {
             return 0..0;
         }
-        let n = self.add_picks.len();
+        let n = self.add.picks.len();
         let max_start = n.saturating_sub(PICK_ROWS);
-        let start = match self.add_sel {
-            Some(s) => keep_visible(self.add_top.get().min(max_start), s, PICK_ROWS),
+        let start = match self.add.sel {
+            Some(s) => keep_visible(self.add.top.get().min(max_start), s, PICK_ROWS),
             None => 0,
         };
-        self.add_top.set(start);
+        self.add.top.set(start);
         start..(start + PICK_ROWS).min(n)
     }
 
     fn add_err_lines(&self, max_w: usize) -> Vec<Line<'static>> {
-        if self.add_err.is_empty() {
+        if self.add.err.is_empty() {
             return Vec::new();
         }
-        let msg = format!("Error: {}", self.add_err);
+        let msg = format!("Error: {}", self.add.err);
         let w = max_w.max(10);
         let mut out = Vec::new();
         let mut rest = msg.as_str();
@@ -2108,8 +2108,8 @@ impl App {
             return Vec::new();
         }
         let dim = Style::default().add_modifier(ratatui::style::Modifier::DIM);
-        let typed = self.add_path.as_str();
-        let n = self.add_picks.len();
+        let typed = self.add.path.as_str();
+        let n = self.add.picks.len();
         let win = self.add_pick_window();
         let count_note = if n > PICK_ROWS && !win.is_empty() {
             format!("{}-{} of {n}", win.start + 1, win.end)
@@ -2117,7 +2117,7 @@ impl App {
             format!("{n}")
         };
         let noun = if n == 1 { "folder" } else { "folders" };
-        let header = match self.add_picks.first() {
+        let header = match self.add.picks.first() {
             None => String::new(),
             Some(_) if typed.is_empty() => {
                 format!("  your project folders · {count_note} · ↑↓/wheel Enter")
@@ -2138,8 +2138,8 @@ impl App {
             .next()
             .map_or(0, |s| s.chars().count());
         for i in self.add_pick_window() {
-            let (label, _) = &self.add_picks[i];
-            let on = self.add_sel == Some(i);
+            let (label, _) = &self.add.picks[i];
+            let on = self.add.sel == Some(i);
             let style = if on {
                 Style::default().bg(Color::Cyan).fg(Color::Black)
             } else {
@@ -2167,46 +2167,46 @@ impl App {
         let popup = self.add_popup(f.area());
         let modal_w = (popup.width as usize).saturating_sub(2);
         f.render_widget(ratatui::widgets::Clear, popup);
-        let editing = self.add_edit.is_some();
-        let kind_hint = match (self.add_kind == Kind::Agent, editing) {
+        let editing = self.add.edit.is_some();
+        let kind_hint = match (self.add.kind == Kind::Agent, editing) {
             (true, false) => "agent (Space toggles)",
             (false, false) => "service (Space toggles)",
             (true, true) => "agent (fixed)",
             (false, true) => "service (fixed)",
         };
-        let cmd_text = if self.add_cmd.is_empty() {
+        let cmd_text = if self.add.cmd.is_empty() {
             "(default shell)".to_string()
         } else {
-            self.add_cmd.as_str()
+            self.add.cmd.as_str()
         };
-        let path_label = match (self.add_server_entry(), self.add_kind) {
+        let path_label = match (self.add_server_entry(), self.add.kind) {
             (Some(_), _) => "Folder on server",
             (None, Kind::Service) => "Path (optional)",
             (None, _) => "Path",
         };
-        let autostart_hint = if self.add_autostart {
+        let autostart_hint = if self.add.autostart {
             "yes (Space toggles)".to_string()
         } else {
             "no (Space toggles)".to_string()
         };
         let under_text = if editing {
-            let cur = self.add_under.as_str();
+            let cur = self.add.under.as_str();
             if cur.is_empty() {
                 "(none · use u in manager)".to_string()
             } else {
                 format!("{cur} (use u in manager)")
             }
-        } else if self.add_kind == Kind::Service {
+        } else if self.add.kind == Kind::Service {
             "(agents only)".to_string()
         } else {
-            self.add_under.as_str()
+            self.add.under.as_str()
         };
-        let env_text = picked_summary(&self.add_env, self.env_vault.vars.len());
-        let skills_text = picked_summary(&self.add_skills, self.skills_vault.skills.len());
-        let tools_text = picked_summary(&self.add_tools, self.tools_vault.tools.len());
-        let refs_text = picked_summary(&self.add_refs, self.refs_vault.references.len());
+        let env_text = picked_summary(&self.add.env, self.env_vault.vars.len());
+        let skills_text = picked_summary(&self.add.skills, self.skills_vault.skills.len());
+        let tools_text = picked_summary(&self.add.tools, self.tools_vault.tools.len());
+        let refs_text = picked_summary(&self.add.refs, self.refs_vault.references.len());
         let fields = [
-            (path_label, self.add_path.as_str()),
+            (path_label, self.add.path.as_str()),
             ("Kind", kind_hint.to_string()),
             ("Command", cmd_text),
             ("Autostart", autostart_hint),
@@ -2224,9 +2224,9 @@ impl App {
         };
         let mut lines = vec![self.add_server_line(modal_w)];
         for (i, (label, val)) in fields.iter().enumerate() {
-            let active = i == self.add_field;
+            let active = i == self.add.field;
             let locked = (editing && !matches!(i, 0 | 2 | 3 | 5 | 6 | 7 | 8 | 9))
-                || (!editing && self.add_kind == Kind::Service && i == 4);
+                || (!editing && self.add.kind == Kind::Service && i == 4);
             let mark = if active { ">" } else { " " };
             let label_style = if active {
                 Style::default().add_modifier(ratatui::style::Modifier::BOLD)
@@ -2242,9 +2242,9 @@ impl App {
             let editing_field = active && matches!(i, 0 | 2 | 4);
             if editing_field {
                 let input = match i {
-                    0 => &self.add_path,
-                    2 => &self.add_cmd,
-                    _ => &self.add_under,
+                    0 => &self.add.path,
+                    2 => &self.add.cmd,
+                    _ => &self.add.under,
                 };
                 let (left, cur, right) = input.render_parts();
                 let (left, cur, right) = input_window(&left, cur, &right, avail);
@@ -2259,12 +2259,12 @@ impl App {
                 // When the command field is empty the display shows a
                 // hint instead of the raw buffer; keep the hint visible
                 // after the cursor block.
-                if i == 2 && self.add_cmd.is_empty() {
+                if i == 2 && self.add.cmd.is_empty() {
                     row.push(Span::styled(
                         "(default shell)".to_string(),
                         Style::default().fg(Color::DarkGray),
                     ));
-                } else if i == 4 && self.add_under.is_empty() {
+                } else if i == 4 && self.add.under.is_empty() {
                     row.push(Span::styled(
                         "(optional · Tab completes)".to_string(),
                         Style::default().fg(Color::DarkGray),

@@ -265,8 +265,26 @@ pub fn test_request(m: &ModelEntry) -> (String, Vec<String>, String) {
 pub fn test_model(m: &ModelEntry) -> Result<String, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
+    if m.token.chars().any(char::is_control)
+        || m.endpoint.chars().any(char::is_control)
+        || m.model.chars().any(char::is_control)
+    {
+        return Err("Model, endpoint, and token cannot hold control characters.".into());
+    }
+    if m.provider == Provider::Gemini {
+        let model = m.model.trim();
+        if model.is_empty()
+            || model
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '/' | '?' | '#'))
+        {
+            return Err(
+                "Gemini model name cannot be empty or contain spaces, '/', '?', or '#'.".into(),
+            );
+        }
+    }
     let (url, headers, body) = test_request(m);
-    let mut cmd = Command::new("curl");
+    let mut cmd = Command::new(crate::updater::system_tool(crate::updater::CURL));
     cmd.args([
         "-sS",
         "--max-time",

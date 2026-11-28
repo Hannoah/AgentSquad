@@ -120,7 +120,7 @@ impl App {
     /// Enter in the edit form: save the new path, command and autostart. A
     /// new folder renames an agent after it (see `relocate`).
     pub(crate) fn save_edit(&mut self) {
-        let Some(mut name) = self.add_edit.clone() else {
+        let Some(mut name) = self.add.edit.clone() else {
             return;
         };
         let Some(pi) = self
@@ -132,16 +132,16 @@ impl App {
             return;
         };
         // A missing folder is made on the spot (the field says so).
-        if self.add_state == PathState::Missing {
+        if self.add.state == PathState::Missing {
             if let Err(e) = create_missing_dir(&self.add_full_path()) {
-                self.add_err = format!("{e:#}");
+                self.add.err = format!("{e:#}");
                 return;
             }
         }
         let new_path = match resolve_dir(clean_path(&self.add_full_path())) {
             Ok((path, _)) => path,
             Err(e) => {
-                self.add_err = e;
+                self.add.err = e;
                 return;
             }
         };
@@ -156,13 +156,13 @@ impl App {
         let was_running = slot_running(&self.sessions, pi);
         if moved || renames {
             if self.is_starting(pi) {
-                self.add_err = format!("{name} is still starting; wait a moment before moving it.");
+                self.add.err = format!("{name} is still starting; wait a moment before moving it.");
                 return;
             }
             let new_name = match persist_move(&name, &new_path) {
                 Ok(n) => n,
                 Err(e) => {
-                    self.add_err = format!("Save failed: {e:#}");
+                    self.add.err = format!("Save failed: {e:#}");
                     return;
                 }
             };
@@ -178,12 +178,12 @@ impl App {
             self.order = display_order(&self.cfg.projects);
             self.selected = self.order.iter().position(|&x| x == pi).unwrap_or(0);
         }
-        let cmd = split_command(&self.add_cmd.as_str());
-        if let Err(e) = persist_edit(&name, cmd.clone(), self.add_autostart) {
-            self.add_err = format!("Save failed: {e:#}");
+        let cmd = split_command(&self.add.cmd.as_str());
+        if let Err(e) = persist_edit(&name, cmd.clone(), self.add.autostart) {
+            self.add.err = format!("Save failed: {e:#}");
             return;
         }
-        let autostart = self.add_autostart;
+        let autostart = self.add.autostart;
         let path = {
             let p = &mut self.cfg.projects[pi];
             p.command = if cmd.is_empty() { shell() } else { cmd };
@@ -191,11 +191,11 @@ impl App {
             p.path.clone()
         };
         let current_dotenv = envvault::read_dotenv(&path);
-        let env_note = match self.sync_project_dotenv(&path, &self.add_env, &current_dotenv) {
+        let env_note = match self.sync_project_dotenv(&path, &self.add.env, &current_dotenv) {
             Ok((0, 0, 0)) => String::new(),
             Ok((added, updated, removed)) => format!("; .env (+{added}, ~{updated}, -{removed})"),
             Err(e) => {
-                self.add_err = e;
+                self.add.err = e;
                 return;
             }
         };
@@ -203,7 +203,7 @@ impl App {
         let skills_note = match skills::sync_project_skills(
             &path,
             &self.skills_vault,
-            &self.add_skills,
+            &self.add.skills,
             &current_skills,
             false,
         ) {
@@ -215,7 +215,7 @@ impl App {
                 )
             }
             Err(e) => {
-                self.add_err = format!("skills failed: {e:#}");
+                self.add.err = format!("skills failed: {e:#}");
                 return;
             }
         };
@@ -223,7 +223,7 @@ impl App {
         let tools_note = match tools::sync_project_tools(
             &path,
             &self.tools_vault,
-            &self.add_tools,
+            &self.add.tools,
             &current_tools,
         ) {
             Ok((0, 0, 0)) => String::new(),
@@ -231,27 +231,27 @@ impl App {
                 format!("; tools (+{added}, ~{updated}, -{removed})")
             }
             Err(e) => {
-                self.add_err = format!("tools failed: {e:#}");
+                self.add.err = format!("tools failed: {e:#}");
                 return;
             }
         };
         let current_refs = refs::read_project_refs(&path, &self.refs_vault);
         let refs_note =
-            match refs::sync_project_refs(&path, &self.refs_vault, &self.add_refs, &current_refs) {
+            match refs::sync_project_refs(&path, &self.refs_vault, &self.add.refs, &current_refs) {
                 Ok((0, 0, 0)) => String::new(),
                 Ok((added, updated, removed)) => {
                     format!("; refs (+{added}, ~{updated}, -{removed})")
                 }
                 Err(e) => {
-                    self.add_err = format!("refs failed: {e:#}");
+                    self.add.err = format!("refs failed: {e:#}");
                     return;
                 }
             };
-        self.add_edit = None;
-        self.add_env.clear();
-        self.add_skills.clear();
-        self.add_tools.clear();
-        self.add_refs.clear();
+        self.add.edit = None;
+        self.add.env.clear();
+        self.add.skills.clear();
+        self.add.tools.clear();
+        self.add.refs.clear();
         self.mode = Mode::Manager;
         let note = match (was_running, moved) {
             (true, true) => "; restart it to use the new folder and command",
@@ -268,10 +268,10 @@ impl App {
         &self,
         dir: &std::path::Path,
     ) -> Result<Option<(usize, usize)>, String> {
-        if self.add_env.is_empty() {
+        if self.add.env.is_empty() {
             return Ok(None);
         }
-        let keys: Vec<String> = self.add_env.iter().cloned().collect();
+        let keys: Vec<String> = self.add.env.iter().cloned().collect();
         envvault::apply_dotenv_keys(dir, &self.env_vault, &keys)
             .map(Some)
             .map_err(|e| format!(".env failed: {e:#}"))
@@ -283,10 +283,10 @@ impl App {
         &self,
         dir: &std::path::Path,
     ) -> Result<Option<(usize, usize, Vec<String>)>, String> {
-        if self.add_skills.is_empty() {
+        if self.add.skills.is_empty() {
             return Ok(None);
         }
-        let names: Vec<String> = self.add_skills.iter().cloned().collect();
+        let names: Vec<String> = self.add.skills.iter().cloned().collect();
         skills::apply_skill_names(dir, &self.skills_vault, &names, false)
             .map(Some)
             .map_err(|e| format!("skills failed: {e:#}"))
@@ -296,10 +296,10 @@ impl App {
         &self,
         dir: &std::path::Path,
     ) -> Result<Option<(usize, usize)>, String> {
-        if self.add_tools.is_empty() {
+        if self.add.tools.is_empty() {
             return Ok(None);
         }
-        let names: Vec<String> = self.add_tools.iter().cloned().collect();
+        let names: Vec<String> = self.add.tools.iter().cloned().collect();
         tools::apply_tool_names(dir, &self.tools_vault, &names)
             .map(Some)
             .map_err(|e| format!("tools failed: {e:#}"))
@@ -309,10 +309,10 @@ impl App {
         &self,
         dir: &std::path::Path,
     ) -> Result<Option<(usize, usize)>, String> {
-        if self.add_refs.is_empty() {
+        if self.add.refs.is_empty() {
             return Ok(None);
         }
-        let names: Vec<String> = self.add_refs.iter().cloned().collect();
+        let names: Vec<String> = self.add.refs.iter().cloned().collect();
         refs::apply_ref_names(dir, &self.refs_vault, &names)
             .map(Some)
             .map_err(|e| format!("refs failed: {e:#}"))
@@ -436,8 +436,8 @@ impl App {
         if let Some(pos) = self.order.iter().position(|&x| x == pi) {
             self.selected = pos;
         }
-        self.search_buf.set(&query);
-        self.search_pi = Some(pi);
+        self.search.buf.set(&query);
+        self.search.pi = Some(pi);
         self.sync_search(true);
         let name = self
             .cfg
@@ -1232,9 +1232,9 @@ impl App {
             self.message = ("No session output to search yet.".to_string(), Notice::Info);
             return;
         }
-        if self.search_pi != Some(pi) {
-            self.search_buf.clear();
-            self.search_pi = Some(pi);
+        if self.search.pi != Some(pi) {
+            self.search.buf.clear();
+            self.search.pi = Some(pi);
         }
         self.mode = Mode::Search;
         self.sync_search(true);
@@ -1245,29 +1245,29 @@ impl App {
             self.clear_search();
             return;
         };
-        let query = self.search_buf.as_str();
+        let query = self.search.buf.as_str();
         if query.is_empty() {
-            self.search_matches.clear();
-            self.search_idx = 0;
-            self.search_active = false;
+            self.search.matches.clear();
+            self.search.idx = 0;
+            self.search.active = false;
             return;
         }
         let Some(Some(s)) = self.sessions.get_mut(pi) else {
             self.clear_search();
             return;
         };
-        self.search_pi = Some(pi);
-        self.search_matches = s.search_scrollback(&query);
-        self.search_active = true;
-        if self.search_matches.is_empty() {
-            self.search_idx = 0;
+        self.search.pi = Some(pi);
+        self.search.matches = s.search_scrollback(&query);
+        self.search.active = true;
+        if self.search.matches.is_empty() {
+            self.search.idx = 0;
         } else {
-            self.search_idx = if jump_newest {
-                self.search_matches.len() - 1
+            self.search.idx = if jump_newest {
+                self.search.matches.len() - 1
             } else {
-                self.search_idx.min(self.search_matches.len() - 1)
+                self.search.idx.min(self.search.matches.len() - 1)
             };
-            let line = self.search_matches[self.search_idx].line;
+            let line = self.search.matches[self.search.idx].line;
             s.scroll_to_logical_line(line);
         }
     }
@@ -1276,40 +1276,40 @@ impl App {
         let Some(&pi) = self.order.get(self.selected) else {
             return;
         };
-        let query = self.search_buf.as_str();
+        let query = self.search.buf.as_str();
         if query.is_empty() {
             return;
         }
         let Some(Some(s)) = self.sessions.get_mut(pi) else {
             return;
         };
-        self.search_pi = Some(pi);
-        self.search_matches = s.search_scrollback(&query);
-        self.search_active = true;
-        let len = self.search_matches.len();
+        self.search.pi = Some(pi);
+        self.search.matches = s.search_scrollback(&query);
+        self.search.active = true;
+        let len = self.search.matches.len();
         if len == 0 {
-            self.search_idx = 0;
+            self.search.idx = 0;
             return;
         }
-        self.search_idx = if older {
-            if self.search_idx == 0 || self.search_idx >= len {
+        self.search.idx = if older {
+            if self.search.idx == 0 || self.search.idx >= len {
                 len - 1
             } else {
-                self.search_idx - 1
+                self.search.idx - 1
             }
         } else {
-            (self.search_idx + 1) % len
+            (self.search.idx + 1) % len
         };
-        let line = self.search_matches[self.search_idx].line;
+        let line = self.search.matches[self.search.idx].line;
         s.scroll_to_logical_line(line);
     }
 
     pub(super) fn clear_search(&mut self) {
-        self.search_buf.clear();
-        self.search_matches.clear();
-        self.search_idx = 0;
-        self.search_active = false;
-        self.search_pi = None;
+        self.search.buf.clear();
+        self.search.matches.clear();
+        self.search.idx = 0;
+        self.search.active = false;
+        self.search.pi = None;
     }
 }
 

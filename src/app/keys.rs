@@ -223,7 +223,7 @@ impl App {
             }
             KeyCode::Enter => {
                 self.mode = Mode::Manager;
-                if self.search_buf.is_empty() {
+                if self.search.buf.is_empty() {
                     self.clear_search();
                 }
             }
@@ -233,7 +233,7 @@ impl App {
             KeyCode::Char('p') if ctrl => self.step_search(true),
             KeyCode::Char('n') if ctrl => self.step_search(false),
             _ => {
-                if self.search_buf.edit_key(k) == Some(true) {
+                if self.search.buf.edit_key(k) == Some(true) {
                     self.sync_search(true);
                 }
             }
@@ -243,10 +243,10 @@ impl App {
     /// The text input behind the active add-form field (path, command or
     /// commander); the toggle fields have none.
     pub(super) fn add_input(&mut self) -> Option<&mut LineInput> {
-        match self.add_field {
-            0 => Some(&mut self.add_path),
-            2 => Some(&mut self.add_cmd),
-            4 => Some(&mut self.add_under),
+        match self.add.field {
+            0 => Some(&mut self.add.path),
+            2 => Some(&mut self.add.cmd),
+            4 => Some(&mut self.add.under),
             _ => None,
         }
     }
@@ -257,11 +257,11 @@ impl App {
         // A folder on a server is not on this disk: no `~` expansion (the
         // remote shell does it), no folder list, no exists check.
         if self.add_server_entry().is_some() {
-            self.add_picks.clear();
-            self.add_sel = None;
-            self.add_top.set(0);
-            self.add_state = PathState::Blank;
-            self.add_err.clear();
+            self.add.picks.clear();
+            self.add.sel = None;
+            self.add.top.set(0);
+            self.add.state = PathState::Blank;
+            self.add.err.clear();
             return;
         }
         // No shell here: expand a leading `~` in the field itself, or a new
@@ -272,40 +272,40 @@ impl App {
             std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
         };
         if let Some(full) =
-            home.and_then(|h| pathpick::expand_home(&self.add_path.as_str(), &h.to_string_lossy()))
+            home.and_then(|h| pathpick::expand_home(&self.add.path.as_str(), &h.to_string_lossy()))
         {
-            self.add_path.set(&full);
+            self.add.path.set(&full);
         }
-        let text = self.add_path.as_str();
-        self.add_picks = if text.is_empty() {
+        let text = self.add.path.as_str();
+        self.add.picks = if text.is_empty() {
             pathpick::roots(&self.cfg.projects)
         } else {
             pathpick::suggest(&text)
         };
-        self.add_sel = None;
-        self.add_top.set(0);
-        self.add_state = pathpick::check(&text);
-        self.add_err.clear();
+        self.add.sel = None;
+        self.add.top.set(0);
+        self.add.state = pathpick::check(&text);
+        self.add.err.clear();
     }
 
     /// A text field of the form changed.
     pub(super) fn add_edited(&mut self) {
-        if self.add_field == 0 {
+        if self.add.field == 0 {
             self.path_edited();
         } else {
-            self.add_err.clear();
+            self.add.err.clear();
         }
     }
 
     fn set_path(&mut self, text: &str) {
-        self.add_path.set(text);
+        self.add.path.set(text);
         self.path_edited();
     }
 
     /// Fill the Path field with list row `i`; its subfolders then list, so
     /// repeating this walks down the tree.
     pub(super) fn pick_path(&mut self, i: usize) {
-        if let Some((_, text)) = self.add_picks.get(i) {
+        if let Some((_, text)) = self.add.picks.get(i) {
             let text = text.clone();
             self.set_path(&text);
         }
@@ -314,7 +314,7 @@ impl App {
     /// Step the Server row through this PC and the registered servers.
     pub(super) fn cycle_server(&mut self, forward: bool) {
         let n = self.servers_vault.vars.len() + 1;
-        self.add_server = (self.add_server + if forward { 1 } else { n - 1 }) % n;
+        self.add.server = (self.add.server + if forward { 1 } else { n - 1 }) % n;
         self.path_edited();
     }
 
@@ -322,30 +322,30 @@ impl App {
     /// empty field takes the first suggested parent and a typed one completes
     /// its last segment against the disk.
     fn complete_path(&mut self) {
-        if let Some(i) = self.add_sel {
+        if let Some(i) = self.add.sel {
             return self.pick_path(i);
         }
-        if self.add_path.is_empty() {
+        if self.add.path.is_empty() {
             return self.pick_path(0);
         }
-        match pathpick::complete(&self.add_path.as_str()) {
+        match pathpick::complete(&self.add.path.as_str()) {
             Some(text) => self.set_path(&text),
-            None => self.add_err = "No folder matches".into(),
+            None => self.add.err = "No folder matches".into(),
         }
     }
 
     /// Down/Up in the Path field step through the folder list; past either
     /// end they move to the neighbouring field.
     pub(super) fn step_path_list(&mut self, down: bool) {
-        let n = self.add_picks.len();
-        match (down, self.add_sel) {
-            (true, None) if n > 0 => self.add_sel = Some(0),
-            (true, Some(i)) if i + 1 < n => self.add_sel = Some(i + 1),
-            (false, Some(0)) => self.add_sel = None,
-            (false, Some(i)) => self.add_sel = Some(i - 1),
-            (true, _) => self.add_field = if self.add_edit.is_some() { 2 } else { 1 },
+        let n = self.add.picks.len();
+        match (down, self.add.sel) {
+            (true, None) if n > 0 => self.add.sel = Some(0),
+            (true, Some(i)) if i + 1 < n => self.add.sel = Some(i + 1),
+            (false, Some(0)) => self.add.sel = None,
+            (false, Some(i)) => self.add.sel = Some(i - 1),
+            (true, _) => self.add.field = if self.add.edit.is_some() { 2 } else { 1 },
             (false, None) => {
-                self.add_field = 9;
+                self.add.field = 9;
             }
         }
     }
@@ -353,53 +353,53 @@ impl App {
     /// Mouse wheel in the Path field steps through the folder list without
     /// jumping to another field at the ends.
     pub(super) fn wheel_path_list(&mut self, down: bool) {
-        let n = self.add_picks.len();
+        let n = self.add.picks.len();
         if n == 0 {
             return;
         }
-        match (down, self.add_sel) {
-            (true, None) => self.add_sel = Some(0),
-            (true, Some(i)) => self.add_sel = Some((i + 1).min(n - 1)),
-            (false, Some(0) | None) => self.add_sel = None,
-            (false, Some(i)) => self.add_sel = Some(i - 1),
+        match (down, self.add.sel) {
+            (true, None) => self.add.sel = Some(0),
+            (true, Some(i)) => self.add.sel = Some((i + 1).min(n - 1)),
+            (false, Some(0) | None) => self.add.sel = None,
+            (false, Some(i)) => self.add.sel = Some(i - 1),
         }
     }
 
     pub(super) fn key_add(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Esc => {
-                self.add_edit = None;
+                self.add.edit = None;
                 self.mode = Mode::Manager;
             }
             // A highlighted folder fills the path instead of saving.
-            KeyCode::Enter if self.add_field == 0 && self.add_sel.is_some() => {
-                self.pick_path(self.add_sel.unwrap_or(0));
+            KeyCode::Enter if self.add.field == 0 && self.add.sel.is_some() => {
+                self.pick_path(self.add.sel.unwrap_or(0));
             }
-            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 5 => {
+            KeyCode::Enter | KeyCode::Char(' ') if self.add.field == 5 => {
                 self.open_env_modal(VaultTarget::AddForm);
             }
-            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 6 => {
+            KeyCode::Enter | KeyCode::Char(' ') if self.add.field == 6 => {
                 self.open_skill_modal(VaultTarget::AddForm);
             }
-            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 7 => {
+            KeyCode::Enter | KeyCode::Char(' ') if self.add.field == 7 => {
                 self.open_tool_modal(VaultTarget::AddForm);
             }
-            KeyCode::Enter | KeyCode::Char(' ') if self.add_field == 8 => {
+            KeyCode::Enter | KeyCode::Char(' ') if self.add.field == 8 => {
                 self.open_ref_modal(VaultTarget::AddForm);
             }
-            KeyCode::Left | KeyCode::Char(' ') if self.add_field == 9 => self.cycle_server(false),
-            KeyCode::Right if self.add_field == 9 => self.cycle_server(true),
-            KeyCode::Enter if self.add_edit.is_some() => self.save_edit(),
-            KeyCode::Tab if self.add_edit.is_some() && self.add_field == 0 => self.complete_path(),
-            KeyCode::Up if self.add_edit.is_some() && self.add_field == 0 => {
+            KeyCode::Left | KeyCode::Char(' ') if self.add.field == 9 => self.cycle_server(false),
+            KeyCode::Right if self.add.field == 9 => self.cycle_server(true),
+            KeyCode::Enter if self.add.edit.is_some() => self.save_edit(),
+            KeyCode::Tab if self.add.edit.is_some() && self.add.field == 0 => self.complete_path(),
+            KeyCode::Up if self.add.edit.is_some() && self.add.field == 0 => {
                 self.step_path_list(false)
             }
-            KeyCode::Down if self.add_edit.is_some() && self.add_field == 0 => {
+            KeyCode::Down if self.add.edit.is_some() && self.add.field == 0 => {
                 self.step_path_list(true)
             }
             // Editing reaches Path, Command, Autostart, Env (.env), Skills, Tools, and Refs.
-            KeyCode::Tab | KeyCode::Down if self.add_edit.is_some() => {
-                self.add_field = match self.add_field {
+            KeyCode::Tab | KeyCode::Down if self.add.edit.is_some() => {
+                self.add.field = match self.add.field {
                     0 => 2,
                     2 => 3,
                     3 => 5,
@@ -410,8 +410,8 @@ impl App {
                     _ => 0,
                 };
             }
-            KeyCode::BackTab | KeyCode::Up if self.add_edit.is_some() => {
-                self.add_field = match self.add_field {
+            KeyCode::BackTab | KeyCode::Up if self.add.edit.is_some() => {
+                self.add.field = match self.add.field {
                     9 => 8,
                     8 => 7,
                     7 => 6,
@@ -423,9 +423,9 @@ impl App {
                 };
             }
             KeyCode::Enter => {
-                self.add_err.clear();
+                self.add.err.clear();
                 match load() {
-                    Err(e) => self.add_err = format!("Config reload failed: {e:#}"),
+                    Err(e) => self.add.err = format!("Config reload failed: {e:#}"),
                     Ok(disk) => {
                         merge_projects(&mut self.cfg, &mut self.sessions, disk);
                         self.refresh_prefixes();
@@ -433,29 +433,29 @@ impl App {
                     }
                 }
                 // A missing folder is made on the spot (the field says so).
-                if self.add_err.is_empty() && self.add_state == PathState::Missing {
+                if self.add.err.is_empty() && self.add.state == PathState::Missing {
                     if let Err(e) = create_missing_dir(&self.add_full_path()) {
-                        self.add_err = format!("{e:#}");
+                        self.add.err = format!("{e:#}");
                     }
                 }
-                if self.add_err.is_empty() {
+                if self.add.err.is_empty() {
                     match build_project(
                         &self.cfg.projects,
                         &self.add_full_path(),
-                        self.add_kind,
-                        split_command(&self.add_cmd.as_str()),
+                        self.add.kind,
+                        split_command(&self.add.cmd.as_str()),
                     ) {
-                        Err(e) => self.add_err = e,
+                        Err(e) => self.add.err = e,
                         Ok(mut p) => {
-                            p.autostart = self.add_autostart;
+                            p.autostart = self.add.autostart;
                             if p.kind == Kind::Agent {
-                                let under = self.add_under.as_str();
+                                let under = self.add.under.as_str();
                                 let under = under.trim();
                                 if !under.is_empty() {
                                     match check_superior(&self.cfg.projects, p.kind, under) {
                                         Ok(c) => p.reports_to = Some(c),
                                         Err(e) => {
-                                            self.add_err = e;
+                                            self.add.err = e;
                                             return;
                                         }
                                     }
@@ -472,7 +472,7 @@ impl App {
                                     self.sessions.pop();
                                     self.refresh_prefixes();
                                     self.refresh_filter();
-                                    self.add_err = format!("Save failed: {e:#}");
+                                    self.add.err = format!("Save failed: {e:#}");
                                 }
                                 Ok(()) => {
                                     self.cfg.projects.last().map(ledger::ensure_agent);
@@ -529,10 +529,10 @@ impl App {
                                     } else {
                                         format!(" ({})", cap_notes.join("; "))
                                     };
-                                    self.add_env.clear();
-                                    self.add_skills.clear();
-                                    self.add_tools.clear();
-                                    self.add_refs.clear();
+                                    self.add.env.clear();
+                                    self.add.skills.clear();
+                                    self.add.tools.clear();
+                                    self.add.refs.clear();
                                     self.message = (
                                         format!("Registered {name} ({kind_label}){cap_note}"),
                                         notice,
@@ -543,42 +543,42 @@ impl App {
                     }
                 }
             }
-            KeyCode::Tab if self.add_field == 0 => self.complete_path(),
-            KeyCode::Tab if self.add_field == 4 => {
+            KeyCode::Tab if self.add.field == 0 => self.complete_path(),
+            KeyCode::Tab if self.add.field == 4 => {
                 if let Some(next) =
-                    complete_agent_name(&self.cfg.projects, &self.add_under.as_str(), None)
+                    complete_agent_name(&self.cfg.projects, &self.add.under.as_str(), None)
                 {
-                    self.add_under.set(&next);
-                    self.add_err.clear();
+                    self.add.under.set(&next);
+                    self.add.err.clear();
                 }
             }
             KeyCode::Tab => {
-                self.add_field = next_add_field(self.add_field, self.add_kind, true);
+                self.add.field = next_add_field(self.add.field, self.add.kind, true);
             }
-            KeyCode::Up if self.add_field == 0 => self.step_path_list(false),
-            KeyCode::Down if self.add_field == 0 => self.step_path_list(true),
-            KeyCode::PageDown if self.add_field == 0 && !self.add_picks.is_empty() => {
-                let last = self.add_picks.len() - 1;
-                self.add_sel = Some(self.add_sel.map_or(0, |i| (i + 6).min(last)));
+            KeyCode::Up if self.add.field == 0 => self.step_path_list(false),
+            KeyCode::Down if self.add.field == 0 => self.step_path_list(true),
+            KeyCode::PageDown if self.add.field == 0 && !self.add.picks.is_empty() => {
+                let last = self.add.picks.len() - 1;
+                self.add.sel = Some(self.add.sel.map_or(0, |i| (i + 6).min(last)));
             }
-            KeyCode::PageUp if self.add_field == 0 && !self.add_picks.is_empty() => {
-                self.add_sel = match self.add_sel {
+            KeyCode::PageUp if self.add.field == 0 && !self.add.picks.is_empty() => {
+                self.add.sel = match self.add.sel {
                     Some(0) | None => None,
                     Some(i) => Some(i.saturating_sub(6)),
                 };
             }
             KeyCode::BackTab | KeyCode::Up => {
-                self.add_field = next_add_field(self.add_field, self.add_kind, false);
+                self.add.field = next_add_field(self.add.field, self.add.kind, false);
             }
             KeyCode::Down => {
-                self.add_field = next_add_field(self.add_field, self.add_kind, true);
+                self.add.field = next_add_field(self.add.field, self.add.kind, true);
             }
             // The toggle fields flip on Space or a sideways arrow.
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 1 => {
-                self.add_kind = self.add_kind.toggled();
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add.field == 1 => {
+                self.add.kind = self.add.kind.toggled();
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add_field == 3 => {
-                self.add_autostart = !self.add_autostart;
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.add.field == 3 => {
+                self.add.autostart = !self.add.autostart;
             }
             _ => {
                 if self.add_input().and_then(|input| input.edit_key(k)) == Some(true) {
@@ -706,7 +706,7 @@ impl App {
             }
             KeyCode::Char('F') => self.open_search(),
             KeyCode::Char('G') => self.open_gsearch(),
-            KeyCode::F(3) if self.search_active => {
+            KeyCode::F(3) if self.search.active => {
                 self.step_search(k.modifiers.contains(KeyModifiers::SHIFT));
             }
             KeyCode::Char('f') if !self.order.is_empty() => self.toggle_pin(),
@@ -768,8 +768,8 @@ impl App {
             }
             // Esc in the manager drops kept search, kept filter, or exit banner.
             KeyCode::Esc
-                if self.search_active
-                    && self.search_pi == self.order.get(self.selected).copied() =>
+                if self.search.active
+                    && self.search.pi == self.order.get(self.selected).copied() =>
             {
                 self.clear_search();
             }

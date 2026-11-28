@@ -21,7 +21,7 @@ pub const ASSET: &str = "squad-unsupported";
 pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
 /// File name of the binary inside the asset.
 pub const BIN: &str = if cfg!(windows) { "squad.exe" } else { "squad" };
-const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
+pub(crate) const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 const TAR: &str = if cfg!(windows) { "tar.exe" } else { "tar" };
 /// Where curl writes a body we discard.
 const NULL_DEV: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };

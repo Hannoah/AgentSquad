@@ -34,7 +34,7 @@ impl App {
             self.selected = 0;
         } else if self.mode == Mode::Search {
             for ch in data.chars().filter(|&c| c != '\r' && c != '\n') {
-                self.search_buf.insert(ch);
+                self.search.buf.insert(ch);
             }
             self.sync_search(true);
         } else if self.paste_vault_modal(&data) {
@@ -104,7 +104,7 @@ impl App {
             self.dirty = true;
         } else if wheel_lines(m.kind).is_some() && self.mode == Mode::Add {
             if let Some(lines) = wheel_lines(m.kind) {
-                if self.add_field == 0 && !self.add_picks.is_empty() {
+                if self.add.field == 0 && !self.add.picks.is_empty() {
                     self.wheel_path_list(lines < 0);
                     self.dirty = true;
                 }
@@ -371,20 +371,20 @@ impl App {
                 let popup = self.add_popup(area.into());
                 let clicked = ratatui::layout::Position::new(m.column, m.row);
                 if !popup.contains(clicked) {
-                    if self.add_path.is_empty() && self.add_cmd.is_empty() {
+                    if self.add.path.is_empty() && self.add.cmd.is_empty() {
                         self.mode = Mode::Manager;
                     }
                 } else {
                     let rel_y = m.row.saturating_sub(popup.y + 1);
                     let list_h = self.add_list_h();
-                    let editing = self.add_edit.is_some();
+                    let editing = self.add.edit.is_some();
                     // The Server row sits above the rest of the form.
                     match rel_y.checked_sub(1) {
                         None => {
-                            self.add_field = 9;
+                            self.add.field = 9;
                             self.cycle_server(true);
                         }
-                        Some(0) => self.add_field = 0,
+                        Some(0) => self.add.field = 0,
                         Some(r) if r <= list_h => {
                             let win = self.add_pick_window();
                             let row = usize::from(r.saturating_sub(2));
@@ -394,29 +394,29 @@ impl App {
                         }
                         Some(r) => match r - list_h {
                             1 if !editing => {
-                                self.add_field = 1;
-                                self.add_kind = self.add_kind.toggled();
+                                self.add.field = 1;
+                                self.add.kind = self.add.kind.toggled();
                             }
-                            2 => self.add_field = 2,
+                            2 => self.add.field = 2,
                             3 => {
-                                self.add_field = 3;
-                                self.add_autostart = !self.add_autostart;
+                                self.add.field = 3;
+                                self.add.autostart = !self.add.autostart;
                             }
-                            4 if !editing && self.add_kind == Kind::Agent => self.add_field = 4,
+                            4 if !editing && self.add.kind == Kind::Agent => self.add.field = 4,
                             5 => {
-                                self.add_field = 5;
+                                self.add.field = 5;
                                 self.open_env_modal(VaultTarget::AddForm);
                             }
                             6 => {
-                                self.add_field = 6;
+                                self.add.field = 6;
                                 self.open_skill_modal(VaultTarget::AddForm);
                             }
                             7 => {
-                                self.add_field = 7;
+                                self.add.field = 7;
                                 self.open_tool_modal(VaultTarget::AddForm);
                             }
                             8 => {
-                                self.add_field = 8;
+                                self.add.field = 8;
                                 self.open_ref_modal(VaultTarget::AddForm);
                             }
                             _ => {}
