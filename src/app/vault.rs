@@ -836,6 +836,15 @@ impl App {
                     *reveal = !*reveal;
                 }
             }
+            KeyCode::Char('t') if modal.is_model() && len > 0 => {
+                if let Some(m) = self.models_vault.models.get(modal.sel).cloned() {
+                    self.message = (format!("Testing model {}...", m.name), Notice::Info);
+                    let tx = self.model_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send((m.name.clone(), models::test_model(&m)));
+                    });
+                }
+            }
             KeyCode::Char('a' | 'n') => modal.open_blank_editor(),
             KeyCode::Char('e') if len > 0 => self.open_edit_in_vault(modal),
             KeyCode::Char('d') | KeyCode::Delete if len > 0 => {
@@ -1802,6 +1811,7 @@ impl App {
                 m.footer_verb(),
                 can_pick,
                 m.is_env() || m.is_model(),
+                m.is_model(),
                 parts[3].width,
             ),
         };
@@ -2732,6 +2742,7 @@ fn vault_footer_line(
     project_verb: &str,
     can_pick: bool,
     has_reveal: bool,
+    has_test: bool,
     width: u16,
 ) -> Line<'static> {
     let mut hints: Vec<(&str, &str)> = Vec::new();
@@ -2749,6 +2760,9 @@ fn vault_footer_line(
     }
     if has_reveal {
         hints.push(("v", "reveal"));
+    }
+    if has_test {
+        hints.push(("t", "test"));
     }
     hints.push(("Esc", "close"));
     Line::from(hint_spans(hints_that_fit(&hints, usize::from(width))))

@@ -187,3 +187,134 @@ pub fn sync_project_models(
     let r = envvault::remove_dotenv(dir, &remove)?;
     Ok((a + u, r))
 }
+
+/// The ping a model test sends: `(url, headers, body)`. Mirrors what the
+/// provider's CLI sends with these variables, so a pass means sessions work.
+pub fn test_request(m: &ModelEntry) -> (String, Vec<String>, String) {
+    let model = crate::json::JsonValue::String(m.model.trim().to_string()).to_pretty();
+    let model = model.trim();
+    let base = m.endpoint.trim().trim_end_matches('/');
+    let token = m.token.trim();
+    let ping = r#"[{"role":"user","content":"Reply with OK."}]"#;
+    let mut headers = vec!["Content-Type: application/json".to_string()];
+    let (url, body) = match m.provider {
+        Provider::Anthropic => {
+            headers.push("anthropic-version: 2023-06-01".into());
+            if !token.is_empty() {
+                headers.push(format!("Authorization: Bearer {token}"));
+            }
+            let base = if base.is_empty() {
+                "https://api.anthropic.com"
+            } else {
+                base
+            };
+            (
+                format!("{base}/v1/messages"),
+                format!(r#"{{"model":{model},"max_tokens":16,"messages":{ping}}}"#),
+            )
+        }
+        Provider::Openai => {
+            if !token.is_empty() {
+                headers.push(format!("Authorization: Bearer {token}"));
+            }
+            let base = if base.is_empty() {
+                "https://api.openai.com/v1"
+            } else {
+                base
+            };
+            (
+                format!("{base}/chat/completions"),
+                format!(r#"{{"model":{model},"messages":{ping}}}"#),
+            )
+        }
+        Provider::Gemini => {
+            if !token.is_empty() {
+                headers.push(format!("x-goog-api-key: {token}"));
+            }
+            let base = if base.is_empty() {
+                "https://generativelanguage.googleapis.com"
+            } else {
+                base
+            };
+            (
+                format!("{base}/v1beta/models/{}:generateContent", m.model.trim()),
+                r#"{"contents":[{"parts":[{"text":"Reply with OK."}]}]}"#.to_string(),
+            )
+        }
+    };
+    (url, headers, body)
+}
+
+/// Send the test ping with `curl` (ships with Windows 10+, macOS, Linux).
+/// Headers go through stdin so the token never shows in the process list.
+/// `Ok` holds the model's reply, `Err` the reason it failed.
+// ponytail: curl over an HTTP crate; swap in one if curl-less hosts matter
+pub fn test_model(m: &ModelEntry) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let (url, headers, body) = test_request(m);
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "--max-time",
+        "30",
+        "-H",
+        "@-",
+        "-w",
+        "\n%{http_code}",
+        "-d",
+    ])
+    .arg(&body)
+    .arg(&url)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000);
+    let mut child = cmd.spawn().map_err(|e| format!("curl not runnable: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(headers.join("\n").as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (resp, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    let code: u16 = code.trim().parse().unwrap_or(0);
+    if code == 0 {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("no response from {url}: {}", err.trim()));
+    }
+    let reply = parse_test_reply(resp);
+    if (200..300).contains(&code) {
+        Ok(reply.unwrap_or_else(|| "(empty reply)".into()))
+    } else {
+        Err(format!(
+            "HTTP {code}: {}",
+            reply.unwrap_or_else(|| resp.trim().into())
+        ))
+    }
+}
+
+/// The reply text (Anthropic, OpenAI or Gemini shape) or the error message.
+pub fn parse_test_reply(resp: &str) -> Option<String> {
+    use crate::json::JsonValue as J;
+    let v = crate::json::parse(resp).ok()?;
+    let first = |v: Option<&J>| match v {
+        Some(J::Array(a)) => a.first().cloned(),
+        _ => None,
+    };
+    let text = |v: Option<&J>| match v {
+        Some(J::String(s)) => Some(s.trim().to_string()),
+        _ => None,
+    };
+    text(v.get("error").and_then(|e| e.get("message")))
+        .or_else(|| text(first(v.get("content")).as_ref().and_then(|c| c.get("text"))))
+        .or_else(|| {
+            let c = first(v.get("choices"))?;
+            text(c.get("message").and_then(|m| m.get("content")))
+        })
+        .or_else(|| {
+            let c = first(v.get("candidates"))?;
+            let parts = c.get("content")?.get("parts").cloned();
+            text(first(parts.as_ref()).as_ref().and_then(|p| p.get("text")))
+        })
+}

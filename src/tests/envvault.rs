@@ -179,3 +179,69 @@ fn llm_models_write_one_per_provider_into_dotenv() {
     assert!(is_model_key("GEMINI_API_KEY") && !is_model_key("KEEP"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn llm_model_test_pings_the_endpoint_and_reads_the_reply() {
+    use crate::models::*;
+    use std::io::{Read, Write};
+    let m = |provider, endpoint: &str| ModelEntry {
+        name: "t".into(),
+        provider,
+        model: "m\"1".into(),
+        endpoint: endpoint.into(),
+        token: "sek".into(),
+    };
+    let (url, h, body) = test_request(&m(Provider::Anthropic, ""));
+    assert_eq!(url, "https://api.anthropic.com/v1/messages");
+    assert!(h.contains(&"Authorization: Bearer sek".to_string()));
+    assert!(body.contains(r#""model":"m\"1""#));
+    let (url, _, _) = test_request(&m(Provider::Openai, "http://x/v1/"));
+    assert_eq!(url, "http://x/v1/chat/completions");
+    let (url, h, _) = test_request(&m(Provider::Gemini, ""));
+    assert!(url.ends_with("/v1beta/models/m\"1:generateContent"));
+    assert!(h.contains(&"x-goog-api-key: sek".to_string()));
+
+    assert_eq!(
+        parse_test_reply(r#"{"content":[{"type":"text","text":" OK "}]}"#).as_deref(),
+        Some("OK")
+    );
+    assert_eq!(
+        parse_test_reply(r#"{"choices":[{"message":{"content":"OK"}}]}"#).as_deref(),
+        Some("OK")
+    );
+    assert_eq!(
+        parse_test_reply(r#"{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}"#).as_deref(),
+        Some("OK")
+    );
+    assert_eq!(
+        parse_test_reply(r#"{"error":{"message":"bad key"}}"#).as_deref(),
+        Some("bad key")
+    );
+
+    // Full round trip through curl against a one-shot loopback server.
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/v1", srv.local_addr().unwrap());
+    let t = std::thread::spawn(move || {
+        let (mut s, _) = srv.accept().unwrap();
+        let mut req = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !String::from_utf8_lossy(&req).contains("Reply with OK") {
+            let n = s.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            req.extend_from_slice(&buf[..n]);
+        }
+        let body = r#"{"error":{"message":"bad key"}}"#;
+        let _ = write!(
+            s,
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        String::from_utf8_lossy(&req).into_owned()
+    });
+    let got = test_model(&m(Provider::Openai, &base));
+    let req = t.join().unwrap();
+    assert!(req.contains("Authorization: Bearer sek"), "{req}");
+    assert_eq!(got, Err("HTTP 401: bad key".into()));
+}

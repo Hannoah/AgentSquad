@@ -479,6 +479,9 @@ pub(crate) struct App {
     // Self-update: the check runs on a worker so it can never delay startup.
     pub(crate) upd_tx: mpsc::Sender<UpdateMsg>,
     pub(crate) upd_rx: mpsc::Receiver<UpdateMsg>,
+    /// Model tests (`t` in Management O): `(name, reply or error)`.
+    pub(crate) model_tx: mpsc::Sender<(String, Result<String, String>)>,
+    pub(crate) model_rx: mpsc::Receiver<(String, Result<String, String>)>,
     pub(crate) update_offer: Option<String>,
     pub(crate) confirm_update: bool,
     /// An installed update waiting for the decision to restart into it.
@@ -593,6 +596,7 @@ impl App {
         });
         let (start_tx, start_rx) = mpsc::channel::<Started>();
         let (upd_tx, upd_rx) = mpsc::channel::<UpdateMsg>();
+        let (model_tx, model_rx) = mpsc::channel();
         if update_check_enabled() {
             let tx = upd_tx.clone();
             thread::spawn(move || watch_for_updates(tx));
@@ -652,6 +656,8 @@ impl App {
             sampling: false,
             upd_tx,
             upd_rx,
+            model_tx,
+            model_rx,
             update_offer: None,
             confirm_update: false,
             applied: None,
@@ -1171,6 +1177,20 @@ impl App {
                 self.sampling = true;
             }
             self.last_sample = Instant::now();
+        }
+        while let Ok((name, r)) = self.model_rx.try_recv() {
+            let one_line = |s: String| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            self.message = match r {
+                Ok(reply) => (
+                    format!("Model {name} works: {}", one_line(reply)),
+                    Notice::Info,
+                ),
+                Err(e) => (
+                    format!("Model {name} failed: {}", one_line(e)),
+                    Notice::Error,
+                ),
+            };
+            self.dirty = true;
         }
         while let Ok(m) = self.upd_rx.try_recv() {
             match m {
